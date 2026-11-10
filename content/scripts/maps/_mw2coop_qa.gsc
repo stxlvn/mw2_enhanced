@@ -3698,10 +3698,21 @@ boat()
 	report( text );
 	report( "poses: " + boat_poses_text( other ) );
 	check( gun_follows_view( other ), "his body's gun points where he looks (gun " + gun_yaw( level.mw2coop_boat_body ) + ", view " + view_yaw( other ) + ")" );
-	check( abs( view_yaw( other ) ) < 10, "he starts looking ahead over the bow (" + view_yaw( other ) + ")" );
+	check( abs( view_yaw( other ) ) < 20, "he starts looking ahead over the bow (" + view_yaw( other ) + ")" );	// (the view eases toward the arc's centre, -15, once he is linked)
 	check( across_from_price( other ), "the passenger lies across from Price (" + int( boat_side( other ) ) + ", Price " + int( price_side() ) + ")" );
+	// where is the driver (the other player's body) from the passenger's seat? In degrees of the bow (left positive) and units, and in the boat's own frame
+	boat = level.players_boat;
+	eye = other GetEye();
+	foreach ( who in level.players )
+	{
+		d = who.origin - eye;
+		fwd = VectorDot( d, AnglesToForward( boat.angles ) );
+		right = VectorDot( d, AnglesToRight( boat.angles ) );
+		ang = VectorToAngles( d );
+		report( "where: " + player_name( who ) + " is " + int( fwd ) + " ahead, " + int( right ) + " right, " + int( d[ 2 ] ) + " up of the passenger's eye: " + int( AngleClamp180( ang[ 1 ] - boat.angles[ 1 ] ) ) + " degrees of the bow (left positive), " + int( Distance( who.origin, eye ) ) + " units" );
+	}
 	// he looks as far right, then left, as he can (screenshots: his body's gun follows)
-	foreach ( turn in strtok( "-60 60", " " ) )
+	foreach ( turn in strtok( "-45 45", " " ) )
 	{
 		report( "passenger looks " + turn );
 		for ( t = 0; t < 3; t += 0.05 )
@@ -3711,6 +3722,21 @@ boat()
 		}
 	}
 	check( gun_follows_view( other ), "after looking about, the gun still follows (gun " + gun_yaw( level.mw2coop_boat_body ) + ", view " + view_yaw( other ) + ")" );
+	// his camera covers a half circle turned to -15 degrees of the bow in the right pose (owner, 2026-11-10): -105 to +75, clear of the driver behind him (-173); asked for -100 it gets there, asked for +100 it stops at about +75
+	foreach ( want in strtok( "-100 100", " " ) )
+	{
+		for ( t = 0; t < 1.5; t += 0.05 )
+		{
+			other SetPlayerAngles( ( 0, level.players_boat.angles[ 1 ] + int( want ), 0 ) );
+			wait 0.05;
+		}
+		if ( int( want ) < 0 )
+			check( abs( view_yaw( other ) - int( want ) ) < 10, "his camera reaches " + want + " degrees of the bow (" + view_yaw( other ) + ")" );
+		else
+			check( view_yaw( other ) > 65 && view_yaw( other ) < 85, "his camera stops at about +75 degrees of the bow when asked for " + want + " (" + view_yaw( other ) + ")" );
+	}
+	other SetPlayerAngles( ( 0, level.players_boat.angles[ 1 ], 0 ) );
+	wait 0.5;
 	// the level's triggers that would turn Price over (af_chase_code::price_position_switch())
 	// leave him on his tube in co-op: set them all off
 	switches = GetEntArray( "price_position_switch", "targetname" );
