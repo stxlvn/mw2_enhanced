@@ -105,7 +105,7 @@ passenger_ride( boat )
 
 	seat = spawn_tag_origin();
 	seat.origin = eye_seat( body );
-	seat.angles = ( 0, boat.angles[ 1 ] + pose_center( pose ), 0 );
+	seat.angles = ( 0, boat.angles[ 1 ] + seat_center( pose ), 0 );
 	seat LinkTo( boat );
 	level.mw2coop_boat_seat = seat;
 	self SetStance( "crouch" );
@@ -114,10 +114,13 @@ passenger_ride( boat )
 	self EnableWeapons();
 	// he starts looking ahead over the bow, as Price does when he has nobody to shoot at
 	self SetPlayerAngles( ( 0, boat.angles[ 1 ], 0 ) );
-	// he looks only as far as the body can aim (maps\_zodiac_ai: 48 to 51 degrees either way
-	// of the pose), so the body's gun always points where his shots go; the poses do not aim up
-	// or down, so little of that
-	self PlayerLinkTo( seat, "tag_origin", 0.8, 48, 48, 20, 15 );
+	// his camera covers a half circle, 90 degrees either way of the seat's centre (owner,
+	// 2026-11-10), and the half circle is turned 42 degrees away from the pose's centre (seat_center):
+	// its inner end is where the old 48 degree range ended, so the driver's body, the host, stays
+	// out of his view, and the extra range lies on his own side. The body's gun follows the view as
+	// far as the pose can aim (maps\_zodiac_ai: 48 to 51 degrees either way of pose_center,
+	// body_aims clamps there). The poses do not aim up or down, so little of that
+	self PlayerLinkTo( seat, "tag_origin", 0.8, 90, 90, 20, 15 );
 	self thread body_aims( body, boat );
 	maps\_mw2coop::state( "boat: " + player_name( self ) + " lies at the bow in the " + pose + " pose (" + seat_text( boat, seat.origin ) + "; Price in the " + price_pose() + " pose)" );
 	for ( ;; )
@@ -131,7 +134,7 @@ passenger_ride( boat )
 		body.mw2coop_turning = true;
 		body SetFlaggedAnimKnobAllRestart( "trans", trans, %body, 1, 0.2 );
 		from = AngleClamp180( seat.angles[ 1 ] - boat.angles[ 1 ] );
-		to = pose_center( want );
+		to = seat_center( want );
 		length = GetAnimLength( trans ) - 0.3;
 		for ( t = 0.05; t <= length; t += 0.05 )
 		{
@@ -176,6 +179,16 @@ pose_center( pose )
 	if ( pose == "left" )
 		return 40.5;
 	return -36;
+}
+
+// The centre of the passenger's camera arc: the pose's centre turned 42 degrees away from the
+// boat's inside (the right pose's arc runs -168 to +12 degrees of the boat, the left pose's is
+// the mirror image), see where he is linked in the seat code.
+seat_center( pose )
+{
+	if ( pose == "left" )
+		return pose_center( pose ) + 42;
+	return pose_center( pose ) - 42;
 }
 
 // self: the passenger's body. A pose's aim, centred.
