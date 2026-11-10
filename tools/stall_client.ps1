@@ -23,12 +23,14 @@ while (((Get-Date) - $t0).TotalSeconds -lt $Timeout) {
 		if ($text.Contains($Marker)) { break }
 	}
 }
-# the game writes its process id to <copy>\__iw4sp (run_test.ps1 relies on it too)
+# the game writes its process id to <copy>\__iw4sp as a 4 byte little-endian number (run_test.ps1 relies on it too)
 $pidFile = Join-Path $copy "__iw4sp"
 $p = $null
 if (Test-Path $pidFile) {
-	$id = 0
-	if ([int]::TryParse(((Get-Content $pidFile -ErrorAction SilentlyContinue) -join "").Trim(), [ref]$id) -and $id -gt 0) { $p = Get-Process -Id $id -ErrorAction SilentlyContinue }
+	try {
+		$bytes = [System.IO.File]::ReadAllBytes($pidFile)
+		if ($bytes.Length -ge 4) { $id = [System.BitConverter]::ToInt32($bytes, 0); if ($id -gt 0) { $p = Get-Process -Id $id -ErrorAction SilentlyContinue } }
+	} catch { }
 }
 if (-not $p) { Write-Output "stall_client: no client process for $exe"; exit 1 }
 Write-Output ("stall_client: freezing pid {0} for {1} s at {2:HH:mm:ss.fff}" -f $p.Id, $Seconds, (Get-Date))

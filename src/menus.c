@@ -2931,27 +2931,60 @@ static DWORD WINAPI loading_thread(LPVOID unused)
 // on either PC: each PC tells the other when its own is (the packet mw2coop_briefdone), so a skip on one PC is a skip on both. The split screen has one PC and the single player
 // wait already (engine co-op byte 0).
 #ifdef _WIN64
-#define RVA_COOP_WAIT XR(0x22e170)
-#define RVA_COOP_BYTE_E XR(0x52fb5c)	  // the engine's co-op byte
-#define RVA_UI_STATE XR(0x1a49dc4)
-#define RVA_CLIENT_STATE XR(0x533cb8)
-#define RVA_FILM_ON XR(0x45859c4)		  // the cinematic state the single player test reads: on, and two counters that differ when it is over
-#define RVA_FILM_A XR(0x45859cc)
-#define RVA_FILM_B XR(0x45859d0)
-#define RVA_ENGINE_WAIT_A XR(0x192d7e3)
-#define RVA_ENGINE_WAIT_B XR(0x192d8f4)
+#define REF_COOP_WAIT 0x22e170
+#define RVA_COOP_WAIT XR(REF_COOP_WAIT)
+#define REF_COOP_BYTE_E 0x52fb5c
+#define RVA_COOP_BYTE_E XR(REF_COOP_BYTE_E)	  // the engine's co-op byte
+#define REF_UI_STATE 0x1a49dc4
+#define RVA_UI_STATE XR(REF_UI_STATE)
+#define REF_CLIENT_STATE 0x533cb8
+#define RVA_CLIENT_STATE XR(REF_CLIENT_STATE)
+#define REF_FILM_ON 0x45859c4
+#define RVA_FILM_ON XR(REF_FILM_ON)		  // the cinematic state the single player test reads: on, and two counters that differ when it is over
+#define REF_FILM_A 0x45859cc
+#define RVA_FILM_A XR(REF_FILM_A)
+#define REF_FILM_B 0x45859d0
+#define RVA_FILM_B XR(REF_FILM_B)
+#define REF_ENGINE_WAIT_A 0x192d7e3
+#define RVA_ENGINE_WAIT_A XR(REF_ENGINE_WAIT_A)
+#define REF_ENGINE_WAIT_B 0x192d8f4
+#define RVA_ENGINE_WAIT_B XR(REF_ENGINE_WAIT_B)
 #else
 // the 32-bit build (the same code at VA 0x40af30; the UI frame is 0x4b5c50, its state variable 0x1926b84)
-#define RVA_COOP_WAIT XR(0xaf30)
-#define RVA_COOP_BYTE_E XR(0x48897c)
-#define RVA_UI_STATE XR(0x1526b84)
-#define RVA_CLIENT_STATE XR(0x525bc0)
-#define RVA_FILM_ON XR(0x1887bc0)
-#define RVA_FILM_A XR(0x1887bc8)
-#define RVA_FILM_B XR(0x1887bcc)
-#define RVA_ENGINE_WAIT_A XR(0x166b0c2)
-#define RVA_ENGINE_WAIT_B XR(0x166acf1)
+#define REF_COOP_WAIT 0xaf30
+#define RVA_COOP_WAIT XR(REF_COOP_WAIT)
+#define REF_COOP_BYTE_E 0x48897c
+#define RVA_COOP_BYTE_E XR(REF_COOP_BYTE_E)
+#define REF_UI_STATE 0x1526b84
+#define RVA_UI_STATE XR(REF_UI_STATE)
+#define REF_CLIENT_STATE 0x525bc0
+#define RVA_CLIENT_STATE XR(REF_CLIENT_STATE)
+#define REF_FILM_ON 0x1887bc0
+#define RVA_FILM_ON XR(REF_FILM_ON)
+#define REF_FILM_A 0x1887bc8
+#define RVA_FILM_A XR(REF_FILM_A)
+#define REF_FILM_B 0x1887bcc
+#define RVA_FILM_B XR(REF_FILM_B)
+#define REF_ENGINE_WAIT_A 0x166b0c2
+#define RVA_ENGINE_WAIT_A XR(REF_ENGINE_WAIT_A)
+#define REF_ENGINE_WAIT_B 0x166acf1
+#define RVA_ENGINE_WAIT_B XR(REF_ENGINE_WAIT_B)
 #endif
+// A build whose addresses moved (addr.c): an address that was not found stands in as a block of zeros. The film flags and the UI state are such globals, and a wait that reads zeros for them
+// would never see the film end: the briefing wait is off when any of the addresses it reads is not a real one of this build.
+static int brief_addresses_ok(void)
+{
+	static int ok = -1;
+	if (ok < 0)
+		ok = addr_resolved(REF_COOP_BYTE_E) && addr_resolved(REF_UI_STATE) && addr_resolved(REF_CLIENT_STATE) && addr_resolved(REF_FILM_ON) && addr_resolved(REF_FILM_A) &&
+		     addr_resolved(REF_FILM_B) && addr_resolved(REF_ENGINE_WAIT_A) && addr_resolved(REF_ENGINE_WAIT_B);
+	if (!ok) {
+		static int logged;
+		if (!logged++)
+			log_printf("menus: an address the briefing wait needs was not found in this build: no briefing wait");
+	}
+	return ok;
+}
 #define BRIEF_MAX_MS 240000
 static DWORD brief_started, brief_last_call, brief_last_sent;
 static int brief_released;
@@ -3025,7 +3058,7 @@ int menus_briefing_holds(void)
 static unsigned char coop_wait_hook(void)
 {
 	unsigned char engine = base[RVA_ENGINE_WAIT_B] ? 1 : base[RVA_ENGINE_WAIT_A];
-	if (!campaign_session || !base[RVA_COOP_BYTE_E] || *(volatile int *)(base + RVA_UI_STATE) != 3)
+	if (!campaign_session || !brief_addresses_ok() || !base[RVA_COOP_BYTE_E] || *(volatile int *)(base + RVA_UI_STATE) != 3)
 		return engine;
 	return brief_wait() ? 1 : engine;
 }

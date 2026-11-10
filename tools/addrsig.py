@@ -462,7 +462,7 @@ def x64_addresses():
         code = _code64(text)
         for m in re.finditer(r"\bXR\((0x[0-9a-fA-F]+)\)", code):
             out.setdefault(int(m.group(1), 16), fn)
-        for m in re.finditer(r"#define\s+RVA_[A-Z0-9_]+\s+(0x[0-9a-fA-F]+)", code):
+        for m in re.finditer(r"#define\s+(?:RVA|REF)_[A-Z0-9_]+\s+(0x[0-9a-fA-F]+)", code):
             out.setdefault(int(m.group(1), 16), fn)
         for name, first in (("ranges", True), ("xranges", True), ("client_n_sites", True), ("sites", True), ("probes", False), ("net_port_immediates_official", False)):
             for v in _array_members(code, name, first):
