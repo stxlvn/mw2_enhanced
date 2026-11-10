@@ -461,7 +461,9 @@ static void load_str_files(void)
 
 static int probe_game_language(int retry_negative)
 {
-	LONG state = InterlockedCompareExchange(&russian, -1, -1);
+	// DB_FindXAssetHeader calls this on the asset-loading path. Reading a cached language
+	// value must not issue a locked read-modify-write on every asset lookup.
+	LONG state = __atomic_load_n(&russian, __ATOMIC_ACQUIRE);
 	if (state == 1 || (state == 0 && !retry_negative))
 		return state; // once Russian is present, or a caller only needs the cached answer
 
@@ -469,7 +471,7 @@ static int probe_game_language(int retry_negative)
 	// at the first asset lookup, so leave the result unknown and retry from later asset lookups.
 	// Keep Dvar_FindVar off the render path and throttle probes to once per second.
 	DWORD now = GetTickCount();
-	LONG last = InterlockedCompareExchange(&russian_probe_tick, 0, 0);
+	LONG last = __atomic_load_n(&russian_probe_tick, __ATOMIC_RELAXED);
 	if ((DWORD)(now - (DWORD)last) < 1000)
 		return state > 0;
 	if (InterlockedCompareExchange(&russian_probe_tick, (LONG)now, last) != last)

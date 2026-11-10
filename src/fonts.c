@@ -1112,7 +1112,10 @@ void fonts_seen(void *font, const char *name, void *(*find)(int, const char *))
 		return;
 	if (!settings_fonts() || !localize_is_russian())
 		return;
-	LONG state = InterlockedCompareExchange(&patch_state, 2, 2);
+	// Font lookups can be frequent while zones are loading. The state is published with
+	// InterlockedExchange after the patch is complete, so an acquire load is sufficient;
+	// a no-op compare-exchange here would serialize every font lookup unnecessarily.
+	LONG state = __atomic_load_n(&patch_state, __ATOMIC_ACQUIRE);
 	if (state == 2) {
 		int changed = image != patched_image || *(IDirect3DTexture9 **)image != patched_texture;
 		for (int p = 0; p < PLAN_COUNT && !changed; p++) {
@@ -1146,11 +1149,13 @@ static volatile LONG waiting_atlas_logged;
 
 void fonts_retry(void *(*find)(int, const char *))
 {
-	if (!find || !settings_fonts() || InterlockedCompareExchange(&patch_state, 0, 0) != 0)
+	// Called for ordinary non-font asset lookups too. These cached-state reads are on a
+	// potentially very hot path; reserve locked operations for the occasional retry claim.
+	if (!find || !settings_fonts() || __atomic_load_n(&patch_state, __ATOMIC_ACQUIRE) != 0)
 		return;
 
 	DWORD now = GetTickCount();
-	LONG last = InterlockedCompareExchange(&retry_tick, 0, 0);
+	LONG last = __atomic_load_n(&retry_tick, __ATOMIC_RELAXED);
 	if ((DWORD)(now - (DWORD)last) < 500)
 		return;
 	if (InterlockedCompareExchange(&retry_tick, (LONG)now, last) != last)

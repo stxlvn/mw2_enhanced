@@ -32,7 +32,9 @@ def main():
     text = build()
     if "--check" in sys.argv:
         have = open(OUT, encoding="utf-8", newline="").read() if os.path.exists(OUT) else ""
-        if have != text:
+        # Git checkouts may use LF while build() deliberately emits CRLF. The generated
+        # C string is identical either way; compare content, not the worktree's newline style.
+        if have.replace(chr(13) + NL, NL) != text.replace(chr(13) + NL, NL):
             print("src/settings_template_gen.h is out of date: run python -I tools/gen_settings_template.py")
             return 1
         print("settings_template_gen.h matches settings.ini")

@@ -73,7 +73,13 @@ static void clock_probe(DWORD t)
 // [native] timerres=1 (experiment): ask Windows for the finest timer resolution (0.5 ms) for this process; the game itself asks for 1 ms.
 static void timer_resolution_once(void)
 {
-	static LONG done;
+	static volatile LONG done;
+	// timeGetTime is a hot WinMM entry point (the game calls it throughout the frame loop).
+	// Once the one-time setting has been considered, a plain atomic load avoids a locked
+	// compare-exchange on every timer read. Keep the interlocked operation only for the
+	// first caller, so simultaneous first calls still perform the setup once.
+	if (__atomic_load_n(&done, __ATOMIC_RELAXED) != 0)
+		return;
 	if (InterlockedCompareExchange(&done, 1, 0) != 0)
 		return;
 	char path[MAX_PATH];
