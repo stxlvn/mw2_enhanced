@@ -3722,6 +3722,9 @@ boat()
 		}
 	}
 	check( gun_follows_view( other ), "after looking about, the gun still follows (gun " + gun_yaw( level.mw2coop_boat_body ) + ", view " + view_yaw( other ) + ")" );
+	// his gun is an M4A1 with the grenade launcher, not the Uzi (owner, 2026-11-10)
+	check( other HasWeapon( "m4_grenadier" ) && !other HasWeapon( "uzi" ), "the passenger has the M4A1 grenadier and no Uzi (" + other GetCurrentWeapon() + ")" );
+	check( other GetCurrentWeapon() == "m4_grenadier", "the passenger holds the M4A1 grenadier (" + other GetCurrentWeapon() + ")" );
 	// his camera covers a half circle turned to -15 degrees of the bow in the right pose (owner, 2026-11-10): -105 to +75, clear of the driver behind him (-173); asked for -100 it gets there, asked for +100 it stops at about +75
 	foreach ( want in strtok( "-100 100", " " ) )
 	{

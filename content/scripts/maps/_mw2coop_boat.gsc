@@ -112,6 +112,7 @@ passenger_ride( boat )
 	self AllowStand( false );
 	self AllowProne( false );
 	self EnableWeapons();
+	self thread passenger_weapon();
 	// he starts looking ahead over the bow, as Price does when he has nobody to shoot at
 	self SetPlayerAngles( ( 0, boat.angles[ 1 ], 0 ) );
 	// his camera covers a half circle, 90 degrees either way of the seat's centre, and the seat's
@@ -124,6 +125,7 @@ passenger_ride( boat )
 	// degrees either way of pose_center, body_aims clamps there). The poses do not aim up or
 	// down, so little of that
 	self PlayerLinkTo( seat, "tag_origin", 0.8, 90, 90, 20, 15 );
+	self SetPlayerAngles( ( 0, boat.angles[ 1 ], 0 ) );	// ahead over the bow again once he is linked (the link eased his view toward the arc's centre)
 	self thread body_aims( body, boat );
 	maps\_mw2coop::state( "boat: " + player_name( self ) + " lies at the bow in the " + pose + " pose (" + seat_text( boat, seat.origin ) + "; Price in the " + price_pose() + " pose)" );
 	for ( ;; )
@@ -211,7 +213,26 @@ body_pose( pose )
 // are where his own first-person gun is, which is drawn over them.
 eye_seat( body )
 {
-	return body GetTagOrigin( "tag_eye" ) + AnglesToForward( body GetTagAngles( "tag_eye" ) ) * 6 - ( 0, 0, 40 );
+	// 35 units below the eye, not 40: his camera is 5 units higher, over the tube's edge (owner,
+	// 2026-11-10: higher, then "a little bit lower" than the 10 units tried first)
+	return body GetTagOrigin( "tag_eye" ) + AnglesToForward( body GetTagAngles( "tag_eye" ) ) * 6 - ( 0, 0, 35 );
+}
+
+// self: the passenger. His gun is an M4A1 with the under-barrel grenade launcher, not the Uzi of
+// the zodiac (owner, 2026-11-10). The level's own weapon sync gave him player 1's Uzi; the M4A1
+// grenadier is Price's weapon (aitype ally_hero_price_afghan_ar), so the level has it loaded.
+passenger_weapon()
+{
+	self endon( "death" );
+	level endon( "mw2coop_level_end" );
+	weapon = "m4_grenadier";
+	if ( !self HasWeapon( weapon ) )
+		self GiveWeapon( weapon );
+	self GiveMaxAmmo( weapon );
+	if ( self HasWeapon( "uzi" ) )
+		self TakeWeapon( "uzi" );
+	self SwitchToWeapon( weapon );
+	maps\_mw2coop::state( "boat: " + player_name( self ) + " holds " + weapon + " (" + self GetCurrentWeapon() + " now)" );
 }
 
 // self: the passenger. His body aims where he looks, as Price's aims at his target
