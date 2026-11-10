@@ -29,8 +29,9 @@ if [ "$MW2COOP_IW4X" = 1 ]; then BITS=32; HB=32; CB=32; A=$ROOT/mw2-iw4x; B=$ROO
 [ -n "$MW2COOP_DIR_B" ] && B=$MW2COOP_DIR_B
 # a [native] section in a copy'"'"'s settings.ini (left by run32.sh / run32lobby.sh) starts a split screen session in that copy: the pair would not be a pair
 for d in "$A" "$B"; do
-	if awk '/^\[/{s=tolower($0)} s=="[native]" && /^[A-Za-z0-9_]+[ ]*=/{f=1} END{exit !f}' "$d/mw2coop/settings.ini" 2>/dev/null; then
-		echo "WARNING: $d/mw2coop/settings.ini has [native] keys: that copy may start a split screen session. Copy content/release/settings.ini over it first."
+	if awk '/^\[/{s=tolower($0)} s=="[native]" && tolower($0) ~ /^players[ ]*=[ ]*[2-4]/{f=1} END{exit !f}' "$d/mw2coop/settings.ini" 2>/dev/null; then
+		echo "REFUSED: $d/mw2coop/settings.ini has [native] players=2: that copy starts a split screen session, and a pair with it crashes at the level start (found 2026-11-10). Copy content/release/settings.ini over it first."
+		exit 1
 	fi
 done
 HERE=$(cd "$(dirname "$0")" && pwd -W)
