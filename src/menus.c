@@ -3121,6 +3121,24 @@ void menus_poll(void)
 				la = a, lb = b, lon = on;
 			}
 		}
+		{ // The level's own sound (its ambient track and music, started when the level's scripts start) is silent while the loading screen and the briefing are up, as in single player (the
+		  // engine fades all audio out for the load and in at the level's start, `snd_fade`, snd_levelFadeTime); in the engine's co-op nothing did, so the mission's music played under
+		  // the briefing film (issue 20, owner 2026-11-10). The film's own sound has its own volume (snd_cinematicVolumeScale). Faded back in when the UI leaves the loading and pregame states.
+		  // QA runs (mw2coop_qa set) leave the sound alone.
+			static int faded;
+			char q[32] = "";
+			game_dvar_raw("mw2coop_qa", q, sizeof(q));
+			int want = campaign_session && base[RVA_COOP_BYTE_E] && (ui == 6 || ui == 3) && !q[0];
+			if (want && !faded) {
+				faded = 1;
+				game_cbuf_addtext("snd_fade 0 0\n");
+				log_printf("menus: the level's sound is faded out for the loading screen and the briefing");
+			} else if (!want && faded) {
+				faded = 0;
+				game_cbuf_addtext("snd_fade 1 1000\n");
+				log_printf("menus: the level's sound is faded back in");
+			}
+		}
 		if (last_ui == 3 && ui != 3 && campaign_session && base[RVA_COOP_BYTE_E]) { // the pregame is over on this PC: the film ended, or the player skipped it
 			brief_notify_until = GetTickCount() + 2500;
 			log_printf("menus: the briefing is over on this PC (the partner is told)");

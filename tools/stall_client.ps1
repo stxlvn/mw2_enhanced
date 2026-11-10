@@ -19,7 +19,7 @@ $t0 = Get-Date
 while (((Get-Date) - $t0).TotalSeconds -lt $Timeout) {
 	Start-Sleep -Milliseconds 100
 	if (Test-Path $log) {
-		$text = try { [System.IO.File]::ReadAllText($log) } catch { "" }
+		$text = try { $fs = New-Object System.IO.FileStream($log, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite); $sr = New-Object System.IO.StreamReader($fs); $t = $sr.ReadToEnd(); $sr.Close(); $t } catch { "" }
 		if ($text.Contains($Marker)) { break }
 	}
 }
