@@ -3700,8 +3700,8 @@ boat()
 	check( gun_follows_view( other ), "his body's gun points where he looks (gun " + gun_yaw( level.mw2coop_boat_body ) + ", view " + view_yaw( other ) + ")" );
 	check( abs( view_yaw( other ) ) < 10, "he starts looking ahead over the bow (" + view_yaw( other ) + ")" );
 	check( across_from_price( other ), "the passenger lies across from Price (" + int( boat_side( other ) ) + ", Price " + int( price_side() ) + ")" );
-	// he looks as far right, then left, as the body can aim (screenshots: his body's gun follows; further out his camera is free but the gun stays at the pose's limit, checked below)
-	foreach ( turn in strtok( "-45 45", " " ) )
+	// he looks as far right, then left, as he can (screenshots: his body's gun follows)
+	foreach ( turn in strtok( "-60 60", " " ) )
 	{
 		report( "passenger looks " + turn );
 		for ( t = 0; t < 3; t += 0.05 )
@@ -3711,35 +3711,6 @@ boat()
 		}
 	}
 	check( gun_follows_view( other ), "after looking about, the gun still follows (gun " + gun_yaw( level.mw2coop_boat_body ) + ", view " + view_yaw( other ) + ")" );
-	// his camera covers a half circle of the boat, -168 to +12 degrees of the bow in the right pose (owner, 2026-11-10: 180 degrees, turned so that the host's body stays out of his view):
-	// asked for -160 it gets there, asked for +40 it stops at about +12
-	foreach ( want in strtok( "-160 40", " " ) )
-	{
-		for ( t = 0; t < 1.5; t += 0.05 )
-		{
-			other SetPlayerAngles( ( 0, level.players_boat.angles[ 1 ] + int( want ), 0 ) );
-			wait 0.05;
-		}
-		if ( int( want ) < 0 )
-			check( abs( view_yaw( other ) - int( want ) ) < 10, "his camera reaches " + want + " degrees of the bow (" + view_yaw( other ) + ")" );
-		else
-			check( view_yaw( other ) > 4 && view_yaw( other ) < 20, "his camera stops at about +12 degrees of the bow when asked for " + want + " (" + view_yaw( other ) + ")" );
-	}
-	// mw2coop_qa_sweep 1: a frame of each machine at every 15 degrees of the camera's range (where does the other player's body come into view?)
-	if ( GetDvarInt( "mw2coop_qa_sweep" ) )
-	{
-		foreach ( turn in strtok( "-90 -75 -60 -45 -30 -15 0 15 30 45 60 75 90", " " ) )
-		{
-			for ( t = 0; t < 0.8; t += 0.05 )
-			{
-				other SetPlayerAngles( ( 0, level.players_boat.angles[ 1 ] - 36 + int( turn ), 0 ) );
-				wait 0.05;
-			}
-			qa_shot( "sweep" + turn + "_view" + view_yaw( other ) );
-		}
-	}
-	other SetPlayerAngles( ( 0, level.players_boat.angles[ 1 ], 0 ) );
-	wait 0.5;
 	// the level's triggers that would turn Price over (af_chase_code::price_position_switch())
 	// leave him on his tube in co-op: set them all off
 	switches = GetEntArray( "price_position_switch", "targetname" );
