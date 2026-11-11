@@ -105,6 +105,21 @@ uint8_t *ui_find_menu(const char *name)
 	return NULL;
 }
 
+// Every instance of the menu <name> in the list (a level's zone brings its own copy of the game's menus), up to <max>; the count.
+int ui_menu_instances(const char *name, uint8_t **out, int max)
+{
+	uint8_t *ui = base + RVA_UI_CONTEXT;
+	int count = *(int *)(ui + UI_MENU_COUNT);
+	uint8_t **menus = (uint8_t **)(ui + UI_MENUS);
+	int n = 0;
+	for (int i = 0; i < count && i < UI_MAX_MENUS && n < max; i++) {
+		const char *nm = menus[i] ? *(const char **)menus[i] : NULL;
+		if (nm && lstrcmpiA(nm, name) == 0)
+			out[n++] = menus[i];
+	}
+	return n;
+}
+
 int ui_item_index(uint8_t *menu, const char *name)
 {
 	int count = *(int *)(menu + MENU_ITEM_COUNT);

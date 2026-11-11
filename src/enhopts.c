@@ -515,10 +515,9 @@ static void add_popup(void)
 
 // The page's button in the options menu (main_options: Video, Audio, Controls, Voice, Chat, a line, Optimal settings): a copy of the Controls button right under the last page
 // button above the line; the line and what is below it in that column move one row down.
-static void patch_options(void)
+static void patch_options_menu(uint8_t *menu, const char *menu_name)
 {
 	static int logged;
-	uint8_t *menu = ui_find_menu("main_options");
 	if (!menu || ui_item_index(menu, "mw2coop_enhanced_btn") >= 0)
 		return;
 	int count = *(int *)(menu + MENU_ITEM_COUNT);
@@ -535,7 +534,7 @@ static void patch_options(void)
 	}
 	if (!controls) {
 		if (!logged++)
-			log_printf("enhopts: no Controls button in main_options, no Enhanced button");
+			log_printf("enhopts: no Controls button in %s, no Enhanced button", menu_name);
 		return;
 	}
 	const float *cr = (const float *)(controls + ITEM_RECT);
@@ -551,7 +550,9 @@ static void patch_options(void)
 	for (int i = 0; i < count; i++) { // the line and the rows below it, top-aligned like the buttons: one row down (copies: the old items stay as the UI may still read them)
 		uint8_t *it = items[i];
 		const float *r = (const float *)(it + ITEM_RECT);
-		if (line_y >= 0 && it[ITEM_RECT_ALIGN_V] == controls[ITEM_RECT_ALIGN_V] && r[1] >= line_y - 0.5f && r[1] < 400.0f && r[3] <= cr[3] + 0.5f) {
+		// the column's own items (the buttons: the Controls button's x; the line: x 0, a 1 unit rule), not the page's rows on the right, which start at the same height
+		const int in_column = r[0] == cr[0] || (r[3] == 1.0f && r[0] == 0.0f);
+		if (in_column && line_y >= 0 && it[ITEM_RECT_ALIGN_V] == controls[ITEM_RECT_ALIGN_V] && r[1] >= line_y - 0.5f && r[1] < 400.0f && r[3] <= cr[3] + 0.5f) {
 			uint8_t *moved = ui_clone_item(it, menu);
 			place(moved, r[1] + BUTTON_HEIGHT);
 			it = moved;
@@ -561,12 +562,38 @@ static void patch_options(void)
 	uint8_t *it = ui_clone_item(controls, menu);
 	*(const char **)it = "mw2coop_enhanced_btn";
 	*(const char **)(it + ITEM_TEXT) = "@MW2COOP_ENH_MENU";
+	// a plain open: the page goes over the options page that is open (in a level that is the Video page alone: the pause menu's Settings has no menu under it), so Esc comes
+	// back to it, as from the game's own sub pages; the other column buttons close their siblings, which would leave this page with nothing under it and Esc would end in the game
 	*(void **)(it + ITEM_ACTION) = ui_script_set("\"play\" \"mouse_click\" ; \"open\" \"mw2coop_enhanced\" ; ");
 	place(it, y);
-	list[count] = it;
+	int after = -1; // the last page button above the line (Chat): the button follows it in the focus order
+	float best = -1;
+	for (int i = 0; i < count; i++) {
+		const float *r = (const float *)(items[i] + ITEM_RECT);
+		if (*(int *)(items[i] + ITEM_TYPE) == 1 && r[0] == cr[0] && items[i][ITEM_RECT_ALIGN_V] == controls[ITEM_RECT_ALIGN_V] && (line_y < 0 || r[1] < line_y - 0.5f) && r[1] > best) {
+			best = r[1];
+			after = i;
+		}
+	}
+	if (after < 0)
+		after = count - 1;
+	memmove(&list[after + 2], &list[after + 1], (size_t)(count - after - 1) * sizeof(*list));
+	list[after + 1] = it;
 	*(uint8_t ***)(menu + MENU_ITEMS) = list; // the old items stay valid, so the UI may read the new array before the new count
 	*(int *)(menu + MENU_ITEM_COUNT) = count + 1;
-	log_printf("enhopts: Enhanced button added to main_options at y %.0f", y);
+	log_printf("enhopts: Enhanced button added to %s at y %.0f", menu_name, y);
+}
+
+// The button goes into every instance of the game's options menus: the main menu's and a level's (the pause menu's Settings opens Video, which has its own copy of the left column).
+static void patch_options(void)
+{
+	static const char *const names[] = {"main_options", "pc_options_video", "pc_options_audio", "pc_options_controls", "pc_options_voice", "pc_options_chat"};
+	for (size_t k = 0; k < sizeof(names) / sizeof(names[0]); k++) {
+		uint8_t *all[8];
+		const int n = ui_menu_instances(names[k], all, 8);
+		for (int i = 0; i < n; i++)
+			patch_options_menu(all[i], names[k]);
+	}
 }
 
 // What follows the player's changes, in the menus and in a level alike (a level's frame does not run the menus' tick; the page itself is reached from the main menu: the pause menu's Settings is a copy of the options menu that this page's button is not in, see docs/enhanced-page.md): the keys of the changed
@@ -576,6 +603,9 @@ static void follow_all(void)
 	static volatile LONG busy;
 	if (InterlockedExchange(&busy, 1))
 		return;
+	add_page(); // a level's zone starts the UI's list of menus anew: the page, the pop-up and the buttons are made again for it
+	add_popup();
+	patch_options();
 	follow_changes();
 	hold_fov();
 	// the page was left (its onClose set mw2coop_enh_left): a row that waits for the next start now differs from what the running game uses -> the pop-up
@@ -611,8 +641,5 @@ void enhopts_tick(void)
 	register_dvars();
 	if (!registered)
 		return;
-	add_page();
-	add_popup();
-	patch_options();
 	follow_all();
 }

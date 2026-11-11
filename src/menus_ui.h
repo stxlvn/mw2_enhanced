@@ -71,6 +71,8 @@
 
 // The menus the UI has loaded; NULL if not loaded. Main thread.
 uint8_t *ui_find_menu(const char *name);
+// Every instance of the menu <name> in the UI's list (a level's zone has its own copies of the game's menus), up to <max>; the count.
+int ui_menu_instances(const char *name, uint8_t **out, int max);
 // Index of the item named <name> in <menu>, or -1.
 int ui_item_index(uint8_t *menu, const char *name);
 // A handler set running one menu script (the zone's parsed form: quoted tokens, ';' ends a command).
