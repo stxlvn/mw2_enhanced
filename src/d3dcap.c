@@ -25,6 +25,7 @@
 #include "log.h"
 #include "settings.h"
 #include "upscale.h"
+#include "dx/stateprobe.h"
 
 #define VT_CREATE_DEVICE         16 // IDirect3D9::CreateDevice
 #define VT_CREATE_TEXTURE        23 // IDirect3DDevice9::CreateTexture ... CreateIndexBuffer
@@ -293,6 +294,7 @@ static HRESULT STDMETHODCALLTYPE create_ps_dump(IDirect3DDevice9 *dev, const DWO
 
 static void hook_shader_dump(IDirect3DDevice9 *dev)
 {
+	stateprobe_hook_device(dev); // QA, MW2COOP_STATEPROBE=1
 	if (!getenv("MW2COOP_DUMPSHADERS"))
 		return;
 	void **vt = *(void ***)dev;
