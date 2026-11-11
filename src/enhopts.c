@@ -569,7 +569,7 @@ static void patch_options(void)
 	log_printf("enhopts: Enhanced button added to main_options at y %.0f", y);
 }
 
-// What follows the player's changes, in the menus and in a level alike (the pause menu has the page too, and a level's frame does not run the menus' tick): the keys of the changed
+// What follows the player's changes, in the menus and in a level alike (a level's frame does not run the menus' tick; the page itself is reached from the main menu: the pause menu's Settings is a copy of the options menu that this page's button is not in, see docs/enhanced-page.md): the keys of the changed
 // rows, the live effects, the field of view, the pop-up after the page was left. Two threads may call it (the menus' tick, the level's poll): one at a time.
 static void follow_all(void)
 {
