@@ -38,6 +38,15 @@
 #define MULTI_SIZE 0x188
 #define UPSCALERS 2 // Off, FSR 1 (FSR 3 and DLSS need the 64-bit build)
 #endif
+#ifdef _WIN64
+#define ITEM_FONT 0xd0 // int fontEnum, then textAlignMode (int), textalignx and textaligny (float), as in menus.c
+#else
+#define ITEM_FONT 0xc4
+#endif
+#define ITEM_TEXT_ALIGN (ITEM_FONT + 4)
+#define ITEM_TEXT_ALIGN_X (ITEM_FONT + 8)
+#define ALIGN_MIDDLE_LEFT 4
+#define SLIDER_BAR_W 96.0f // the drawn bar of the game's slider is about this wide (units; its rectangle is wider, 344 here), measured on 1920 x 1080
 #define DVAR_ARCHIVE 1
 #define ITEM_TYPE_SLIDER 10
 #define ITEM_TYPE_YESNO 11
@@ -227,6 +236,13 @@ static void follow_changes(void)
 		const opt_t *t = &opts[o];
 		if (!dvars[o] || !t->own)
 			continue;
+		if (t->kind == K_SLIDER && dvars[o]->type == DVAR_TYPE_FLOAT) { // whole numbers: the number beside the bar shows no fractions
+			const float whole = (float)(int)(dvars[o]->current.value + 0.5f);
+			if (whole != dvars[o]->current.value) {
+				dvars[o]->current.value = whole;
+				dvars[o]->modified = 1;
+			}
+		}
 		float v = value_of(o);
 		if (t->kind != K_YESNO)
 			v = (float)(int)(v + 0.5f); // whole numbers in the file
@@ -377,7 +393,7 @@ static void add_page(void)
 	int title_at = 0;
 	while (items[title_at] != title)
 		title_at++;
-	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + 2 * OPTS + GROUPS + 2) * sizeof(*list));
+	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + 3 * OPTS + GROUPS + 2) * sizeof(*list));
 	int n = 0;
 	for (int i = 0; i <= title_at; i++) // the backgrounds and the title
 		list[n++] = items[i];
@@ -436,6 +452,22 @@ static void add_page(void)
 			*(const char **)(text + ITEM_TEXT) = t->label;
 			list[n++] = control;
 			list[n++] = text;
+			if (t->kind == K_SLIDER) { // the slider's number, right of the bar: a text item without a text that shows the dvar's value (the game's sliders show none)
+				uint8_t *tag = ui_clone_item(label, menu);
+				*(const char **)(tag + ITEM_TEXT) = NULL;
+				*(void **)(tag + ITEM_TEXT_EXP) = NULL;
+				*(const char **)(tag + ITEM_DVAR) = t->dvar;
+				const float *cr = (const float *)(control + ITEM_RECT);
+				*(float *)(tag + ITEM_RECT) = cr[0] + SLIDER_BAR_W + 8.0f;
+				*(float *)(tag + ITEM_RECT_CLIENT_Y - 4) = cr[0] + SLIDER_BAR_W + 8.0f;
+				*(float *)(tag + ITEM_RECT + 8) = 40.0f;
+				tag[ITEM_RECT_ALIGN_H] = control[ITEM_RECT_ALIGN_H]; // the same anchor as the bar, so the same x means the same place
+				tag[ITEM_RECT_ALIGN_V] = control[ITEM_RECT_ALIGN_V];
+				*(int *)(tag + ITEM_TEXT_ALIGN) = ALIGN_MIDDLE_LEFT;
+				*(float *)(tag + ITEM_TEXT_ALIGN_X) = 0;
+				place(tag, y);
+				list[n++] = tag;
+			}
 			rows++;
 			y += 20.0f;
 		}
