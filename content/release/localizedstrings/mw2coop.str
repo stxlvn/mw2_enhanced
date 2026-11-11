@@ -280,9 +280,9 @@ REFERENCE           MW2COOP_ENH_DARKTITLE
 LANG_ENGLISH        "Dark title bar"
 LANG_RUSSIAN        "Тёмный заголовок окна"
 
-REFERENCE           MW2COOP_ENH_D3D12
-LANG_ENGLISH        "Direct3D 12 layer"
-LANG_RUSSIAN        "Слой Direct3D 12"
+REFERENCE           MW2COOP_ENH_DIRECTX
+LANG_ENGLISH        "DirectX version"
+LANG_RUSSIAN        "Версия DirectX"
 
 REFERENCE           MW2COOP_ENH_RESTART_TITLE
 LANG_ENGLISH        "Restart needed"

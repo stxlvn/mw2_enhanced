@@ -43,7 +43,7 @@
 #define ITEM_TYPE_YESNO 11
 #define ITEM_TYPE_MULTI 12
 
-enum { K_SLIDER, K_YESNO, K_UPSCALER };
+enum { K_SLIDER, K_YESNO, K_UPSCALER, K_DIRECTX }; // K_UPSCALER and K_DIRECTX: choice rows
 enum { LIVE_NONE, LIVE_FOV, LIVE_SHARP, LIVE_HUDTEXT, LIVE_NAMETAG, LIVE_FALL };
 // What a row applies to; the page lists the rows by these groups (in this order), each under its name, not by how a change takes effect.
 enum { GROUP_PICTURE, GROUP_WINDOW, GROUP_UPSCALING, GROUP_HUD, GROUP_COOP, GROUPS };
@@ -71,11 +71,11 @@ static const opt_t opts[] = {
     {"mw2coop_opt_hudtext", "@MW2COOP_ENH_HUDTEXT", K_SLIDER, 20, 200, 50, "display", "hudtextscale", 1, LIVE_HUDTEXT, 0, "Enhanced: size of the objective labels, percent", GROUP_HUD},
     {"mw2coop_opt_nametag", "@MW2COOP_ENH_NAMETAG", K_SLIDER, 20, 200, 70, "display", "nametagscale", 1, LIVE_NAMETAG, 0, "Enhanced: size of the names over players, percent", GROUP_HUD},
     {"mw2coop_opt_falldmg", "@MW2COOP_ENH_FALLDMG", K_YESNO, 0, 1, 0, "gameplay", "fall_damage", 1, LIVE_FALL, 0, "Enhanced: fall damage in a co-op session", GROUP_COOP},
+#ifdef _WIN64
+    {"mw2coop_opt_directx", "@MW2COOP_ENH_DIRECTX", K_DIRECTX, 0, 1, 0, "display", "d3d9on12", 1, LIVE_NONE, 1, "Enhanced: DirectX version, 0 = 9 (the game's own), 1 = 12 (Direct3D 9 on the Direct3D 12 layer; FSR 3 and DLSS need it) (next start)", GROUP_WINDOW},
+#endif
     {"mw2coop_opt_borderless", "@MW2COOP_ENH_BORDERLESS", K_YESNO, 0, 1, 1, "display", "borderless", 1, LIVE_NONE, 1, "Enhanced: full screen as a borderless window (next start)", GROUP_WINDOW},
     {"mw2coop_opt_darktitle", "@MW2COOP_ENH_DARKTITLE", K_YESNO, 0, 1, 1, "display", "darktitle", 1, LIVE_NONE, 1, "Enhanced: dark title bar (next start)", GROUP_WINDOW},
-#ifdef _WIN64
-    {"mw2coop_opt_d3d12", "@MW2COOP_ENH_D3D12", K_YESNO, 0, 1, 0, "display", "d3d9on12", 1, LIVE_NONE, 1, "Enhanced: Direct3D 9 on the Direct3D 12 layer (next start)", GROUP_WINDOW},
-#endif
 };
 #define OPTS ((int)(sizeof(opts) / sizeof(opts[0])))
 
@@ -142,6 +142,8 @@ static void register_dvars(void)
 		float v = t->def;
 		if (t->kind == K_UPSCALER)
 			v = (float)upscaler_read(path);
+		else if (t->kind == K_DIRECTX)
+			v = (float)(settings_d3d9on12() != 0); // in effect: FSR 3 and DLSS switch the layer on whatever the key says (settings.c)
 		else if (t->section) { // the file's value, else the default
 			int iv = (int)GetPrivateProfileIntA(t->section, t->key, (int)t->def, path);
 			if ((float)iv >= t->lo && (float)iv <= t->hi)
@@ -186,11 +188,38 @@ static void hold_fov(void)
 	}
 }
 
+static int opt_index(const char *dvar)
+{
+	for (int o = 0; o < OPTS; o++)
+		if (!strcmp(opts[o].dvar, dvar))
+			return o;
+	return -1;
+}
+
+// FSR 3 and DLSS run on the Direct3D 12 layer (settings.c switches it on for them, fsr3.c does nothing without it). The two rows follow that: choosing FSR 3 or DLSS sets DirectX to 12,
+// choosing DirectX 9 while one of them is on turns the upscaler off (FSR 1 and the plain game need no layer). The one that was changed last decides.
+static void keep_upscaler_and_directx(int changed_upscaler, int changed_directx)
+{
+	const int iu = opt_index("mw2coop_opt_upscaler"), id = opt_index("mw2coop_opt_directx");
+	if ((!changed_upscaler && !changed_directx) || iu < 0 || id < 0 || !dvars[iu] || !dvars[id])
+		return;
+	if (value_of(iu) < 1.5f || value_of(id) > 0.5f)
+		return;
+	if (changed_directx && !changed_upscaler) {
+		game_cbuf_addtext("set mw2coop_opt_upscaler 0\n");
+		log_printf("enhopts: DirectX 9 chosen while FSR 3 / DLSS is on: the upscaler is turned off (they need DirectX 12)");
+	} else {
+		game_cbuf_addtext("set mw2coop_opt_directx 1\n");
+		log_printf("enhopts: FSR 3 / DLSS needs DirectX 12: the DirectX row is set to 12");
+	}
+}
+
 // a changed row: its settings.ini key is written and what can follow at once is done; a row that waits for the next start asks for the pop-up
 static void follow_changes(void)
 {
 	char text[32], cmd[64];
 	const char *path = settings_ini_path();
+	int changed_upscaler = 0, changed_directx = 0;
 	for (int o = 0; o < OPTS; o++) {
 		const opt_t *t = &opts[o];
 		if (!dvars[o] || !t->own)
@@ -201,6 +230,8 @@ static void follow_changes(void)
 		if (v == last[o])
 			continue;
 		last[o] = v;
+		changed_upscaler |= t->kind == K_UPSCALER;
+		changed_directx |= t->kind == K_DIRECTX;
 		if (t->kind == K_UPSCALER)
 			upscaler_write(path, (int)v);
 		else if (t->section) {
@@ -230,6 +261,7 @@ static void follow_changes(void)
 			break;
 		}
 	}
+	keep_upscaler_and_directx(changed_upscaler, changed_directx);
 }
 
 static uint8_t *item_by_text(uint8_t *menu, const char *text)
@@ -261,20 +293,19 @@ static void place(uint8_t *item, float y)
 }
 
 // The upscaler's choice row: a copy of a choice row of the advanced video page (same place and size as the Look page's yes / no rows) with a list of its own
-static uint8_t *upscaler_item(uint8_t *menu)
+static uint8_t *choice_item(uint8_t *menu, const char *const *names, int n)
 {
-	static const char *const names[4] = {"@MW2COOP_ENH_OFF", "FSR 1", "FSR 3", "DLSS"};
 	uint8_t *video = ui_find_menu("pc_options_advanced_video");
 	uint8_t *src = video ? item_by_type(video, ITEM_TYPE_MULTI) : NULL;
 	if (!src || !*(void **)(src + ITEM_TYPE_DATA))
 		return NULL;
 	uint8_t *it = ui_clone_item(src, menu);
 	uint8_t *multi = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, MULTI_SIZE);
-	for (int i = 0; i < UPSCALERS; i++) {
+	for (int i = 0; i < n; i++) {
 		((const char **)multi)[i] = names[i];
 		((float *)(multi + MULTI_VALUE))[i] = (float)i;
 	}
-	*(int *)(multi + MULTI_COUNT) = UPSCALERS;
+	*(int *)(multi + MULTI_COUNT) = n;
 	*(int *)(multi + MULTI_COUNT + 4) = 0; // strDef: the list holds numbers
 	*(void **)(it + ITEM_TYPE_DATA) = multi;
 	return it;
@@ -368,10 +399,12 @@ static void add_page(void)
 				field[0] = t->lo, field[1] = t->hi, field[2] = t->def, field[3] = t->hi - t->lo;
 				*(void **)(control + ITEM_TYPE_DATA) = field;
 			} else {
-				if (t->kind == K_UPSCALER) {
-					control = upscaler_item(menu);
+				if (t->kind == K_UPSCALER || t->kind == K_DIRECTX) {
+					static const char *const upscaler_names[4] = {"@MW2COOP_ENH_OFF", "FSR 1", "FSR 3", "DLSS"};
+					static const char *const directx_names[2] = {"DirectX 9", "DirectX 12"};
+					control = t->kind == K_UPSCALER ? choice_item(menu, upscaler_names, UPSCALERS) : choice_item(menu, directx_names, 2);
 					if (!control) {
-						log_printf("enhopts: no choice row to copy from the advanced video page: no Upscaler row");
+						log_printf("enhopts: no choice row to copy from the advanced video page: no %s row", t->kind == K_UPSCALER ? "Upscaler" : "DirectX");
 						continue;
 					}
 				} else {
