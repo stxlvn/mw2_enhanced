@@ -35,6 +35,7 @@
 #include "padicon.h"
 #include "padopts.h"
 #include "gfxopts.h"
+#include "enhopts.h"
 #include "log.h"
 #include "missions.h"
 #include "menutable.h"
@@ -2931,27 +2932,60 @@ static DWORD WINAPI loading_thread(LPVOID unused)
 // on either PC: each PC tells the other when its own is (the packet mw2coop_briefdone), so a skip on one PC is a skip on both. The split screen has one PC and the single player
 // wait already (engine co-op byte 0).
 #ifdef _WIN64
-#define RVA_COOP_WAIT XR(0x22e170)
-#define RVA_COOP_BYTE_E XR(0x52fb5c)	  // the engine's co-op byte
-#define RVA_UI_STATE XR(0x1a49dc4)
-#define RVA_CLIENT_STATE XR(0x533cb8)
-#define RVA_FILM_ON XR(0x45859c4)		  // the cinematic state the single player test reads: on, and two counters that differ when it is over
-#define RVA_FILM_A XR(0x45859cc)
-#define RVA_FILM_B XR(0x45859d0)
-#define RVA_ENGINE_WAIT_A XR(0x192d7e3)
-#define RVA_ENGINE_WAIT_B XR(0x192d8f4)
+#define REF_COOP_WAIT 0x22e170
+#define RVA_COOP_WAIT XR(REF_COOP_WAIT)
+#define REF_COOP_BYTE_E 0x52fb5c
+#define RVA_COOP_BYTE_E XR(REF_COOP_BYTE_E)	  // the engine's co-op byte
+#define REF_UI_STATE 0x1a49dc4
+#define RVA_UI_STATE XR(REF_UI_STATE)
+#define REF_CLIENT_STATE 0x533cb8
+#define RVA_CLIENT_STATE XR(REF_CLIENT_STATE)
+#define REF_FILM_ON 0x45859c4
+#define RVA_FILM_ON XR(REF_FILM_ON)		  // the cinematic state the single player test reads: on, and two counters that differ when it is over
+#define REF_FILM_A 0x45859cc
+#define RVA_FILM_A XR(REF_FILM_A)
+#define REF_FILM_B 0x45859d0
+#define RVA_FILM_B XR(REF_FILM_B)
+#define REF_ENGINE_WAIT_A 0x192d7e3
+#define RVA_ENGINE_WAIT_A XR(REF_ENGINE_WAIT_A)
+#define REF_ENGINE_WAIT_B 0x192d8f4
+#define RVA_ENGINE_WAIT_B XR(REF_ENGINE_WAIT_B)
 #else
 // the 32-bit build (the same code at VA 0x40af30; the UI frame is 0x4b5c50, its state variable 0x1926b84)
-#define RVA_COOP_WAIT XR(0xaf30)
-#define RVA_COOP_BYTE_E XR(0x48897c)
-#define RVA_UI_STATE XR(0x1526b84)
-#define RVA_CLIENT_STATE XR(0x525bc0)
-#define RVA_FILM_ON XR(0x1887bc0)
-#define RVA_FILM_A XR(0x1887bc8)
-#define RVA_FILM_B XR(0x1887bcc)
-#define RVA_ENGINE_WAIT_A XR(0x166b0c2)
-#define RVA_ENGINE_WAIT_B XR(0x166acf1)
+#define REF_COOP_WAIT 0xaf30
+#define RVA_COOP_WAIT XR(REF_COOP_WAIT)
+#define REF_COOP_BYTE_E 0x48897c
+#define RVA_COOP_BYTE_E XR(REF_COOP_BYTE_E)
+#define REF_UI_STATE 0x1526b84
+#define RVA_UI_STATE XR(REF_UI_STATE)
+#define REF_CLIENT_STATE 0x525bc0
+#define RVA_CLIENT_STATE XR(REF_CLIENT_STATE)
+#define REF_FILM_ON 0x1887bc0
+#define RVA_FILM_ON XR(REF_FILM_ON)
+#define REF_FILM_A 0x1887bc8
+#define RVA_FILM_A XR(REF_FILM_A)
+#define REF_FILM_B 0x1887bcc
+#define RVA_FILM_B XR(REF_FILM_B)
+#define REF_ENGINE_WAIT_A 0x166b0c2
+#define RVA_ENGINE_WAIT_A XR(REF_ENGINE_WAIT_A)
+#define REF_ENGINE_WAIT_B 0x166acf1
+#define RVA_ENGINE_WAIT_B XR(REF_ENGINE_WAIT_B)
 #endif
+// A build whose addresses moved (addr.c): an address that was not found stands in as a block of zeros. The film flags and the UI state are such globals, and a wait that reads zeros for them
+// would never see the film end: the briefing wait is off when any of the addresses it reads is not a real one of this build.
+static int brief_addresses_ok(void)
+{
+	static int ok = -1;
+	if (ok < 0)
+		ok = addr_resolved(REF_COOP_BYTE_E) && addr_resolved(REF_UI_STATE) && addr_resolved(REF_CLIENT_STATE) && addr_resolved(REF_FILM_ON) && addr_resolved(REF_FILM_A) &&
+		     addr_resolved(REF_FILM_B) && addr_resolved(REF_ENGINE_WAIT_A) && addr_resolved(REF_ENGINE_WAIT_B);
+	if (!ok) {
+		static int logged;
+		if (!logged++)
+			log_printf("menus: an address the briefing wait needs was not found in this build: no briefing wait");
+	}
+	return ok;
+}
 #define BRIEF_MAX_MS 240000
 static DWORD brief_started, brief_last_call, brief_last_sent;
 static int brief_released;
@@ -3025,7 +3059,7 @@ int menus_briefing_holds(void)
 static unsigned char coop_wait_hook(void)
 {
 	unsigned char engine = base[RVA_ENGINE_WAIT_B] ? 1 : base[RVA_ENGINE_WAIT_A];
-	if (!campaign_session || !base[RVA_COOP_BYTE_E] || *(volatile int *)(base + RVA_UI_STATE) != 3)
+	if (!campaign_session || !brief_addresses_ok() || !base[RVA_COOP_BYTE_E] || *(volatile int *)(base + RVA_UI_STATE) != 3)
 		return engine;
 	return brief_wait() ? 1 : engine;
 }
@@ -3119,6 +3153,24 @@ void menus_poll(void)
 			if (a != la || b != lb || on != lon) {
 				log_printf("menus: pregame film state: flag %d, counters %d %d", on, a, b);
 				la = a, lb = b, lon = on;
+			}
+		}
+		{ // The level's own sound (its ambient track and music, started when the level's scripts start) is silent while the loading screen and the briefing are up, as in single player (the
+		  // engine fades all audio out for the load and in at the level's start, `snd_fade`, snd_levelFadeTime); in the engine's co-op nothing did, so the mission's music played under
+		  // the briefing film (issue 20, owner 2026-11-10). The film's own sound has its own volume (snd_cinematicVolumeScale). Faded back in when the UI leaves the loading and pregame states.
+		  // QA runs (mw2coop_qa set) leave the sound alone.
+			static int faded;
+			char q[32] = "";
+			game_dvar_raw("mw2coop_qa", q, sizeof(q));
+			int want = campaign_session && base[RVA_COOP_BYTE_E] && (ui == 6 || ui == 3) && !q[0];
+			if (want && !faded) {
+				faded = 1;
+				game_cbuf_addtext("snd_fade 0 0\n");
+				log_printf("menus: the level's sound is faded out for the loading screen and the briefing");
+			} else if (!want && faded) {
+				faded = 0;
+				game_cbuf_addtext("snd_fade 1 1000\n");
+				log_printf("menus: the level's sound is faded back in");
 			}
 		}
 		if (last_ui == 3 && ui != 3 && campaign_session && base[RVA_COOP_BYTE_E]) { // the pregame is over on this PC: the film ended, or the player skipped it
@@ -3233,6 +3285,7 @@ static void tick_f(void)
 	add_partner_popups();
 	padopts_tick();
 	gfxopts_tick();
+	enhopts_tick();
 	picking_tick();
 	unlock_missions_tick();
 	find_tick();

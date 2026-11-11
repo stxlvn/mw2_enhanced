@@ -531,6 +531,27 @@ unsigned addr_xr(unsigned ref)
 	return scratch_rva(ref);
 }
 
+int addr_resolved(unsigned ref)
+{
+#ifndef _WIN64
+	if (mode == 2)
+		return ref && addr159(ref) != 0;
+#endif
+	if (!mode || !ref)
+		return 1;
+	int lo = 0, hi = table_n - 1;
+	while (lo <= hi) {
+		int mid = (lo + hi) / 2;
+		if (table[mid].ref == ref)
+			return 1;
+		if (table[mid].ref < ref)
+			lo = mid + 1;
+		else
+			hi = mid - 1;
+	}
+	return 0;
+}
+
 int addr_resolve_running(int *total)
 {
 	char path[MAX_PATH];
@@ -604,7 +625,7 @@ int addr_resolve_running(int *total)
 	table = res.pairs;
 	table_n = res.n;
 	res.pairs = NULL;
-	mode = layout_same ? 0 : 1; // the same layout: the addresses are used as they are
+	mode = (layout_same && !getenv("MW2COOP_FORCE_RESOLVED")) ? 0 : 1; // the same layout: the addresses are used as they are (QA: MW2COOP_FORCE_RESOLVED=1 runs the table lookups on the known layout)
 	addr_result_free(&res);
 	return n;
 }

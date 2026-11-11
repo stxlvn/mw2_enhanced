@@ -77,6 +77,7 @@ static void dump_layout(const char *name)
 static void dump_options(void)
 {
 	dump_layout("pc_options_advanced_video");
+	dump_layout("main_options");
 	dump_layout("pc_options_look");
 	uint8_t *ui = (uint8_t *)GetModuleHandleA(NULL) + RVA_UI;
 	int count = *(int *)(ui + UI_COUNT_AT);

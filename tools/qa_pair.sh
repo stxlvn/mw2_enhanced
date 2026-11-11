@@ -50,6 +50,10 @@ LATE="$(printf '%s' "${MW2COOP_QA_LATE:-}" | tr ';' '
 ')"
 HOSTCMDS="$(printf '%s' "${MW2COOP_HOST_CMDS:-}" | tr ';' '
 ')"
+# the start point is set again in the lobby, right before coopLaunch: the first `set start` at the top of the file ran about 40 s before and the game's menu set-up had put its own "0"
+# back (Oil Rig, 2026-11-11: the level began at the SDV ride instead of start "rig" and the breach scenario could not stand anyone at the doors)
+if [ -n "$HOST_START" ]; then HOSTCMDS="set start \"$HOST_START\"
+$HOSTCMDS"; fi
 if [ "$HB" != "$CB" ]; then
 	# mixed pair: the slower timings of the 64-bit game for both, the 32-bit prelude on the 32-bit side, the PC's own address
 	OWN_IP=$(powershell.exe -NoProfile -Command "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { \$_.IPAddress -notlike '169.*' -and \$_.IPAddress -ne '127.0.0.1' } | Select-Object -First 1).IPAddress" | tr -d '')

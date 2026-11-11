@@ -3095,8 +3095,34 @@ qa_breach_watch()
 	}
 }
 
+// issue 13 (a Steam client loses his weapon at door assaults): every change of each player's current weapon, his number of primaries and whether he is linked, with the time (report lines)
+weapon_change_watch()
+{
+	last = [];
+	for ( ;; )
+	{
+		foreach ( player in level.players )
+		{
+			n = 1;
+			if ( player == level.player2 )
+				n = 2;
+			w = player GetCurrentWeapon();
+			c = player GetWeaponsListPrimaries().size;
+			l = player IsLinked();
+			now = w + ", primaries " + c + ", linked " + l;
+			if ( !isdefined( last[ n ] ) || last[ n ] != now )
+			{
+				report( "weapon watch: player " + n + ": " + now );
+				last[ n ] = now;
+			}
+		}
+		wait 0.2;
+	}
+}
+
 oilrigdoors()
 {
+	thread weapon_change_watch();
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
 	level.mw2coop_no_follow = true;
 	p1 = level.player;
@@ -3454,6 +3480,10 @@ knife()
 	check( other.mw2coop_awake, "the other player is awake as Shepherd dies" );
 	wait 3;
 	check( other.mw2coop_awake, "and still awake 3 s later" );
+	// issue 20 ("the second player cannot move after the crash"): a real forward press on the other player's own machine, how far does he go? By the owner's design (witness_think,
+	// _mw2coop_knife.gsc: SetMoveSpeedScale 0, "he cannot move but can look around ... stays down until the end") he does not move: measured 0 units on 2026-11-11, so it is only reported
+	fw = crashwalk_step( other, "forward" );
+	report( player_name( other ) + " pressed forward after the kill and moved " + fw + " units (by design the witness stays down until the end)" );
 	wait 27;	// Price wakes up: the witness stays awake
 	check( other.laststand && IsAlive( other ), "the other player watched the whole fight, down" );
 	report( "done" );

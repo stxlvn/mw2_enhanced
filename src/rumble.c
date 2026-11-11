@@ -309,7 +309,11 @@ void rumble_install(void)
 	};
 	int done = 0;
 	for (size_t i = 0; i < sizeof(builtins) / sizeof(builtins[0]); i++) {
-		uint8_t *entry = base + XR(builtins[i].rva);
+		uint8_t *entry = game_builtin_entry(XR(builtins[i].rva), builtins[i].name); // by address, else by name (a build whose addresses moved)
+		if (!entry) {
+			log_printf("rumble: no %s at rva 0x%x or anywhere else, left alone", builtins[i].name, builtins[i].rva);
+			continue;
+		}
 		const char *name = *(const char **)entry;
 		void **func = (void **)(entry + sizeof(char *));
 		if (!name || strcmp(name, builtins[i].name) || *func != (void *)(base + RVA_EMPTY_BUILTIN)) {

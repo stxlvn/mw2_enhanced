@@ -43,5 +43,8 @@ int addr_resolve_running(int *total);
 
 // An address of the reference build, translated for the running build: the same number in mode 0, the resolved one in mode 1, 0 if it has none.
 unsigned addr_xr(unsigned ref);
+// 1 when addr_xr(ref) is a real address of the running build (always on the known build), 0 when the address was not found and a harmless block stands in for it: code that
+// reads state through such an address must not wait for or act on it.
+int addr_resolved(unsigned ref);
 // 32-bit: the running build is the iw4x-sp client's known 1.0.159 exe: addr_xr() reads the table of addr159.c from now on (mode 2).
 void addr_use_159(void);
