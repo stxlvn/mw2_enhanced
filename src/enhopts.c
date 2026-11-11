@@ -48,7 +48,7 @@ enum { LIVE_NONE, LIVE_FOV, LIVE_SHARP, LIVE_HUDTEXT, LIVE_NAMETAG, LIVE_FALL };
 // What a row applies to; the page lists the rows by these groups (in this order), each under its name, not by how a change takes effect.
 enum { GROUP_PICTURE, GROUP_WINDOW, GROUP_UPSCALING, GROUP_HUD, GROUP_COOP, GROUPS };
 static const char *const group_names[GROUPS] = {"@MW2COOP_ENH_G_PICTURE", "@MW2COOP_ENH_G_WINDOW", "@MW2COOP_ENH_G_UPSCALING", "@MW2COOP_ENH_G_HUD", "@MW2COOP_ENH_G_COOP"};
-enum { OPT_FOV, OPT_MAXFPS, OPT_UPSCALER, OPT_SHARP }; // positions in opts[] (the order in the page is the group's, then this one)
+enum { OPT_FOV, OPT_MAXFPS }; // positions in opts[] (the order in the page is the group's, then this one); the others are found by their dvar (opt_index)
 
 typedef struct {
 	const char *dvar;	   // the dvar the row is bound to
@@ -67,7 +67,9 @@ static const opt_t opts[] = {
     {"mw2coop_opt_fov", "@MW2COOP_ENH_FOV", K_SLIDER, 65, 120, 65, NULL, NULL, 1, LIVE_FOV, 0, "Enhanced: field of view in degrees (65: the game's own)", GROUP_PICTURE},
     {"com_maxfps", "@MW2COOP_ENH_MAXFPS", K_SLIDER, 0, 300, 0, NULL, NULL, 0, LIVE_NONE, 0, NULL, GROUP_PICTURE},
     {"mw2coop_opt_upscaler", "@MW2COOP_ENH_UPSCALER", K_UPSCALER, 0, UPSCALERS - 1, 0, "display", NULL, 1, LIVE_NONE, 1, "Enhanced: the upscaler, 0 off, 1 FSR 1, 2 FSR 3, 3 DLSS (next start)", GROUP_UPSCALING},
+#ifdef _WIN64
     {"mw2coop_opt_sharp", "@MW2COOP_ENH_SHARP", K_SLIDER, 0, 100, 60, "display", "fsr3_sharpness", 1, LIVE_SHARP, 0, "Enhanced: sharpening of FSR 3 and DLSS, 0-100", GROUP_UPSCALING},
+#endif
     {"mw2coop_opt_hudtext", "@MW2COOP_ENH_HUDTEXT", K_SLIDER, 20, 200, 50, "display", "hudtextscale", 1, LIVE_HUDTEXT, 0, "Enhanced: size of the objective labels, percent", GROUP_HUD},
     {"mw2coop_opt_nametag", "@MW2COOP_ENH_NAMETAG", K_SLIDER, 20, 200, 70, "display", "nametagscale", 1, LIVE_NAMETAG, 0, "Enhanced: size of the names over players, percent", GROUP_HUD},
     {"mw2coop_opt_falldmg", "@MW2COOP_ENH_FALLDMG", K_YESNO, 0, 1, 0, "gameplay", "fall_damage", 1, LIVE_FALL, 0, "Enhanced: fall damage in a co-op session", GROUP_COOP},
@@ -121,6 +123,14 @@ static void upscaler_write(const char *path, int v)
 		log_printf("enhopts: settings.ini could not be written (the upscaler, error %lu)", GetLastError());
 }
 
+static int opt_index(const char *dvar)
+{
+	for (int o = 0; o < OPTS; o++)
+		if (!strcmp(opts[o].dvar, dvar))
+			return o;
+	return -1;
+}
+
 static void register_dvars(void)
 {
 	if (registered)
@@ -154,7 +164,8 @@ static void register_dvars(void)
 		last[o] = value_of(o);
 		started[o] = last[o];
 	}
-	log_printf("enhopts: %d options registered (field of view %.0f, sharpening %.0f)", OPTS, value_of(OPT_FOV), value_of(OPT_SHARP));
+	const int is = opt_index("mw2coop_opt_sharp");
+	log_printf("enhopts: %d options registered (field of view %.0f, sharpening %.0f)", OPTS, value_of(OPT_FOV), is >= 0 ? value_of(is) : -1.0f);
 }
 
 // The field of view: the game's cg_fov is 65 across a 4:3 picture and its scripts write it (and cg_fovScale, at each level load); cg_fovScale multiplies every view's angle, the
@@ -186,14 +197,6 @@ static void hold_fov(void)
 		if (logged++ < 4)
 			log_printf("enhopts: field of view %.0f degrees (cg_fovScale %.3f)", want, s);
 	}
-}
-
-static int opt_index(const char *dvar)
-{
-	for (int o = 0; o < OPTS; o++)
-		if (!strcmp(opts[o].dvar, dvar))
-			return o;
-	return -1;
 }
 
 // FSR 3 and DLSS run on the Direct3D 12 layer (settings.c switches it on for them, fsr3.c does nothing without it). The two rows follow that: choosing FSR 3 or DLSS sets DirectX to 12,
@@ -537,7 +540,8 @@ void enhopts_level_tick(void)
 
 int enhopts_sharpness(void)
 {
-	return registered && dvars[OPT_SHARP] ? (int)(value_of(OPT_SHARP) + 0.5f) : -1;
+	const int is = opt_index("mw2coop_opt_sharp");
+	return registered && is >= 0 && dvars[is] ? (int)(value_of(is) + 0.5f) : -1;
 }
 
 void enhopts_tick(void)
