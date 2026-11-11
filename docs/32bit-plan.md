@@ -153,6 +153,10 @@ Still 64-bit only: `shot` is ported (d3dcap.c); nothing else is left in this lis
 
 Open: an intermittent hang of both copies in DB_FindXAssetHeader (see `crash.c` dumpstacks; `tools/qa_pair.sh` now watches
 for it from 20 s after the start and keeps stacks in `hang-reports/`).
+Read on 2026-11-11 with the official exe in Ghidra (report `20261111-065731`; the same stacks, with `video/subtitles.csv` as the client's request, are in `20261025-220920` and `20261025-222015`): on the client the render thread (0x5398e0) is inside
+`Direct3DDevice9::Present` (0x539440), the film thread (0x509d00 -> Bink 0x508fb0) inside a texture `LockRect` (0x4e0ff0, three calls through the vtable), and the main thread sleeps in `DB_FindXAssetHeader` (0x4f6f10) until the loader has the asset;
+the host is in the same wait. The device is made with D3DCREATE_MULTITHREADED (flags 0x46), so the runtime serializes the two threads' calls; both copies stopping at the same moment, on a laptop where the game's adapter is not the first (adapter 1 in the 32-bit log), points at the
+graphics driver (or the cross-adapter Present), not at the mod's code. Not proven; no mitigation tried.
 
 ## Cross play 64 <-> 32 (checked 2026-10-25)
 
