@@ -820,6 +820,24 @@ static HRESULT STDMETHODCALLTYPE present_hook(IDirect3DDevice9 *d, const RECT *a
 	return present_o(d, a, b, w, r);
 }
 
+// EndScene is called once per frame by the game (0x44d00): the compare runs here, whatever other code hooks Present
+static HRESULT (STDMETHODCALLTYPE *end_scene_o)(IDirect3DDevice9 *);
+static HRESULT STDMETHODCALLTYPE end_scene_hook(IDirect3DDevice9 *d)
+{
+	HRESULT hr = end_scene_o(d);
+	if (!display_mode) {
+		static int scenes;
+		scenes++;
+		if (scenes == 1 || scenes == 60)
+			log_printf("mirror11: scene %d (draws %ld, replayed %ld)", scenes, stat.draws, stat.draws - stat.draws_skipped);
+		if (scenes % 120 == 0) {
+			frames = scenes;
+			compare_frame(d);
+		}
+	}
+	return hr;
+}
+
 // ---- start
 static void init_defaults(void)
 {
@@ -895,6 +913,7 @@ void mirror11_hook_device(struct IDirect3DDevice9 *device)
 	PATCH(vt, 34, stretch_rect);
 	PATCH(vt, 37, set_rt);
 	PATCH(vt, 39, set_ds);
+	PATCH(vt, 42, end_scene);
 	PATCH(vt, 43, clear);
 	PATCH(vt, 47, set_viewport);
 	PATCH(vt, 57, set_rs);

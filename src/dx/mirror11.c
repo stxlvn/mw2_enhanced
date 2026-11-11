@@ -205,12 +205,14 @@ ORIG(get_backbuffer, HRESULT, (IDirect3DDevice9 *, UINT, UINT, D3DBACKBUFFER_TYP
 ORIG(get_surface_level, HRESULT, (IDirect3DTexture9 *, UINT, IDirect3DSurface9 **));
 ORIG(lock_rect, HRESULT, (IDirect3DTexture9 *, UINT, D3DLOCKED_RECT *, const RECT *, DWORD));
 ORIG(unlock_rect, HRESULT, (IDirect3DTexture9 *, UINT));
+ORIG(surf_lock, HRESULT, (IDirect3DSurface9 *, D3DLOCKED_RECT *, const RECT *, DWORD));
+ORIG(surf_unlock, HRESULT, (IDirect3DSurface9 *));
 ORIG(vb_lock, HRESULT, (IDirect3DVertexBuffer9 *, UINT, UINT, void **, DWORD));
 ORIG(vb_unlock, HRESULT, (IDirect3DVertexBuffer9 *));
 ORIG(ib_lock, HRESULT, (IDirect3DIndexBuffer9 *, UINT, UINT, void **, DWORD));
 ORIG(ib_unlock, HRESULT, (IDirect3DIndexBuffer9 *));
 
-static void *hooked_vt_tex, *hooked_vt_vb, *hooked_vt_ib;
+static void *hooked_vt_tex, *hooked_vt_vb, *hooked_vt_ib, *hooked_vt_surf;
 
 static void patch(void **vt, int index, void *hook, void **orig)
 {

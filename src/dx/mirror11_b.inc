@@ -179,6 +179,8 @@ static HRESULT STDMETHODCALLTYPE create_cube_hook(IDirect3DDevice9 *d, UINT edge
 }
 
 // surfaces of textures (render targets) and of the back buffer
+static HRESULT STDMETHODCALLTYPE surf_lock_hook(IDirect3DSurface9 *sf, D3DLOCKED_RECT *lr, const RECT *rect, DWORD flags);
+static HRESULT STDMETHODCALLTYPE surf_unlock_hook(IDirect3DSurface9 *sf);
 HRESULT STDMETHODCALLTYPE get_surface_level_hook(IDirect3DTexture9 *t, UINT level, IDirect3DSurface9 **out)
 {
 	HRESULT hr = get_surface_level_o(t, level, out);
@@ -188,6 +190,12 @@ HRESULT STDMETHODCALLTYPE get_surface_level_hook(IDirect3DTexture9 *t, UINT leve
 		s->tex = mt;
 		s->level = level;
 		pmap_put(&surfaces, *out, s);
+		void **svt = *(void ***)*out;
+		if (hooked_vt_surf != svt) {
+			hooked_vt_surf = svt;
+			PATCH(svt, 13, surf_lock);
+			PATCH(svt, 14, surf_unlock);
+		}
 	}
 	return hr;
 }
@@ -201,29 +209,40 @@ static struct {
 	int active;
 } tlock[8];
 
+static void texture_locked(tex_t *mt, UINT level, const D3DLOCKED_RECT *lr, const RECT *rect, DWORD flags)
+{
+	if (!mt || mt->failed || (flags & D3DLOCK_READONLY))
+		return;
+	int slot = -1;
+	for (int i = 0; i < 8; i++)
+		if (tlock[i].active && tlock[i].t == mt && tlock[i].level == level) {
+			slot = i; // an earlier lock of the same level that was never matched by an unlock we saw: replaced
+			break;
+		}
+	for (int i = 0; slot < 0 && i < 8; i++)
+		if (!tlock[i].active)
+			slot = i;
+	if (slot < 0)
+		slot = 0;
+	tlock[slot].active = 1;
+	tlock[slot].t = mt;
+	tlock[slot].level = level;
+	tlock[slot].has_rect = rect != NULL;
+	if (rect)
+		tlock[slot].r = *rect;
+	tlock[slot].lr = *lr;
+}
+
 HRESULT STDMETHODCALLTYPE lock_rect_hook(IDirect3DTexture9 *t, UINT level, D3DLOCKED_RECT *lr, const RECT *rect, DWORD flags)
 {
 	HRESULT hr = lock_rect_o(t, level, lr, rect, flags);
-	tex_t *mt = tex_of(t);
-	if (SUCCEEDED(hr) && mt && !mt->failed && !(flags & D3DLOCK_READONLY)) {
-		for (int i = 0; i < 8; i++)
-			if (!tlock[i].active) {
-				tlock[i].active = 1;
-				tlock[i].t = mt;
-				tlock[i].level = level;
-				tlock[i].has_rect = rect != NULL;
-				if (rect)
-					tlock[i].r = *rect;
-				tlock[i].lr = *lr;
-				break;
-			}
-	}
+	if (SUCCEEDED(hr))
+		texture_locked(tex_of(t), level, lr, rect, flags);
 	return hr;
 }
 
-HRESULT STDMETHODCALLTYPE unlock_rect_hook(IDirect3DTexture9 *t, UINT level)
+static void texture_unlocked(tex_t *mt, UINT level, IDirect3DTexture9 *t)
 {
-	tex_t *mt = tex_of(t);
 	for (int i = 0; i < 8; i++) {
 		if (!tlock[i].active || tlock[i].t != mt || tlock[i].level != level)
 			continue;
@@ -262,7 +281,14 @@ HRESULT STDMETHODCALLTYPE unlock_rect_hook(IDirect3DTexture9 *t, UINT level)
 		if (y1 > rows)
 			y1 = rows;
 		static LONG odd;
-		if ((x0 >= x1 || y0 >= y1 || (UINT)tlock[i].lr.Pitch < (x1 - x0) * unit) && InterlockedIncrement(&odd) <= 10)
+		if ((x0 >= x1 || y0 >= y1 || (UINT)tlock[i].lr.Pitch < (x1 - x0) * unit) && InterlockedIncrement(&odd) <= 10) {
+			D3DSURFACE_DESC real;
+			memset(&real, 0, sizeof(real));
+			if (t)
+				IDirect3DTexture9_GetLevelDesc(t, level, &real);
+			log_printf("mirror11: the object really is: %ux%u format %x pool %d usage %lx (levels %u)", real.Width, real.Height, (unsigned)real.Format, (int)real.Pool, (unsigned long)real.Usage, t ? (unsigned)IDirect3DTexture9_GetLevelCount(t) : 0u);
+		}
+		if ((x0 >= x1 || y0 >= y1 || (UINT)tlock[i].lr.Pitch < (x1 - x0) * unit) && odd <= 10)
 			log_printf("mirror11: odd texture lock: format %x %ux%u level %u rect %d (%ld,%ld,%ld,%ld) pitch %d unit %u -> %u..%u x %u..%u", (unsigned)mt->fmt, mt->w, mt->h, level, tlock[i].has_rect, tlock[i].r.left, tlock[i].r.top,
 				   tlock[i].r.right, tlock[i].r.bottom, tlock[i].lr.Pitch, unit, x0, x1, y0, y1);
 		for (UINT y = y0; y < y1; y++) {
@@ -278,7 +304,29 @@ HRESULT STDMETHODCALLTYPE unlock_rect_hook(IDirect3DTexture9 *t, UINT level)
 		mt->dirty = 1;
 		break;
 	}
+}
+
+HRESULT STDMETHODCALLTYPE unlock_rect_hook(IDirect3DTexture9 *t, UINT level)
+{
+	texture_unlocked(tex_of(t), level, t);
 	return unlock_rect_o(t, level);
+}
+
+// the same through a surface of the texture (GetSurfaceLevel + LockRect)
+static HRESULT STDMETHODCALLTYPE surf_lock_hook(IDirect3DSurface9 *sf, D3DLOCKED_RECT *lr, const RECT *rect, DWORD flags)
+{
+	HRESULT hr = surf_lock_o(sf, lr, rect, flags);
+	surf_t *e = pmap_get(&surfaces, sf);
+	if (SUCCEEDED(hr) && e && e->tex)
+		texture_locked(e->tex, e->level, lr, rect, flags);
+	return hr;
+}
+static HRESULT STDMETHODCALLTYPE surf_unlock_hook(IDirect3DSurface9 *sf)
+{
+	surf_t *e = pmap_get(&surfaces, sf);
+	if (e && e->tex)
+		texture_unlocked(e->tex, e->level, NULL);
+	return surf_unlock_o(sf);
 }
 
 // buffers
