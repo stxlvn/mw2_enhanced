@@ -205,7 +205,7 @@ of the game or of a session (a few more often); change it in the file with the g
 | `qa_ads` | `-1` | QA: [native] qa_ads=<ms>: player 0 aims down the sights that long after the picture was split (and [native] qa_ads_off=<ms>: lets go), so that a frame series can be taken in the scope | `src/native.c:5924` |
 | `qa_ads1` | `-1` | QA: [native] qa_ads1=<ms>: player 1 (the bottom half) aims down the sights that long after the split | `src/native.c:5998` |
 | `qa_ads_off` | `-1` | QA: [native] qa_ads=<ms>: player 0 aims down the sights that long after the picture was split (and [native] qa_ads_off=<ms>: lets go), so that a frame series can be taken in the scope | `src/native.c:5925` |
-| `qpctime` | `0` | [native] qpctime=1 (experiment): the game's whole clock is timeGetTime (Sys_Milliseconds = timeGetTime() - the first reading; Com_Frame, rva 0x1fbde0, hands the server and the client the whole milliseconds between two readings as the frame's time step). | `src/hooks.c:116` |
+| `qpctime` | `0` | [native] qpctime=1 (experiment): the game's whole clock is timeGetTime (Sys_Milliseconds = timeGetTime() - the first reading; Com_Frame, rva 0x1fbde0, hands the server and the client the whole milliseconds between two readings as the frame's time step). | `src/hooks.c:122` |
 | `readlog` | `0` | QA ([native] readlog=1): the engine's ReadFile calls (its import at rva 0x31c308): how many, how big, and how long the process waited in them, per size class, logged every 10 seconds | `src/native.c:8453` |
 | `resethook` | `1` | Switch of one of the split screen's fixes, on by default; 0 turns it off (testing; see the source line). | `src/native.c:2361`, `src/native.c:2368` |
 | `resetlog` | `0` | [native] resetlog=1 (default off): the vtable slots around a device Reset, to see who else writes them (the Steam and Discord overlays hook the device as well): where each slot points, as module+offset | `src/native.c:1420`, `src/native.c:1466`, `src/native.c:1484` |
@@ -244,7 +244,7 @@ of the game or of a session (a few more often); change it in the file with the g
 | `timelog` | `0` | Time measurement ([native] timelog=1, 2026-10-28: the owner sees entities and players "as on ice" in the split): per cgame draw, the wall clock and the live context's client times: cg.time (rva 0x422434), cg.frametime (0x422430), cg.frameInterpolation (0x42242c), cl.serverTime (0x51dca8) and t ... | `src/native.c:3396`, `src/native.c:3405`, `src/native.c:4444` |
 | `timelog2` | `0` | [native] timelog2=1: each context's cgame time (rva 0x422434) at its entity pass, the two side by side every 120 frames and whenever they are more than 50 ms apart | `src/native.c:6893` |
 | `timelogskip` | `0` | With timelog=1: the number of draws to skip before the 6000 logged ones. Testing. | `src/native.c:3398` |
-| `timerres` | `0` | [native] timerres=1 (experiment): ask Windows for the finest timer resolution (0.5 ms) for this process; the game itself asks for 1 ms. | `src/hooks.c:85` |
+| `timerres` | `0` | [native] timerres=1 (experiment): ask Windows for the finest timer resolution (0.5 ms) for this process; the game itself asks for 1 ms. | `src/hooks.c:91` |
 | `titles` | `1` | So the split can come while the title is still on screen without cutting it in two ([native] titles=0 off). | `src/native.c:7992`, `src/native.c:8109` |
 | `tracehalf` | `0` | the frame after this one is the wanted half's (the halves alternate) | `src/native.c:2196` |
 | `tracelayer` | `0` | [native] tracelayer=1: only the 2D pass's draws are traced | `src/native.c:1566` |
