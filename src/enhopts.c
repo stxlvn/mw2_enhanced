@@ -569,10 +569,35 @@ static void patch_options(void)
 	log_printf("enhopts: Enhanced button added to main_options at y %.0f", y);
 }
 
+// What follows the player's changes, in the menus and in a level alike (the pause menu has the page too, and a level's frame does not run the menus' tick): the keys of the changed
+// rows, the live effects, the field of view, the pop-up after the page was left. Two threads may call it (the menus' tick, the level's poll): one at a time.
+static void follow_all(void)
+{
+	static volatile LONG busy;
+	if (InterlockedExchange(&busy, 1))
+		return;
+	follow_changes();
+	hold_fov();
+	// the page was left (its onClose set mw2coop_enh_left): a row that waits for the next start now differs from what the running game uses -> the pop-up
+	char left[8];
+	if (game_dvar_raw("mw2coop_enh_left", left, sizeof(left)) && left[0] == '1') {
+		game_cbuf_addtext("set mw2coop_enh_left 0\n");
+		int differs = 0;
+		for (int o = 0; o < OPTS; o++)
+			differs |= opts[o].restart && dvars[o] && value_of(o) != started[o];
+		if (restart_wanted && differs && ui_find_menu("mw2coop_restart")) {
+			game_cbuf_addtext("openmenu mw2coop_restart\n");
+			log_printf("enhopts: the page was left after a change that takes effect at the next start: the restart pop-up is opened");
+		}
+		restart_wanted = 0;
+	}
+	InterlockedExchange(&busy, 0);
+}
+
 void enhopts_level_tick(void)
 {
 	if (registered)
-		hold_fov();
+		follow_all();
 }
 
 int enhopts_sharpness(void)
@@ -589,19 +614,5 @@ void enhopts_tick(void)
 	add_page();
 	add_popup();
 	patch_options();
-	follow_changes();
-	hold_fov();
-	// the page was left (its onClose set mw2coop_enh_left): a row that waits for the next start now differs from what the running game uses -> the pop-up
-	char left[8];
-	if (game_dvar_raw("mw2coop_enh_left", left, sizeof(left)) && left[0] == '1') {
-		game_cbuf_addtext("set mw2coop_enh_left 0\n");
-		int differs = 0;
-		for (int o = 0; o < OPTS; o++)
-			differs |= opts[o].restart && dvars[o] && value_of(o) != started[o];
-		if (restart_wanted && differs && ui_find_menu("mw2coop_restart")) {
-			game_cbuf_addtext("openmenu mw2coop_restart\n");
-			log_printf("enhopts: the page was left after a change that takes effect at the next start: the restart pop-up is opened");
-		}
-		restart_wanted = 0;
-	}
+	follow_all();
 }
