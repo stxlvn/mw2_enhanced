@@ -153,10 +153,21 @@ static void convert_logged(int kind, const char *what, unsigned a, unsigned b, u
 		log_printf("d3d9ex: managed %s (%u, %u, format %x) made a default-pool dynamic one (the %ld. of its kind)", what, a, b, fmt, (long)n);
 }
 
+static void creation_failed(const char *what, HRESULT hr, unsigned a, unsigned b, unsigned c, unsigned d, unsigned e)
+{
+	static LONG n;
+	if (InterlockedIncrement(&n) <= 30)
+		log_printf("d3d9ex: creating a %s failed: hr %lx (%u, %u, %u, usage/format/pool %x %u %u)", what, (unsigned long)hr, a, b, c, d, e, 0u);
+}
+
 static HRESULT STDMETHODCALLTYPE create_texture_hook(IDirect3DDevice9 *dev, UINT w, UINT h, UINT levels, DWORD usage, D3DFORMAT fmt, D3DPOOL pool, IDirect3DTexture9 **out, HANDLE *shared)
 {
-	if (pool != D3DPOOL_MANAGED)
-		return create_texture_orig(dev, w, h, levels, usage, fmt, pool, out, shared);
+	if (pool != D3DPOOL_MANAGED) {
+		HRESULT hr0 = create_texture_orig(dev, w, h, levels, usage, fmt, pool, out, shared);
+		if (FAILED(hr0))
+			creation_failed("texture (not managed)", hr0, w, h, levels, (unsigned)usage, (unsigned)fmt);
+		return hr0;
+	}
 	HRESULT hr = create_texture_orig(dev, w, h, levels, usage | D3DUSAGE_DYNAMIC, fmt, D3DPOOL_DEFAULT, out, shared);
 	if (FAILED(hr)) { // a compressed format that this driver does not make dynamic: still a texture (without the lock it would need)
 		static LONG logged;
@@ -166,6 +177,8 @@ static HRESULT STDMETHODCALLTYPE create_texture_hook(IDirect3DDevice9 *dev, UINT
 	}
 	if (SUCCEEDED(hr))
 		convert_logged(0, "texture", w, h, (unsigned)fmt);
+	else
+		creation_failed("texture (managed)", hr, w, h, levels, (unsigned)usage, (unsigned)fmt);
 	return hr;
 }
 
@@ -219,12 +232,102 @@ static void patch_vtable(void **vt, int index, void *hook, void **orig)
 	VirtualProtect(&vt[index], sizeof(void *), old, &old);
 }
 
+// QA, MW2COOP_DUMPSHADERS=1: every vertex and pixel shader the game makes (Direct3D 9 shader model 3 bytecode, from the materials of the zones) is written to
+// <game dir>\mw2coop\shaders\vs_<hash>.bin / ps_<hash>.bin, once each. For the shader translator that a native Direct3D 11 / 12 backend needs (docs/native-dx-plan.md): its tests
+// run on these files. They are the game's data: they stay in the test copy, never in the repository.
+#define VT_CREATE_VERTEX_SHADER 91
+#define VT_CREATE_PIXEL_SHADER  106
+typedef HRESULT(STDMETHODCALLTYPE *create_shader_t)(IDirect3DDevice9 *, const DWORD *, void **);
+static create_shader_t create_vs_orig, create_ps_orig;
+static char shader_dir[MAX_PATH];
+
+// the length in bytes of a shader's token stream: version token, instructions and comments up to the end token
+static size_t shader_size(const DWORD *t)
+{
+	size_t n = 1;
+	for (; n < (1u << 20); ) {
+		const DWORD tok = t[n];
+		if ((tok & 0xffff) == 0xfffe) { // a comment (the constant table): the length in dwords is in the high word
+			n += 1 + ((tok >> 16) & 0x7fff);
+			continue;
+		}
+		if ((tok & 0xffff) == 0xffff)
+			return (n + 1) * sizeof(DWORD);
+		n += 1 + ((tok >> 24) & 0xf);
+	}
+	return 0;
+}
+
+static void shader_dump(const char *kind, const DWORD *code)
+{
+	if (!code || !shader_dir[0])
+		return;
+	const size_t size = shader_size(code);
+	if (!size)
+		return;
+	uint32_t h = 2166136261u; // FNV-1a
+	const uint8_t *b = (const uint8_t *)code;
+	for (size_t i = 0; i < size; i++)
+		h = (h ^ b[i]) * 16777619u;
+	char path[MAX_PATH];
+	wsprintfA(path, "%s%s_%08lx.bin", shader_dir, kind, (unsigned long)h);
+	HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL); // an existing file: the same shader again
+	if (f == INVALID_HANDLE_VALUE)
+		return;
+	DWORD wrote;
+	WriteFile(f, code, (DWORD)size, &wrote, NULL);
+	CloseHandle(f);
+}
+
+static HRESULT STDMETHODCALLTYPE create_vs_dump(IDirect3DDevice9 *dev, const DWORD *code, void **out)
+{
+	shader_dump("vs", code);
+	return create_vs_orig(dev, code, out);
+}
+
+static HRESULT STDMETHODCALLTYPE create_ps_dump(IDirect3DDevice9 *dev, const DWORD *code, void **out)
+{
+	shader_dump("ps", code);
+	return create_ps_orig(dev, code, out);
+}
+
+static void hook_shader_dump(IDirect3DDevice9 *dev)
+{
+	if (!getenv("MW2COOP_DUMPSHADERS"))
+		return;
+	void **vt = *(void ***)dev;
+	if (vt[VT_CREATE_VERTEX_SHADER] == (void *)create_vs_dump)
+		return;
+	if (!shader_dir[0]) {
+		DWORD n = GetModuleFileNameA(NULL, shader_dir, MAX_PATH);
+		while (n > 0 && shader_dir[n - 1] != '\\')
+			n--;
+		shader_dir[n] = 0;
+		lstrcatA(shader_dir, "mw2coop\\shaders\\");
+		CreateDirectoryA(shader_dir, NULL);
+	}
+	patch_vtable(vt, VT_CREATE_VERTEX_SHADER, (void *)create_vs_dump, (void **)&create_vs_orig);
+	patch_vtable(vt, VT_CREATE_PIXEL_SHADER, (void *)create_ps_dump, (void **)&create_ps_orig);
+	log_printf("d3dcap: shaders are dumped to %s (MW2COOP_DUMPSHADERS)", shader_dir);
+}
+
 // The device's vtable is the class's: every device of this process makes its resources through these entries from now on
 static void hook_resource_creation(IDirect3DDevice9 *dev)
 {
-	if (create_texture_orig)
-		return;
 	void **vt = *(void ***)dev;
+	if (create_texture_orig) { // made before: a device made later (a vid_restart) must still go through the hooks; a vtable that is not the hooked one is hooked again
+		log_printf("d3d9ex: the new device's CreateTexture slot is %p (the hook %p), CreateVertexBuffer %p (%p)", vt[VT_CREATE_TEXTURE], (void *)create_texture_hook, vt[VT_CREATE_VERTEX_BUFFER], (void *)create_vb_hook);
+		if (vt[VT_CREATE_TEXTURE] != (void *)create_texture_hook) {
+			void *keep_t = (void *)create_texture_orig, *keep_v = (void *)create_volume_orig, *keep_c = (void *)create_cube_orig, *keep_b = (void *)create_vb_orig, *keep_i = (void *)create_ib_orig;
+			patch_vtable(vt, VT_CREATE_TEXTURE, (void *)create_texture_hook, (void **)&create_texture_orig);
+			patch_vtable(vt, VT_CREATE_VOLUME_TEXTURE, (void *)create_volume_hook, (void **)&create_volume_orig);
+			patch_vtable(vt, VT_CREATE_CUBE_TEXTURE, (void *)create_cube_hook, (void **)&create_cube_orig);
+			patch_vtable(vt, VT_CREATE_VERTEX_BUFFER, (void *)create_vb_hook, (void **)&create_vb_orig);
+			patch_vtable(vt, VT_CREATE_INDEX_BUFFER, (void *)create_ib_hook, (void **)&create_ib_orig);
+			log_printf("d3d9ex: hooked again (the originals were %p %p %p %p %p, are %p %p %p %p %p)", keep_t, keep_v, keep_c, keep_b, keep_i, (void *)create_texture_orig, (void *)create_volume_orig, (void *)create_cube_orig, (void *)create_vb_orig, (void *)create_ib_orig);
+		}
+		return;
+	}
 	patch_vtable(vt, VT_CREATE_TEXTURE, (void *)create_texture_hook, (void **)&create_texture_orig);
 	patch_vtable(vt, VT_CREATE_VOLUME_TEXTURE, (void *)create_volume_hook, (void **)&create_volume_orig);
 	patch_vtable(vt, VT_CREATE_CUBE_TEXTURE, (void *)create_cube_hook, (void **)&create_cube_orig);
@@ -383,6 +486,7 @@ static HRESULT STDMETHODCALLTYPE create_device_hook_outer(IDirect3D9 *d3d, UINT 
 		log_printf("d3dcap: CreateDevice(adapter %u, type %d, window %p, flags %lx) -> device %p, vtable %p%s", adapter, (int)type, (void *)window,
 			   (unsigned long)flags, (void *)*out, *(void **)*out, ex ? " (Direct3D 9Ex)" : "");
 		log_adapter(d3d, adapter);
+		hook_shader_dump(*out);
 		if (ex)
 			hook_resource_creation(*out);
 	} else {
@@ -433,6 +537,7 @@ static HRESULT STDMETHODCALLTYPE create_device_ex_hook(IDirect3D9Ex *d3d, UINT a
 	HRESULT hr = real ? real(d3d, adapter, type, window, flags, pp, mode, out) : D3DERR_INVALIDCALL;
 	if (SUCCEEDED(hr) && out && *out) {
 		InterlockedExchangePointer((PVOID volatile *)&device, *out);
+		hook_shader_dump((IDirect3DDevice9 *)*out);
 		if (use_ex)
 			hook_resource_creation((IDirect3DDevice9 *)*out);
 		log_printf("d3dcap: CreateDeviceEx(adapter %u, type %d, window %p, flags %lx) -> device %p, vtable %p",

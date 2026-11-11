@@ -2528,6 +2528,11 @@ static void vid_restart_hook(void)
 			return;
 		}
 	}
+	if (getenv("MW2COOP_VIDPLAIN")) { // QA: the game's own vid_restart, none of the mod's preparations (to see which of them a failure belongs to)
+		log_printf("native: vid_restart: plain (MW2COOP_VIDPLAIN)");
+		vid_restart_original();
+		return;
+	}
 	zones_pools_reset(); // the restart initialises the asset database again: the raised pool sizes of the co-op levels must not be what it builds from
 	if (the_device || bink_fit_device) {
 		log_printf("native: vid_restart: the device hooks are taken out, they go back on the new device");

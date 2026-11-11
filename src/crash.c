@@ -139,15 +139,27 @@ static LONG CALLBACK on_exception(EXCEPTION_POINTERS *info)
 // Return addresses into the exe among the first stack slots from sp (a rough call stack).
 static void stack_rvas(HANDLE out, const char *what, uintptr_t rip, const uintptr_t *sp, int slots)
 {
-	char line[512];
+	char line[1536];
 	int n = wsprintfA(line, "%s at %s %lx, stack rvas:", what, in_image(rip) ? "rva" : "address",
 			  (unsigned long)(in_image(rip) ? rip - image_base : rip));
 	int found = 0;
-	for (int i = 0; i < slots && found < 24; i++) {
+	for (int i = 0; i < slots && found < 48; i++) {
 		uintptr_t v = sp[i];
 		if (in_image(v) && n < (int)sizeof(line) - 20) {
 			n += wsprintfA(line + n, " %lx", (unsigned long)(v - image_base));
 			found++;
+		} else if (v > 0x10000 && n < (int)sizeof(line) - 60) { // code of another module (the Direct3D runtime, the driver): name+offset, to see what a stuck thread waits in
+			MEMORY_BASIC_INFORMATION mbi;
+			if (VirtualQuery((void *)v, &mbi, sizeof(mbi)) && mbi.Type == MEM_IMAGE && (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))) {
+				char path[MAX_PATH];
+				DWORD len = GetModuleFileNameA((HMODULE)mbi.AllocationBase, path, sizeof(path));
+				const char *name = path;
+				for (DWORD k = 0; k < len; k++)
+					if (path[k] == '\\')
+						name = path + k + 1;
+				n += wsprintfA(line + n, " %s+%lx", len ? name : "?", (unsigned long)(v - (uintptr_t)mbi.AllocationBase));
+				found++;
+			}
 		}
 	}
 	lstrcatA(line, "\r\n");
@@ -279,6 +291,38 @@ static DWORD WINAPI watchdog(LPVOID arg)
 	return 0;
 }
 
+#ifdef _WIN64
+// The engine's error function (rva 0x1fb5f0, Com_Error(level, format, ...)): the message and the call stack go into the log before the engine handles it (a drop error is turned into
+// "Failed init after: <message>" and the game ends when it happens while the game is still starting, which left a vid_restart on a 9Ex device with no trace of what was wrong).
+// The arguments are passed on as they are (the callee stores the register ones in its home space; the stack ones are read where the caller left them).
+static void (*com_error_original)(int, const char *, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t);
+
+static void com_error_logged(int level, const char *fmt, uintptr_t a, uintptr_t b, uintptr_t c, uintptr_t d, uintptr_t e, uintptr_t f)
+{
+	static volatile LONG logged;
+	if (InterlockedIncrement(&logged) <= 20) {
+		char text[300];
+		const uintptr_t args[3] = {a, b, c};
+		int n = wsprintfA(text, "engine error (level %d): %.120s", level, fmt && !IsBadStringPtrA(fmt, 8) ? fmt : "?");
+		for (int i = 0; i < 3 && n < (int)sizeof(text) - 90; i++) { // an argument that reads as text is shown as text, the others as numbers
+			const char *as_text = (const char *)args[i];
+			if (args[i] > 0x10000 && !IsBadStringPtrA(as_text, 4) && as_text[0] >= 32 && as_text[0] < 127)
+				n += wsprintfA(text + n, " | '%.50s'", as_text);
+			else
+				n += wsprintfA(text + n, " | %lx", (unsigned long)args[i]);
+		}
+		void *frames[20];
+		USHORT got = CaptureStackBackTrace(1, 20, frames, NULL);
+		n += wsprintfA(text + n, " | from");
+		for (USHORT i = 0; i < got && n < (int)sizeof(text) - 24; i++)
+			if (in_image((uintptr_t)frames[i]))
+				n += wsprintfA(text + n, " %lx", (unsigned long)((uintptr_t)frames[i] - image_base));
+		log_printf("%s", text);
+	}
+	com_error_original(level, fmt, a, b, c, d, e, f);
+}
+#endif
+
 void crash_install(void)
 {
 	HMODULE exe = GetModuleHandleA(NULL);
@@ -296,6 +340,13 @@ void crash_install(void)
 		static const uint8_t head[] = {0x48, 0x83, 0xec, 0x28, 0xe8};
 		if (image_end - image_base > 0x303a80 && !memcmp(ab, head, sizeof(head)) && ab[9] == 0x48 && ab[10] == 0x85 && ab[11] == 0xc0 && ab[12] == 0x74)
 			hook_jump(ab, 14, abort_hook, 0xcc);
+	}
+#endif
+#ifdef _WIN64
+	{ // mov [rsp+10h],rdx; mov [rsp+18h],r8; mov [rsp+20h],r9: 15 bytes, three whole instructions (the retail exe only)
+		static const uint8_t head[] = {0x48, 0x89, 0x54, 0x24, 0x10, 0x4c, 0x89, 0x44, 0x24, 0x18, 0x4c, 0x89, 0x4c, 0x24, 0x20};
+		if (image_end - image_base > 0x1fb700 && hook_function((uint8_t *)image_base + 0x1fb5f0, head, sizeof(head), (void *)com_error_logged, (void **)&com_error_original))
+			log_printf("crash: the engine's error function logs its messages");
 	}
 #endif
 	DWORD n = GetModuleFileNameA(NULL, flag_path, MAX_PATH);
