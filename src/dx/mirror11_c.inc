@@ -736,7 +736,7 @@ static void compare_frame(IDirect3DDevice9 *d)
 			   stat.draws, stat.draws - stat.draws_skipped, stat.clears);
 		log_printf("mirror11:   skipped: no vs %ld, no layout %ld, shader %ld, prim %ld, target %ld; failures: shaders %ld layouts %ld, textures unsupported %ld, unknown buffers %ld", stat.skip_no_vs, stat.skip_layout, stat.skip_shader, stat.skip_prim,
 			   stat.skip_target, stat.shader_fail, stat.layout_fail, stat.tex_unsupported, stat.buf_unknown);
-		if (frames == 120 || frames == 600 || frames == 1800) {
+		if (frames == 120 || (frames % 600 == 0 && frames <= 4200)) {
 			char p[MAX_PATH];
 			snprintf(p, sizeof(p), "%sd3d9-%d.bmp", out_dir, frames);
 			save_bmp(p, lr.pBits, bb_w, bb_h, (UINT)lr.Pitch);
