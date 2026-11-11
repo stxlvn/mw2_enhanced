@@ -310,16 +310,15 @@ static DWORD WINAPI hud_text_thread(LPVOID unused)
 {
 	(void)unused;
 	static const char *const names[] = {"objectiveFontSize", "friendlyNameFontSize", "friendlyNameFontSizeSplitscreen"};
-	const int pcts[3] = {settings_hudtextscale(), settings_nametagscale(), settings_nametagscale()};
-	if (pcts[0] == 100 && pcts[1] == 100)
-		return 0; // nothing to scale: no thread that looks at the game's dvars for the whole session
+	// (the percents are read in every round: the options page, enhopts.c, changes them while the game runs)
 	int own[3] = {0, 0, 0}; // the first value seen was not the default: the player's own, left alone
+	float applied[3] = {0, 0, 0}; // the value this thread wrote last
 	int seen[3] = {0, 0, 0};
 	int logged = 0;
 	for (;;) {
 		for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
-			int pct = pcts[i];
-			if (own[i] || pct == 100)
+			int pct = i == 0 ? settings_hudtextscale() : settings_nametagscale();
+			if (own[i])
 				continue;
 			dvar_t *d = game_find_dvar(names[i]);
 			if (!d || d->type != DVAR_TYPE_FLOAT || d->reset.value <= 0.0f)
@@ -332,9 +331,11 @@ static DWORD WINAPI hud_text_thread(LPVOID unused)
 					continue;
 				}
 			}
-			if (d->current.value != d->reset.value)
-				continue;
-			d->current.value = d->reset.value * (float)pct / 100.0f;
+			const float want = d->reset.value * (float)pct / 100.0f;
+			if (d->current.value == want || (d->current.value != d->reset.value && d->current.value != applied[i]))
+				continue; // already there, or a value neither the game nor this thread put there
+			d->current.value = want;
+			applied[i] = want;
 			d->modified = 1;
 			if (logged++ < 12)
 				log_printf("guards: %s %.3f -> %.3f (%d percent)", names[i], (double)d->reset.value, (double)d->current.value, pct);

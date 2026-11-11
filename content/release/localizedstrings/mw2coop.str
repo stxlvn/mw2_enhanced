@@ -236,6 +236,82 @@ REFERENCE           MW2COOP_PAD_RUMBLE
 LANG_ENGLISH        "Vibration"
 LANG_RUSSIAN        "Вибрация"
 
+REFERENCE           MW2COOP_ENH_MENU
+LANG_ENGLISH        "Enhanced"
+LANG_RUSSIAN        "Enhanced"
+
+REFERENCE           MW2COOP_ENH_FOV
+LANG_ENGLISH        "Field of view"
+LANG_RUSSIAN        "Угол обзора"
+
+REFERENCE           MW2COOP_ENH_MAXFPS
+LANG_ENGLISH        "Frame rate limit"
+LANG_RUSSIAN        "Ограничение частоты кадров"
+
+REFERENCE           MW2COOP_ENH_SHARP
+LANG_ENGLISH        "FSR 3 / DLSS sharpening"
+LANG_RUSSIAN        "Резкость FSR 3 / DLSS"
+
+REFERENCE           MW2COOP_ENH_HUDTEXT
+LANG_ENGLISH        "Objective label size"
+LANG_RUSSIAN        "Размер подписей целей"
+
+REFERENCE           MW2COOP_ENH_NAMETAG
+LANG_ENGLISH        "Name tag size"
+LANG_RUSSIAN        "Размер имён игроков"
+
+REFERENCE           MW2COOP_ENH_UPSCALER
+LANG_ENGLISH        "Upscaler"
+LANG_RUSSIAN        "Апскейлер"
+
+REFERENCE           MW2COOP_ENH_OFF
+LANG_ENGLISH        "Off"
+LANG_RUSSIAN        "Выкл"
+
+REFERENCE           MW2COOP_ENH_FALLDMG
+LANG_ENGLISH        "Fall damage in co-op"
+LANG_RUSSIAN        "Урон от падения в кооперативе"
+
+REFERENCE           MW2COOP_ENH_BORDERLESS
+LANG_ENGLISH        "Borderless full screen"
+LANG_RUSSIAN        "Полный экран без рамки"
+
+REFERENCE           MW2COOP_ENH_DARKTITLE
+LANG_ENGLISH        "Dark title bar"
+LANG_RUSSIAN        "Тёмный заголовок окна"
+
+REFERENCE           MW2COOP_ENH_D3D12
+LANG_ENGLISH        "Direct3D 12 layer"
+LANG_RUSSIAN        "Слой Direct3D 12"
+
+REFERENCE           MW2COOP_ENH_RESTART_TITLE
+LANG_ENGLISH        "Restart needed"
+LANG_RUSSIAN        "Нужен перезапуск"
+
+REFERENCE           MW2COOP_ENH_RESTART_TEXT
+LANG_ENGLISH        "This setting takes effect after\nthe game is restarted.\nQuit the game now?"
+LANG_RUSSIAN        "Эта настройка начнёт действовать\nпосле перезапуска игры.\nВыйти из игры сейчас?"
+
+REFERENCE           MW2COOP_ENH_G_PICTURE
+LANG_ENGLISH        "Picture"
+LANG_RUSSIAN        "Изображение"
+
+REFERENCE           MW2COOP_ENH_G_WINDOW
+LANG_ENGLISH        "Window and renderer"
+LANG_RUSSIAN        "Окно и отрисовка"
+
+REFERENCE           MW2COOP_ENH_G_UPSCALING
+LANG_ENGLISH        "Upscaling"
+LANG_RUSSIAN        "Апскейлинг"
+
+REFERENCE           MW2COOP_ENH_G_HUD
+LANG_ENGLISH        "HUD"
+LANG_RUSSIAN        "Интерфейс"
+
+REFERENCE           MW2COOP_ENH_G_COOP
+LANG_ENGLISH        "Co-op"
+LANG_RUSSIAN        "Кооператив"
+
 REFERENCE           MW2COOP_SPLIT_P1
 LANG_ENGLISH        "Player 1: "
 LANG_RUSSIAN        "Игрок 1: "

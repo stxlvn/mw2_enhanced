@@ -35,6 +35,7 @@
 #include "padicon.h"
 #include "padopts.h"
 #include "gfxopts.h"
+#include "enhopts.h"
 #include "log.h"
 #include "missions.h"
 #include "menutable.h"
@@ -3284,6 +3285,7 @@ static void tick_f(void)
 	add_partner_popups();
 	padopts_tick();
 	gfxopts_tick();
+	enhopts_tick();
 	picking_tick();
 	unlock_missions_tick();
 	find_tick();

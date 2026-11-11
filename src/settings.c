@@ -48,6 +48,8 @@ static int fsr3_on;
 static int dlss_on;
 static char fsr3_dir_buf[MAX_PATH];
 static char dlss_dir_buf[MAX_PATH];
+static char dlss_preset_buf[8];
+static char settings_path_buf[MAX_PATH];
 static int upscale_on, upscale_w, upscale_h, upscale_sharp = 25, fsr3_sharp = 60;
 static int fsr3_refine = 1;
 static int fsr3_bias_set;
@@ -138,6 +140,7 @@ void settings_load(void)
 		n--;
 	path[n] = 0;
 	lstrcatA(path, "mw2coop\\settings.ini");
+	lstrcpynA(settings_path_buf, path, sizeof(settings_path_buf));
 	{
 		static int synced;
 		if (!synced) {
@@ -174,6 +177,7 @@ void settings_load(void)
 	// NVIDIA's SDK, src/dlss) and NVIDIA's nvngx_dlss.dll; neither is shipped with the mod's open source (NVIDIA's license), see src/dlss/README.md. dlss wins over fsr3 when both are set.
 	dlss_on = GetPrivateProfileIntA("display", "dlss", 0, path) != 0;
 	GetPrivateProfileStringA("display", "dlss_dir", "", dlss_dir_buf, sizeof(dlss_dir_buf), path);
+	GetPrivateProfileStringA("display", "dlss_preset", "", dlss_preset_buf, sizeof(dlss_preset_buf), path);
 	if (dlss_on)
 		fsr3_on = 1;
 #ifndef _WIN64
@@ -192,6 +196,22 @@ void settings_load(void)
 	upscale_on = GetPrivateProfileIntA("display", "upscale", 0, path) != 0;
 	upscale_w = (int)GetPrivateProfileIntA("display", "upscale_width", 0, path);
 	upscale_h = (int)GetPrivateProfileIntA("display", "upscale_height", 0, path);
+	// An upscaler switched on without an output size (the options page can only switch it on): the desktop's size. Without folders for the upscalers' DLLs: mw2coop\fsr3 and
+	// mw2coop\dlss beside settings.ini, so dropping the DLLs there is enough.
+	if ((upscale_on || fsr3_on) && (upscale_w <= 0 || upscale_h <= 0)) {
+		upscale_w = GetSystemMetrics(SM_CXSCREEN);
+		upscale_h = GetSystemMetrics(SM_CYSCREEN);
+		log_printf("settings: no upscale_width / upscale_height: the desktop's %dx%d is the output size", upscale_w, upscale_h);
+	}
+	for (int k = 0; k < 2; k++) {
+		char *buf = k ? dlss_dir_buf : fsr3_dir_buf;
+		if (!buf[0]) {
+			lstrcpynA(buf, path, MAX_PATH);
+			char *slash = strrchr(buf, '\\');
+			if (slash)
+				lstrcpynA(slash + 1, k ? "dlss" : "fsr3", 8);
+		}
+	}
 	upscale_sharp = (int)GetPrivateProfileIntA("display", "upscale_sharpness", 25, path);
 	if (upscale_sharp < 0 || upscale_sharp > 300)
 		upscale_sharp = 25;
@@ -356,6 +376,11 @@ const char *settings_dlss_dir(void)
 	return dlss_dir_buf;
 }
 
+const char *settings_dlss_preset(void)
+{
+	return dlss_preset_buf;
+}
+
 const char *settings_fsr3_dir(void)
 {
 	return fsr3_dir_buf;
@@ -399,6 +424,30 @@ const char *settings_discord_id(void)
 const char *settings_discord_image(void)
 {
 	return DEFAULT_DISCORD_IMAGE;
+}
+
+const char *settings_ini_path(void)
+{
+	return settings_path_buf;
+}
+
+// the options page changes these while the game runs (the page writes settings.ini itself)
+void settings_set_hudtextscale(int percent)
+{
+	if (percent >= 20 && percent <= 200)
+		hudtextscale = percent;
+}
+
+void settings_set_nametagscale(int percent)
+{
+	if (percent >= 20 && percent <= 200)
+		nametagscale = percent;
+}
+
+void settings_set_fsr3_sharpness(int percent)
+{
+	if (percent >= 0 && percent <= 100)
+		fsr3_sharp = percent;
 }
 
 int settings_hudtextscale(void)

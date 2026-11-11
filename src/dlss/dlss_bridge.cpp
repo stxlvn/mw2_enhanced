@@ -6,6 +6,7 @@
 //   dlss_bridge_init(device, dll_dir, data_dir, log)   NGX init on the game's Direct3D 12 device, checks that DLSS is available; 1 = ok
 //   dlss_bridge_create(cmdlist, iw, ih, ow, oh, flags) (re)creates the DLSS feature for a render size and an output size on a command list that is being recorded; 1 = ok
 //   dlss_bridge_evaluate(cmdlist, ...)                  one DLSS evaluation recorded on that list; 1 = ok
+//   dlss_bridge_set_preset(n)                           the DLSS model for the next create (0 = NVIDIA's default, 10 = J, 11 = K, 12 = L, 13 = M)
 //   dlss_bridge_last_result()                           the NGX result code of the last call that failed (for the log)
 //   dlss_bridge_shutdown()
 //
@@ -117,6 +118,14 @@ extern "C" __declspec(dllexport) int dlss_bridge_init(void *device, const wchar_
 	return 1;
 }
 
+// The DLSS model ("render preset") for the next dlss_bridge_create: 0 = NVIDIA's default for the quality mode (preset K, the transformer model, for DLAA / Quality / Balanced in SDK
+// 310.9), otherwise a letter's number as in NVSDK_NGX_DLSS_Hint_Render_Preset (J = 10, K = 11, L = 12, M = 13).
+static unsigned g_preset;
+extern "C" __declspec(dllexport) void dlss_bridge_set_preset(unsigned preset)
+{
+	g_preset = preset;
+}
+
 extern "C" __declspec(dllexport) int dlss_bridge_create(void *cmdlist, unsigned iw, unsigned ih, unsigned ow, unsigned oh, unsigned extra_flags)
 {
 	if (!g_params || !cmdlist)
@@ -134,6 +143,12 @@ extern "C" __declspec(dllexport) int dlss_bridge_create(void *cmdlist, unsigned 
 	cp.Feature.InPerfQualityValue = quality_for(iw, ow);
 	// the game's color is LDR (not HDR); the motion vectors are at render size; the exposure is DLSS's own
 	cp.InFeatureCreateFlags = NVSDK_NGX_DLSS_Feature_Flags_MVLowRes | NVSDK_NGX_DLSS_Feature_Flags_AutoExposure | (int)extra_flags;
+	// the model: the same hint for every quality mode (the mode in use is picked from the sizes above)
+	NVSDK_NGX_Parameter_SetUI(g_params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA, g_preset);
+	NVSDK_NGX_Parameter_SetUI(g_params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality, g_preset);
+	NVSDK_NGX_Parameter_SetUI(g_params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced, g_preset);
+	NVSDK_NGX_Parameter_SetUI(g_params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, g_preset);
+	NVSDK_NGX_Parameter_SetUI(g_params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, g_preset);
 	NVSDK_NGX_Result r = NGX_D3D12_CREATE_DLSS_EXT((ID3D12GraphicsCommandList *)cmdlist, 1, 1, &g_handle, g_params, &cp);
 	if (NVSDK_NGX_FAILED(r)) {
 		g_last_result = (unsigned)r;
@@ -143,7 +158,7 @@ extern "C" __declspec(dllexport) int dlss_bridge_create(void *cmdlist, unsigned 
 	}
 	g_iw = iw;
 	g_ih = ih;
-	say("DLSS feature created: %ux%u -> %ux%u (quality hint %d)", iw, ih, ow, oh, (int)cp.Feature.InPerfQualityValue);
+	say("DLSS feature created: %ux%u -> %ux%u (quality hint %d, model preset %u; 0 = NVIDIA's default)", iw, ih, ow, oh, (int)cp.Feature.InPerfQualityValue, g_preset);
 	return 1;
 }
 

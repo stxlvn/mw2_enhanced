@@ -23,8 +23,12 @@ int settings_unlinkguard(void);
 int settings_hotguards(void);
 // settings.ini [display] hudtextscale (default 50, percent, 20-200): the size of the objective pointer labels ("Follow", "Protect", the distance such as "2.0m") relative to the game's own (guards.c).
 int settings_hudtextscale(void);
+void settings_set_hudtextscale(int percent);
 // settings.ini [display] nametagscale (default 70, percent, 20-200): the same for the names over other players.
 int settings_nametagscale(void);
+void settings_set_nametagscale(int percent);
+// The full path of settings.ini (after settings_load); the options page (enhopts.c) writes the player's choices there.
+const char *settings_ini_path(void);
 // settings.ini [display] d3d9ex (default 0 until tested, then 1): the game's Direct3D 9 is the extended one (Direct3DCreate9Ex, src/d3dcap.c): a window that loses the focus (Alt+Tab) does not lose the device,
 // so the render thread does not stop and a co-op partner is not left waiting. Not in the iw4x-sp profile (it has its own r_useD3D9Ex).
 int settings_d3d9ex(void);
@@ -40,8 +44,11 @@ const char *settings_fsr3_dir(void);
 // mw2coop_dlss.dll (src/dlss, the bridge to NVIDIA's SDK) and nvngx_dlss.dll. 64-bit build only.
 int settings_dlss(void);
 const char *settings_dlss_dir(void);
+// dlss_preset (empty by default: NVIDIA's own choice, the transformer model K for the quality mode): the DLSS model, a letter J, K, L or M.
+const char *settings_dlss_preset(void);
 // fsr3_sharpness (0-100, default 60): the sharpening FSR 3 applies to its output (0 = off).
 int settings_fsr3_sharpness(void);
+void settings_set_fsr3_sharpness(int percent);
 // fsr3_refine (default 1): how FSR 3 gets motion for what moves on its own (soldiers, the weapon): 0 = the camera's motion only, 1 = strict image-based correction (near, clearly
 // matching blocks only), 2 = the classic correction (every block; guesses motion from the jitter's aliasing on distant fine detail).
 int settings_fsr3_refine(void);

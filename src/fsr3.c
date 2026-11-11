@@ -25,6 +25,7 @@
 #include "log.h"
 #include "settings.h"
 #include "upscale.h"
+#include "enhopts.h"
 
 #include <d3dcompiler.h>
 #include "ffx_api.h"
@@ -62,6 +63,7 @@ static struct {
 	ID3D12PipelineState *pso_mv;
 	ID3D12RootSignature *rs_comp; // the compose pass: FSR output + the game's own frame (for its HUD) -> final
 	ID3D12PipelineState *pso_comp;
+	ID3D12PipelineState *pso_sharp; // RCAS on DLSS's output (the compose pass's root signature: two textures, one output, four constants)
 	ID3D12Resource *orig, *final;
 	// motion refinement (moving characters, the weapon): the previous frame's input, the block vectors, the refined vectors
 	ID3D12Resource *motion2, *prev, *block;
@@ -176,6 +178,7 @@ static struct {
 	int (*create)(void *, unsigned, unsigned, unsigned, unsigned, unsigned);
 	int (*eval)(void *, void *, void *, void *, void *, float, float, int, float);
 	unsigned (*last)(void);
+	void (*set_preset)(unsigned); // (a bridge DLL built before 2026-11-11 does not have it)
 	int feature; // the DLSS feature exists for S.iw x S.ih -> S.w x S.h
 } DL;
 
@@ -212,6 +215,7 @@ static int dlss_setup(void)
 	DL.create = (int (*)(void *, unsigned, unsigned, unsigned, unsigned, unsigned))(void *)GetProcAddress(DL.dll, "dlss_bridge_create");
 	DL.eval = (int (*)(void *, void *, void *, void *, void *, float, float, int, float))(void *)GetProcAddress(DL.dll, "dlss_bridge_evaluate");
 	DL.last = (unsigned (*)(void))(void *)GetProcAddress(DL.dll, "dlss_bridge_last_result");
+	DL.set_preset = (void (*)(unsigned))(void *)GetProcAddress(DL.dll, "dlss_bridge_set_preset");
 	if (!DL.init || !DL.create || !DL.eval) {
 		log_printf("dlss: %s lacks the bridge functions", path);
 		return 0;
@@ -232,6 +236,16 @@ static int dlss_dispatch(ID3D12Resource *motion, float jx, float jy, int reset, 
 {
 	static int bad;
 	if (!DL.feature) {
+		{ // the DLSS model: [display] dlss_preset (a letter: J, K, L, M; empty = NVIDIA's default), QA: DLSS_PRESET
+			const char *env = getenv("DLSS_PRESET");
+			const char *want = env ? env : settings_dlss_preset();
+			const char c = want && want[0] ? (char)(want[0] & ~0x20) : 0;
+			const unsigned preset = c >= 'J' && c <= 'M' ? (unsigned)(c - 'A' + 1) : 0;
+			if (preset && !DL.set_preset)
+				log_printf("dlss: dlss_preset=%c is ignored: this mw2coop_dlss.dll is older than the setting (rebuild it: src/dlss/build_dlss.sh)", c);
+			else if (DL.set_preset)
+				DL.set_preset(preset);
+		}
 		if (!DL.create(S.list, S.iw, S.ih, S.w, S.h, 0)) {
 			if (bad++ < 5)
 				log_printf("dlss: the feature could not be created (NGX result 0x%08x)", DL.last ? DL.last() : 0u);
@@ -744,6 +758,54 @@ static const char compose_cs[] =
 	"  dst[id.xy] = hud ? o : f;\n"
 	"}\n";
 
+// The sharpening pass for DLSS. DLSS Super Resolution has no sharpening of its own any more (NVIDIA removed it), and its output measured about a third softer than the game's own picture
+// and than FSR 3 with its sharpening (mean luminance gradient 12-14 against 18-20, 2026-11-08). FSR 3 sharpens inside its dispatch with RCAS; the same RCAS runs here on DLSS's output,
+// with the same setting ([display] fsr3_sharpness, 0-100) and the same mapping to RCAS's constant as FSR 2/3 use (2 ^ -(2 - 2 * sharpness)).
+// A port of RCAS from AMD's FidelityFX FSR 1 header (ffx_fsr1.h, MIT license, Copyright (C) Advanced Micro Devices, Inc.; the full notice is in src/upscale.c, whose Direct3D 9 port
+// this follows: exact divisions kept finite, no noise detection).
+static const char sharpen_cs[] =
+	"cbuffer C : register(b0) { uint w; uint h; float con; uint pad; };\n"
+	"Texture2D<float4> src : register(t0);\n"
+	"RWTexture2D<float4> dst : register(u0);\n"
+	"float3 Ld(int2 p) { return src.Load(int3(clamp(p, int2(0, 0), int2(int(w) - 1, int(h) - 1)), 0)).rgb; }\n"
+	"[numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID)\n"
+	"{\n"
+	"  if (id.x >= w || id.y >= h) return;\n"
+	"  int2 p = int2(id.xy);\n"
+	"  float3 b = Ld(p + int2(0, -1));\n"
+	"  float3 d = Ld(p + int2(-1, 0));\n"
+	"  float3 e = Ld(p);\n"
+	"  float3 f = Ld(p + int2(1, 0));\n"
+	"  float3 g = Ld(p + int2(0, 1));\n"
+	"  float bL = b.b * 0.5 + (b.r * 0.5 + b.g);\n"
+	"  float dL = d.b * 0.5 + (d.r * 0.5 + d.g);\n"
+	"  float eL = e.b * 0.5 + (e.r * 0.5 + e.g);\n"
+	"  float fL = f.b * 0.5 + (f.r * 0.5 + f.g);\n"
+	"  float gL = g.b * 0.5 + (g.r * 0.5 + g.g);\n"
+	"  float3 mn4 = min(min(min(b, d), f), g);\n"
+	"  float3 mx4 = max(max(max(b, d), f), g);\n"
+	"  float lowerLimiter = saturate(eL / max(min(min(min(bL, dL), fL), gL), 1e-6));\n"
+	"  float3 hitMin = mn4 * (1.0 / max(4.0 * mx4, 1e-6)) * lowerLimiter;\n"
+	"  float3 hitMax = (1.0 - mx4) * (1.0 / min(4.0 * mn4 - 4.0, -1e-6));\n"
+	"  float3 lobeV = max(-hitMin, hitMax);\n"
+	"  float lobe = max(-(0.25 - (1.0 / 16.0)), min(max(lobeV.x, max(lobeV.y, lobeV.z)), 0.0)) * con;\n"
+	"  float rcpL = 1.0 / (4.0 * lobe + 1.0);\n"
+	"  float3 pix = (lobe * b + lobe * d + lobe * g + lobe * f + e) * rcpL;\n"
+	"  dst[id.xy] = float4(saturate(pix), 1.0);\n"
+	"}\n";
+
+// the sharpening both upscalers use, 0-100 (the QA sweep's value, FSR3_SHARP, or [display] fsr3_sharpness)
+static int g_sw_sharp; // (defined with the other sweep values below: -1 = the setting's own value)
+static int sharpness_pct(void)
+{
+	if (g_sw_sharp >= 0)
+		return g_sw_sharp;
+	if (ENV_HAS("FSR3_SHARP"))
+		return (int)ENV_NUM("FSR3_SHARP", 0);
+	const int page = enhopts_sharpness(); // the options page's slider (Settings > Enhanced), once its dvars exist: it follows the player's hand at once
+	return page >= 0 ? page : settings_fsr3_sharpness();
+}
+
 static int build_compose_pass(void)
 {
 	static const GUID iid_rs = {0xc54a6b66, 0x72df, 0x4ee8, {0x8b, 0xe5, 0xa9, 0x46, 0xa1, 0x42, 0x92, 0x14}};
@@ -779,8 +841,10 @@ static int build_compose_pass(void)
 		return 0;
 	hr = ID3D12Device_CreateRootSignature(S.dev, 0, ((void *(*)(void *))(*(void ***)blob)[3])(blob), ((SIZE_T(*)(void *))(*(void ***)blob)[4])(blob), &iid_rs, (void **)&S.rs_comp);
 	((ULONG(*)(void *))(*(void ***)blob)[2])(blob);
-	if (SUCCEEDED(hr))
+	if (SUCCEEDED(hr)) {
 		S.pso_comp = make_compute_pso(compile, compose_cs, S.rs_comp);
+		S.pso_sharp = make_compute_pso(compile, sharpen_cs, S.rs_comp);
+	}
 	log_printf("fsr3: the compose pass (keeps the game's HUD outside the picture) is %s", S.pso_comp ? "ready" : "FAILED");
 	return S.pso_comp != NULL;
 }
@@ -1798,14 +1862,17 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 				log_printf("fsr3: motion vectors computed (jitter %.3f,%.3f px, depth range %g..%g, phases %d)", jit_x, jit_y, g_cam_minz, g_cam_maxz, S.phase_count);
 		}
 	}
-	// the game's whole frame (for its HUD, which the compose pass keeps)
-	barrier(b, &n, S.orig, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
-	ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
-	n = 0;
-	ID3D12GraphicsCommandList_CopyResource(S.list, S.orig, bb12);
-	barrier(b, &n, S.orig, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-	ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
-	n = 0;
+	// the game's whole frame (for its HUD, which the compose pass keeps): only for that pass, which is the old way (QA: FSR3_COMPOSE=1). It was copied in every frame
+	// before 2026-11-11, a whole output-size copy that nothing read
+	if (ENV_HAS("FSR3_COMPOSE")) {
+		barrier(b, &n, S.orig, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+		ID3D12GraphicsCommandList_CopyResource(S.list, S.orig, bb12);
+		barrier(b, &n, S.orig, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+	}
 	// the back buffer into the color texture
 	barrier(b, &n, S.color, first ? D3D12_RESOURCE_STATE_COMMON : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
 	ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
@@ -1931,7 +1998,7 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 	d.upscaleSize.width = S.w;
 	d.upscaleSize.height = S.h;
 	{ // FSR's own sharpening (RCAS): the soft look of an upscaled frame without it was reported as "soapy"
-		int sh = g_sw_sharp >= 0 ? g_sw_sharp : ENV_HAS("FSR3_SHARP") ? (int)ENV_NUM("FSR3_SHARP", 0) : settings_fsr3_sharpness();
+		int sh = sharpness_pct();
 		d.enableSharpening = sh > 0;
 		d.sharpness = (float)sh / 100.0f;
 	}
@@ -2052,6 +2119,54 @@ static int fsr3_frame(IDirect3DDevice9 *dev9)
 		barrier(b, &n, S.final, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
 		n = 0;
+	} else if (rc == FFX_API_RETURN_OK && !ENV_HAS("FSR3_SKIPCOPY") && settings_dlss() && S.pso_sharp && sharpness_pct() > 0) {
+		// DLSS: its output is sharpened here (RCAS, see sharpen_cs) into `final`, which goes to the back buffer
+		static int told;
+		const int pct = sharpness_pct();
+		const float con = powf(2.0f, -(2.0f - 2.0f * (float)pct / 100.0f));
+		barrier(b, &n, S.output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+		D3D12_CPU_DESCRIPTOR_HANDLE cpu;
+		D3D12_GPU_DESCRIPTOR_HANDLE gpu;
+		((D3D12_CPU_DESCRIPTOR_HANDLE * (STDMETHODCALLTYPE *)(void *, D3D12_CPU_DESCRIPTOR_HANDLE *))(*(void ***)S.heap)[9])(S.heap, &cpu);
+		((D3D12_GPU_DESCRIPTOR_HANDLE * (STDMETHODCALLTYPE *)(void *, D3D12_GPU_DESCRIPTOR_HANDLE *))(*(void ***)S.heap)[10])(S.heap, &gpu);
+		cpu.ptr += 4 * S.desc_inc;
+		gpu.ptr += 4 * S.desc_inc;
+		D3D12_SHADER_RESOURCE_VIEW_DESC srv;
+		memset(&srv, 0, sizeof(srv));
+		srv.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+		srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		srv.Shader4ComponentMapping = 0x1688;
+		srv.Texture2D.MipLevels = 1;
+		ID3D12Device_CreateShaderResourceView(S.dev, S.output, &srv, cpu);
+		cpu.ptr += S.desc_inc;
+		ID3D12Device_CreateShaderResourceView(S.dev, S.output, &srv, cpu); // (the table's second texture: not read by this shader)
+		D3D12_UNORDERED_ACCESS_VIEW_DESC uav;
+		memset(&uav, 0, sizeof(uav));
+		uav.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+		uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+		cpu.ptr += S.desc_inc;
+		ID3D12Device_CreateUnorderedAccessView(S.dev, S.final, NULL, &uav, cpu);
+		unsigned consts[4] = {S.w, S.h, 0, 0};
+		memcpy(&consts[2], &con, 4);
+		ID3D12DescriptorHeap *heaps[1] = {S.heap};
+		ID3D12GraphicsCommandList_SetDescriptorHeaps(S.list, 1, heaps);
+		ID3D12GraphicsCommandList_SetComputeRootSignature(S.list, S.rs_comp);
+		ID3D12GraphicsCommandList_SetPipelineState(S.list, S.pso_sharp);
+		ID3D12GraphicsCommandList_SetComputeRoot32BitConstants(S.list, 0, 4, consts, 0);
+		ID3D12GraphicsCommandList_SetComputeRootDescriptorTable(S.list, 1, gpu);
+		ID3D12GraphicsCommandList_Dispatch(S.list, (S.w + 7) / 8, (S.h + 7) / 8, 1);
+		barrier(b, &n, S.final, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+		barrier(b, &n, S.output, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+		ID3D12GraphicsCommandList_CopyResource(S.list, bb12, S.final);
+		barrier(b, &n, S.final, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
+		n = 0;
+		if (!told++)
+			log_printf("dlss: the output is sharpened (RCAS, sharpness %d of 100, constant %.3f)", pct, con);
 	} else if (rc == FFX_API_RETURN_OK && !ENV_HAS("FSR3_SKIPCOPY")) { // no compose pass: the output as it is
 		barrier(b, &n, S.output, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
 		ID3D12GraphicsCommandList_ResourceBarrier(S.list, n, b);
