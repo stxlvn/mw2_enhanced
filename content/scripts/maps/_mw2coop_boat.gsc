@@ -104,7 +104,7 @@ passenger_ride( boat )
 	wait 0.4;	// the pose blends in over 0.2 s; his view goes to its eyes once it lies
 
 	seat = spawn_tag_origin();
-	seat.origin = eye_seat( body );
+	seat.origin = seat_rest( boat, pose );
 	seat.angles = ( 0, boat.angles[ 1 ] + seat_center( pose ), 0 );
 	seat LinkTo( boat );
 	level.mw2coop_boat_seat = seat;
@@ -154,11 +154,26 @@ passenger_ride( boat )
 		body.mw2coop_turning = undefined;
 		wait 0.4;
 		seat Unlink();
-		seat.origin = eye_seat( body );
+		seat.origin = seat_rest( boat, pose );
 		seat.angles = ( 0, boat.angles[ 1 ] + to, 0 );
 		seat LinkTo( boat );
 		maps\_mw2coop::state( "boat: Price turned over, " + player_name( self ) + " too (" + pose + " pose)" );
 	}
+}
+
+// Where the passenger's seat is when his pose has settled, in the boat's frame (forward, right,
+// up of the boat's origin; the left pose is the mirror). It used to be measured 0.4 s after the
+// pose started (eye_seat), and the body's eyes have not stopped moving by then: on a PC that
+// streams the level's animations in for the first time the client's first run had his seat 12
+// units too low (49 -10 4; 39 -9 16 after each checkpoint restart), inside the tube, his view
+// broken (Smelt, issue 20, 2026-11-11 logs). On the QA PCs the early measure was the same every
+// time, 47 -9 12, and that is the camera the owner approved (2026-11-10), so it is the constant.
+seat_rest( boat, pose )
+{
+	side = -9;
+	if ( pose == "left" )
+		side = 9;
+	return boat.origin + AnglesToForward( boat.angles ) * 47 + AnglesToRight( boat.angles ) * side + AnglesToUp( boat.angles ) * 12;
 }
 
 price_pose()
