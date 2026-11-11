@@ -129,3 +129,40 @@ Not decided yet: whether the 32-bit exe follows (its back end has other rvas; th
 **Not yet known:** the render-state bit words' layout (`0x505a0` and `0x50810` turn the two words into `SetRenderState` calls and `0x4f380` turns a sampler word into `SetSamplerState`), the derived constants (`0x502f0`), the render-target / viewport set-up (`0x50ec0`, `0x4e940`), what the vertex types are, and where the images get their Direct3D textures (the loader). Those are the next slices.
 
 **Consequence for the plan:** the data the new back end needs is already in these tables. The translation of one pass is: bind the pass's two shaders, fill two constant buffers from the argument list (the same cached-version logic can stay), bind images for the sampler arguments, derive blend / depth / raster state from the two state-bit words, set the vertex layout from the declaration set for the current vertex type, and draw. The mirror (M2) can hook the same function that applies a pass (`0x54a10` and its four helpers) and issue the Direct3D 11 version of exactly that.
+
+### The render-state words (the two 32-bit words of a pass's state-bits pair; `0x505a0`, `0x50810`, `0x4f510`, `0x4f660`, `0x4f6e0`, `0x4f380`, `0x511d0`; tables read from the exe at rva 0x370328, 0x370900, 0x370920, 0x370980, 0x3708c0, 0x3708e0)
+
+**Observed** (the bit positions are the ones the code tests; the Direct3D 9 render state each one drives is given by its id; the Direct3D 11 column is ours, to be checked):
+
+| Word 0 bits | Direct3D 9 state it sets | Value table | Direct3D 11 |
+|---|---|---|---|
+| 0-3 | `SRCBLEND` (19) | 0 unused, 1 ZERO, 2 ONE, 3 SRCCOLOR, 4 INVSRCCOLOR, 5 SRCALPHA, 6 INVSRCALPHA, 7 DESTALPHA, 8 INVDESTALPHA, 9 DESTCOLOR, 10 INVDESTCOLOR (the Direct3D 9 numbers) | `SrcBlend` of the render-target blend desc |
+| 4-7 | `DESTBLEND` (20) | same | `DestBlend` |
+| 8-10 | `BLENDOP` (171) | 1 ADD, 2 SUBTRACT, 3 REVSUBTRACT, 4 MIN, 5 MAX; **0 = blending off** (`ALPHABLENDENABLE` 27 is set 0 when bits 8-10 are 0, else 1) | `BlendOp`, `BlendEnable` |
+| 11 | alpha test off when set (`ALPHATESTENABLE` 15 = not bit 11) | | **no fixed-function alpha test in Direct3D 11**: a constant-buffer value (function, reference) and a `clip` at the end of the pixel shader |
+| 12-13 | alpha function / reference (`ALPHAFUNC` 25, `ALPHAREF` 24): 1 = GREATER 0, 2 = LESS 128, 3 = GREATEREQUAL 128 | | as above |
+| 14-15 | `CULLMODE` (22) via table: 1 NONE, 2 CCW(3), 3 CW(2) (index 0 unused) | | `CullMode`, with the winding convention of Direct3D 9 (clockwise front) |
+| 16-19, 20-23, 24-26 | separate-alpha blend: source (207), destination (208), operation (209) (the separate-alpha enable, state 206, is not set in these functions: not found yet) | as above | `SrcBlendAlpha`, `DestBlendAlpha`, `BlendOpAlpha` |
+| 27, 28 | colour write mask (168): bit 27 = RGB (7), bit 28 = alpha (8) | | `RenderTargetWriteMask` |
+| 30 | `SRGBWRITEENABLE` (194) | | an sRGB render-target view |
+| 31 | `FILLMODE` (8): 3 solid, 2 wireframe | | `FillMode` |
+
+| Word 1 bits | Direct3D 9 state | Direct3D 11 |
+|---|---|---|
+| 0 | `ZWRITEENABLE` (14) | `DepthWriteMask` |
+| 1 | depth test **off** when set (`ZENABLE` 7 = not bit 1) | `DepthEnable` |
+| 2-3 | `ZFUNC` (23): 0 ALWAYS, 1 LESS, 2 EQUAL, 3 LESSEQUAL | `DepthFunc` |
+| 4-5 | polygon offset: `SLOPESCALEDEPTHBIAS` (175) and `DEPTHBIAS` (195), 1 and 2 = that value times a dvar pair, 3 = another dvar pair (`0x511d0`); Direct3D 9 float bias | `DepthBias` is an integer in units of the depth format, and `SlopeScaledDepthBias` a float: a conversion per depth format is needed |
+| 6 | `STENCILENABLE` (52) | `StencilEnable` |
+| 7 | two-sided stencil: when clear, the back face takes the front face's bits (bits 8-19 copied to 20-31) | |
+| 8-10, 11-13, 14-16 | front stencil: pass op (55), fail op (53), z-fail op (54); ops 0 KEEP, 1 ZERO, 2 REPLACE, 3 INCRSAT, 4 DECRSAT, 5 INVERT, 6 INCR, 7 DECR (Direct3D 9 ids 1-8) | `FrontFace.StencilPassOp / FailOp / DepthFailOp` |
+| 17-19 | front stencil function (56): 0 NEVER, 1 LESS, 2 EQUAL, 3 LESSEQUAL, 4 GREATER, 5 NOTEQUAL, 6 GREATEREQUAL, 7 ALWAYS | `FrontFace.StencilFunc` |
+| 20-22, 23-25, 26-28, 29-31 | the same for the back face (CCW ids 188, 186, 187, 189) | `BackFace.*` |
+
+Stencil reference and masks are not in the word; the code sets them elsewhere (to find).
+
+**Sampler word** (`0x4f380`, one 32-bit word per sampler, built from the material's sampler byte): bits 0-7 anisotropy level (`MAXANISOTROPY` 10, only when 2 or more, else the filters are used), 8-11 `MINFILTER` (6), 12-15 `MAGFILTER` (5), 16-19 `MIPFILTER` (7) (Direct3D 9 values: 0 none, 1 point, 2 linear, 3 anisotropic), 20-21 / 22-23 / 24-25 `ADDRESSU / V / W` (1 wrap, 2 mirror, 3 clamp, 4 border), 26 `SRGBTEXTURE` (11). Direct3D 11 folds all of it into a `SamplerState` object (filter enum, address modes, max anisotropy); the sRGB flag moves to the shader resource view's format.
+
+**Alpha to coverage** (`0x50550`): the code sets a driver-specific render state (id 181, the FourCC `ATOC` or `SSAA`) when multisampling is on and the blend operation is off. Direct3D 11 has `AlphaToCoverageEnable` in the blend desc.
+
+**What this means for the design:** a pass's blend, depth-stencil and rasterizer state are each a pure function of a few bit fields of two words. A Direct3D 11 back end keeps three small hash maps (key: the relevant bits; value: the state object) and never needs the loose render-state model. The one thing without a counterpart is the **alpha test**, which has to move into the pixel shader (a small constant buffer `{alphaFunc, alphaRef}` and a `clip` before the shader's outputs are written; it costs nothing when the function is "always"). The translator's output needs a hook for that: an extra `AlphaTest()` call in front of `return output;`.
