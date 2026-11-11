@@ -46,6 +46,8 @@
 #define ITEM_TEXT_ALIGN (ITEM_FONT + 4)
 #define ITEM_TEXT_ALIGN_X (ITEM_FONT + 8)
 #define ALIGN_MIDDLE_LEFT 4
+#define ROW_H 18.0f	// the rows of the page are this far apart (the game's pages use 20; this page has more rows than fit above Back at 20)
+#define GROUP_GAP 6.0f // extra space before a group's name
 #define SLIDER_BAR_W 96.0f // the drawn bar of the game's slider is about this wide (units; its rectangle is wider, 344 here), measured on 1920 x 1080
 #define DVAR_ARCHIVE 1
 #define ITEM_TYPE_SLIDER 10
@@ -55,8 +57,8 @@
 enum { K_SLIDER, K_YESNO, K_UPSCALER, K_DIRECTX }; // K_UPSCALER and K_DIRECTX: choice rows
 enum { LIVE_NONE, LIVE_FOV, LIVE_SHARP, LIVE_HUDTEXT, LIVE_NAMETAG, LIVE_FALL };
 // What a row applies to; the page lists the rows by these groups (in this order), each under its name, not by how a change takes effect.
-enum { GROUP_PICTURE, GROUP_WINDOW, GROUP_UPSCALING, GROUP_HUD, GROUP_COOP, GROUPS };
-static const char *const group_names[GROUPS] = {"@MW2COOP_ENH_G_PICTURE", "@MW2COOP_ENH_G_WINDOW", "@MW2COOP_ENH_G_UPSCALING", "@MW2COOP_ENH_G_HUD", "@MW2COOP_ENH_G_COOP"};
+enum { GROUP_PICTURE, GROUP_WINDOW, GROUP_UPSCALING, GROUP_HUD, GROUP_CONTROLS, GROUP_COOP, GROUPS };
+static const char *const group_names[GROUPS] = {"@MW2COOP_ENH_G_PICTURE", "@MW2COOP_ENH_G_WINDOW", "@MW2COOP_ENH_G_UPSCALING", "@MW2COOP_ENH_G_HUD", "@MW2COOP_ENH_G_CONTROLS", "@MW2COOP_ENH_G_COOP"};
 enum { OPT_FOV, OPT_MAXFPS }; // positions in opts[] (the order in the page is the group's, then this one); the others are found by their dvar (opt_index)
 
 typedef struct {
@@ -81,6 +83,9 @@ static const opt_t opts[] = {
 #endif
     {"mw2coop_opt_hudtext", "@MW2COOP_ENH_HUDTEXT", K_SLIDER, 20, 200, 50, "display", "hudtextscale", 1, LIVE_HUDTEXT, 0, "Enhanced: size of the objective labels, percent", GROUP_HUD},
     {"mw2coop_opt_nametag", "@MW2COOP_ENH_NAMETAG", K_SLIDER, 20, 200, 70, "display", "nametagscale", 1, LIVE_NAMETAG, 0, "Enhanced: size of the names over players, percent", GROUP_HUD},
+#ifdef _WIN64
+    {"mw2coop_opt_rawmouse", "@MW2COOP_ENH_RAWMOUSE", K_YESNO, 0, 1, 1, "input", "rawmouse", 1, LIVE_NONE, 1, "Enhanced: raw mouse input for the view (next start)", GROUP_CONTROLS},
+#endif
     {"mw2coop_opt_falldmg", "@MW2COOP_ENH_FALLDMG", K_YESNO, 0, 1, 0, "gameplay", "fall_damage", 1, LIVE_FALL, 0, "Enhanced: fall damage in a co-op session", GROUP_COOP},
 #ifdef _WIN64
     {"mw2coop_opt_directx", "@MW2COOP_ENH_DIRECTX", K_DIRECTX, 0, 1, 0, "display", "d3d9on12", 1, LIVE_NONE, 1, "Enhanced: DirectX version, 0 = 9 (the game's own), 1 = 12 (Direct3D 9 on the Direct3D 12 layer; FSR 3 and DLSS need it) (next start)", GROUP_WINDOW},
@@ -437,14 +442,14 @@ static void add_page(void)
 			if (first) { // the group's name, a text row in the highlight colour, before its first row
 				first = 0;
 				if (rows)
-					y += 8.0f;
+					y += GROUP_GAP;
 				uint8_t *head = ui_clone_item(label, menu);
 				*(const char **)(head + ITEM_TEXT) = group_names[g];
 				float *color = (float *)(head + ITEM_DYNAMIC_FLAGS + 8); // windowDef_t: dynamicFlags, nextTime, foreColor[4]
 				color[0] = 1.0f, color[1] = 0.82f, color[2] = 0.3f, color[3] = 1.0f;
 				place(head, y);
 				list[n++] = head;
-				y += 20.0f;
+				y += ROW_H;
 			}
 			place(control, t->kind == K_SLIDER ? y + slider_dy : y);
 			place(text, y);
@@ -469,7 +474,7 @@ static void add_page(void)
 				list[n++] = tag;
 			}
 			rows++;
-			y += 20.0f;
+			y += ROW_H;
 		}
 	}
 	for (int i = title_at + 1; i < count; i++) { // the Back items stay

@@ -308,6 +308,14 @@ REFERENCE           MW2COOP_ENH_G_HUD
 LANG_ENGLISH        "HUD"
 LANG_RUSSIAN        "Интерфейс"
 
+REFERENCE           MW2COOP_ENH_G_CONTROLS
+LANG_ENGLISH        "Controls"
+LANG_RUSSIAN        "Управление"
+
+REFERENCE           MW2COOP_ENH_RAWMOUSE
+LANG_ENGLISH        "Raw mouse input"
+LANG_RUSSIAN        "Необработанный ввод мыши"
+
 REFERENCE           MW2COOP_ENH_G_COOP
 LANG_ENGLISH        "Co-op"
 LANG_RUSSIAN        "Кооператив"

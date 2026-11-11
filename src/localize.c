@@ -192,6 +192,8 @@ static const ModString strings[] = {
 	{"MW2COOP_ENH_G_WINDOW", "\xce\xea\xed\xee \xe8 \xee\xf2\xf0\xe8\xf1\xee\xe2\xea\xe0", "Window and renderer"},
 	{"MW2COOP_ENH_G_UPSCALING", "\xc0\xef\xf1\xea\xe5\xe9\xeb\xe8\xed\xe3", "Upscaling"},
 	{"MW2COOP_ENH_G_HUD", "\xc8\xed\xf2\xe5\xf0\xf4\xe5\xe9\xf1", "HUD"},
+	{"MW2COOP_ENH_G_CONTROLS", "\xd3\xef\xf0\xe0\xe2\xeb\xe5\xed\xe8\xe5", "Controls"},
+	{"MW2COOP_ENH_RAWMOUSE", "\xcd\xe5\xee\xe1\xf0\xe0\xe1\xee\xf2\xe0\xed\xed\xfb\xe9 \xe2\xe2\xee\xe4 \xec\xfb\xf8\xe8", "Raw mouse input"},
 	{"MW2COOP_ENH_G_COOP", "\xca\xee\xee\xef\xe5\xf0\xe0\xf2\xe8\xe2", "Co-op"},
 	// Игрок 1: / Игрок 2: (the split screen lobby's hint line: each player presses a button on his device)
 	{"MW2COOP_SPLIT_P1", "\xc8\xe3\xf0\xee\xea 1: ", "Player 1: "},
