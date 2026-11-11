@@ -621,7 +621,7 @@ static const char *usage_name(int u)
 	return u >= 0 && u < 14 ? USAGES[u] : "TEXCOORD";
 }
 
-int sm3_translate(const uint32_t *code, size_t count, char **hlsl, int *is_vs, char *err, size_t err_size)
+int sm3_translate_ex(const uint32_t *code, size_t count, int flags, char **hlsl, int *is_vs, char *err, size_t err_size)
 {
 	shader_t *sh = calloc(1, sizeof(*sh));
 	ctx_t c = {{0}};
@@ -633,6 +633,9 @@ int sm3_translate(const uint32_t *code, size_t count, char **hlsl, int *is_vs, c
 	sb_add(&L, "cbuffer ConstF : register(b0) { float4 c[256]; };\n");
 	sb_add(&L, "cbuffer ConstIB : register(b1) { int4 ic[16]; uint4 bc[8]; };\n");
 	sb_add(&L, "#define B(n) (bc[(n) >> 2][(n) & 3] != 0)\n");
+	const int alpha_test = (flags & SM3_ALPHA_TEST) && !sh->vs && sh->maxcolor >= 0;
+	if (alpha_test)
+		sb_add(&L, "cbuffer AlphaTestCB : register(b2) { float4 at; };\n");
 	for (int n = 0; n < 16; n++) {
 		if (!sh->sampler_used[n])
 			continue;
@@ -721,6 +724,12 @@ int sm3_translate(const uint32_t *code, size_t count, char **hlsl, int *is_vs, c
 			if (sh->out_used[n])
 				sb_add(&L, "\toutput.o%d = o%d;\n", n, n);
 	} else {
+		if (alpha_test) { // Direct3D 9's alpha test, on the 8-bit alpha of render target 0 (at = {D3DCMP function, reference 0..255, enable, 0})
+			sb_add(&L, "\tif (at.z > 0.5) {\n\t\tfloat a_ = round(saturate(oC0.a) * 255.0); int f_ = (int)at.x; bool ok_ = true;\n");
+			sb_add(&L, "\t\tif (f_ == 1) ok_ = false; else if (f_ == 2) ok_ = a_ < at.y; else if (f_ == 3) ok_ = a_ == at.y; else if (f_ == 4) ok_ = a_ <= at.y;\n");
+			sb_add(&L, "\t\telse if (f_ == 5) ok_ = a_ > at.y; else if (f_ == 6) ok_ = a_ != at.y; else if (f_ == 7) ok_ = a_ >= at.y;\n");
+			sb_add(&L, "\t\tclip(ok_ ? 1.0 : -1.0);\n\t}\n");
+		}
 		for (int n = 0; n <= sh->maxcolor; n++)
 			sb_add(&L, "\toutput.oC%d = oC%d;\n", n, n);
 		if (sh->uses_depth)
@@ -739,4 +748,9 @@ done:
 	free(sh->body);
 	free(sh);
 	return ok;
+}
+
+int sm3_translate(const uint32_t *code, size_t count, char **hlsl, int *is_vs, char *err, size_t err_size)
+{
+	return sm3_translate_ex(code, count, 0, hlsl, is_vs, err, err_size);
 }

@@ -77,6 +77,25 @@ int main(void)
 	state11_decode(0, 0x40 | 0x80 | (2u << 8) | (7u << 17) | (6u << 20) | (2u << 29), &s);
 	CHECK(s.stencil_two_sided && s.front.pass == 3 && s.back.pass == 7 && s.back.func == 3 && s.back.fail == 1);
 
+	// sampler word: filter bits from the table, wrap (1) or clamp (3) per axis from bits 5-7 of the byte, sRGB from the image
+	{
+		uint32_t table[32];
+		for (int i = 0; i < 32; i++)
+			table[i] = (uint32_t)(i & 3) << 8 | (uint32_t)(i & 3) << 12 | (uint32_t)((i >> 2) & 3) << 16;
+		CHECK(state11_sampler_word(0x00, 0, table) == (0x1500000u | table[0]));
+		CHECK(state11_sampler_word(0x20, 0, table) == (0x1700000u | table[0])); // clamp U: U field 3
+		CHECK(state11_sampler_word(0x40, 0, table) == (0x1d00000u | table[0])); // clamp V
+		CHECK(state11_sampler_word(0x80, 1, table) == (0x3500000u | 0x4000000u | table[0])); // clamp W, sRGB
+		state11_sampler_t t;
+		state11_sampler_decode(state11_sampler_word(0xe3, 1, table), &t);
+		CHECK(t.addr_u == 3 && t.addr_v == 3 && t.addr_w == 3 && t.srgb == 1 && t.min == 3 && t.mag == 3 && t.mip == 0 && t.aniso == 0);
+		n = state11_sampler_expected_d3d9(&t, e, 48);
+		CHECK(n == 7 && expect(e, n, 6, 3) && expect(e, n, 1, 3) && expect(e, n, 11, 1));
+		t.aniso = 8;
+		n = state11_sampler_expected_d3d9(&t, e, 48);
+		CHECK(n == 8 && expect(e, n, 10, 8));
+	}
+
 	printf(failures ? "%d failures\n" : "all checks passed\n", failures);
 	return failures != 0;
 }

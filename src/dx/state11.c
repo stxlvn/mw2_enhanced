@@ -88,3 +88,39 @@ int state11_expected_d3d9(const state11_t *s, state11_rs_t *out, int max)
 #undef ADD
 	return n;
 }
+
+void state11_sampler_decode(uint32_t w, state11_sampler_t *o)
+{
+	o->aniso = (int)(w & 0xff);
+	o->min = (int)((w >> 8) & 0xf);
+	o->mag = (int)((w >> 12) & 0xf);
+	o->mip = (int)((w >> 16) & 0xf);
+	o->addr_u = (int)((w >> 20) & 3) ;
+	o->addr_v = (int)((w >> 22) & 3);
+	o->addr_w = (int)((w >> 24) & 3);
+	o->srgb = (int)((w >> 26) & 1);
+}
+
+uint32_t state11_sampler_word(uint8_t p, int srgb_image, const uint32_t table[32])
+{
+	// ((((p & 0x80 | 0x54) * 2 | p & 0x40) * 2 | p & 0x20) << 16: three 2-bit fields at bits 20, 22, 24 that are 1 (wrap) or 3 (clamp)
+	const uint32_t addr = ((((uint32_t)(p & 0x80) | 0x54) * 2 | (uint32_t)(p & 0x40)) * 2 | (uint32_t)(p & 0x20)) << 16;
+	return addr | table[p & 0x1f] | (srgb_image ? 0x4000000u : 0);
+}
+
+int state11_sampler_expected_d3d9(const state11_sampler_t *s, state11_rs_t *out, int max)
+{
+	int n = 0;
+#define ADD(i, v) do { if (n < max) { out[n].id = (i); out[n].value = (uint32_t)(v); out[n].mask = 0xffffffffu; n++; } } while (0)
+	ADD(6, s->min);
+	ADD(5, s->mag);
+	ADD(7, s->mip);
+	ADD(1, s->addr_u);
+	ADD(2, s->addr_v);
+	ADD(3, s->addr_w);
+	ADD(11, s->srgb);
+	if (s->aniso >= 2)
+		ADD(10, s->aniso);
+#undef ADD
+	return n;
+}

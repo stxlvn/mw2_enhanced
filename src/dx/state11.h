@@ -38,3 +38,17 @@ typedef struct {
 	uint32_t mask;
 } state11_rs_t;
 int state11_expected_d3d9(const state11_t *s, state11_rs_t *out, int max);
+
+// The sampler word (docs/native-dx-plan.md, "Sampler word"): one 32-bit word per sampler, built by the game from the material's sampler byte and the image's sRGB flag.
+typedef struct {
+	int aniso;                  // 0..: Direct3D 9 MAXANISOTROPY, only used when 2 or more
+	int min, mag, mip;          // D3DTEXTUREFILTERTYPE: 0 none, 1 point, 2 linear, 3 anisotropic
+	int addr_u, addr_v, addr_w; // D3DTADDRESS: 1 wrap, 2 mirror, 3 clamp, 4 border
+	int srgb;
+} state11_sampler_t;
+void state11_sampler_decode(uint32_t word, state11_sampler_t *out);
+// The word the game derives from the sampler byte (bits 0-4 the filter index into the 32-entry table at rva 0x4585290, filled at run time; bits 5, 6, 7 clamp U, V, W instead of wrap) and the image's
+// sRGB flag. `table` is that table.
+uint32_t state11_sampler_word(uint8_t byte, int srgb_image, const uint32_t table[32]);
+// The Direct3D 9 sampler states (D3DSAMP_*) the word decides; id = the D3DSAMP number, `mask` as above. MAXANISOTROPY is listed only when the word's level is 2 or more.
+int state11_sampler_expected_d3d9(const state11_sampler_t *s, state11_rs_t *out, int max);
