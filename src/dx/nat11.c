@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "sm3.h"
+#include "natcache.h"
 
 #ifndef D3DCOMPILE_ENABLE_STRICTNESS
 #define D3DCOMPILE_ENABLE_STRICTNESS (1 << 11)
@@ -813,7 +814,26 @@ static nat_shader *shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, 
 		return NULL;
 	}
 	ID3DBlob *code = NULL, *msgs = NULL;
-	HRESULT hr = p_compile(hlsl, strlen(hlsl), "nat", NULL, NULL, "main", is_vs ? "vs_5_0" : "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | (1 << 14), 0, &code, &msgs);
+	HRESULT hr = E_FAIL;
+	{ // compiled before (an earlier run): the code comes from the disk cache
+		size_t csize = 0;
+		void *cdata = nc_load(hlsl, is_vs, &csize);
+		if (cdata) {
+			static HRESULT(WINAPI * p_blob)(SIZE_T, ID3DBlob **);
+			if (!p_blob && h_compiler)
+				p_blob = (void *)GetProcAddress(h_compiler, "D3DCreateBlob");
+			if (p_blob && SUCCEEDED(p_blob(csize, &code)) && code) {
+				memcpy(ID3D10Blob_GetBufferPointer(code), cdata, csize);
+				hr = S_OK;
+			}
+			free(cdata);
+		}
+	}
+	if (!code) {
+		hr = p_compile(hlsl, strlen(hlsl), "nat", NULL, NULL, "main", is_vs ? "vs_5_0" : "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | (1 << 14), 0, &code, &msgs);
+		if (SUCCEEDED(hr) && code)
+			nc_store(hlsl, is_vs, ID3D10Blob_GetBufferPointer(code), ID3D10Blob_GetBufferSize(code));
+	}
 	if (FAILED(hr) || !code) {
 		if (err && err_size)
 			snprintf(err, err_size, "compile: %lx %s", (unsigned long)hr, msgs ? (const char *)ID3D10Blob_GetBufferPointer(msgs) : "");

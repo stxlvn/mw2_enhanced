@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "sm3.h"
+#include "natcache.h"
 
 #ifndef D3DCOMPILE_ENABLE_STRICTNESS
 #define D3DCOMPILE_ENABLE_STRICTNESS (1 << 11)
@@ -1476,7 +1477,26 @@ nat_shader *nat_shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, cha
 		return NULL;
 	}
 	IUnknown *code = NULL, *msgs = NULL;
-	HRESULT hr = p_compile(hlsl, strlen(hlsl), "nat", NULL, NULL, "main", is_vs ? "vs_5_0" : "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | (1 << 14), 0, &code, &msgs);
+	HRESULT hr = E_FAIL;
+	{ // compiled before (an earlier run): the code comes from the disk cache
+		size_t csize = 0;
+		void *cdata = nc_load(hlsl, is_vs, &csize);
+		if (cdata) {
+			static HRESULT(WINAPI * p_blob)(SIZE_T, IUnknown **);
+			if (!p_blob && h_compiler)
+				p_blob = (void *)GetProcAddress(h_compiler, "D3DCreateBlob");
+			if (p_blob && SUCCEEDED(p_blob(csize, &code)) && code) {
+				memcpy(blob_ptr(code), cdata, csize);
+				hr = S_OK;
+			}
+			free(cdata);
+		}
+	}
+	if (!code) {
+		hr = p_compile(hlsl, strlen(hlsl), "nat", NULL, NULL, "main", is_vs ? "vs_5_0" : "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | (1 << 14), 0, &code, &msgs);
+		if (SUCCEEDED(hr) && code)
+			nc_store(hlsl, is_vs, blob_ptr(code), blob_size(code));
+	}
 	if (FAILED(hr) || !code) {
 		if (err && err_size)
 			snprintf(err, err_size, "compile: %lx %s", (unsigned long)hr, msgs ? (const char *)blob_ptr(msgs) : "");

@@ -238,6 +238,31 @@ static void w_45060(unsigned flags)
 		if (f == 5500)
 			console_qa_open(0);
 	}
+	if (getenv("MW2COOP_FRAMETIME")) { // QA: frame times, logged every 5 s: frames, worst, how many took over 25 ms and over 50 ms
+		static LARGE_INTEGER freq, last, win;
+		static unsigned n, slow, vslow;
+		static double worst;
+		LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		if (!freq.QuadPart)
+			QueryPerformanceFrequency(&freq);
+		if (last.QuadPart) {
+			const double ms = (double)(now.QuadPart - last.QuadPart) * 1000.0 / (double)freq.QuadPart;
+			n++;
+			slow += ms > 25;
+			vslow += ms > 50;
+			worst = ms > worst ? ms : worst;
+		}
+		last = now;
+		if (!win.QuadPart)
+			win = now;
+		if ((now.QuadPart - win.QuadPart) * 1000 / freq.QuadPart >= 5000) {
+			log_printf("frametime: %u frames in 5 s, worst %.1f ms, >25 ms: %u, >50 ms: %u", n, worst, slow, vslow);
+			n = slow = vslow = 0;
+			worst = 0;
+			win = now;
+		}
+	}
 	{ // the console panel, when it is open
 		unsigned bw, bh;
 		nat_get_size(N.dev, &bw, &bh);
