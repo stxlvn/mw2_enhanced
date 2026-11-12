@@ -304,6 +304,12 @@ int nat12_sampler_create(nat_device *d, const D3D12_SAMPLER_DESC *desc, D3D12_CP
 }
 
 // a table of 16 sampler descriptors in the shader-visible heap, made once for each distinct set of 16 (the heap holds 2048 descriptors)
+void nat12_sampler_reset(nat_device *d)
+{
+	d->n_stbl = 0;
+	d->gsmp_next = 0;
+}
+
 int nat12_sampler_table(nat_device *d, const D3D12_CPU_DESCRIPTOR_HANDLE cpu[16], D3D12_GPU_DESCRIPTOR_HANDLE *gpu)
 {
 	UINT64 key[16];
@@ -314,12 +320,8 @@ int nat12_sampler_table(nat_device *d, const D3D12_CPU_DESCRIPTOR_HANDLE cpu[16]
 			gpu->ptr = d->gsmp.gbase.ptr + (UINT64)d->stbl[t].idx * d->gsmp.inc;
 			return 1;
 		}
-	if (d->n_stbl >= sizeof(d->stbl) / sizeof(d->stbl[0]) || d->gsmp_next + 16 > d->gsmp.cap) {
-		// the table cache is full: nothing recorded so far may keep using the heap's tables, so finish the frame's commands first
-		nat12_flush(d);
-		d->n_stbl = 0;
-		d->gsmp_next = 0;
-	}
+	if (d->n_stbl >= sizeof(d->stbl) / sizeof(d->stbl[0]) || d->gsmp_next + 16 > d->gsmp.cap)
+		return 0;
 	D3D12_CPU_DESCRIPTOR_HANDLE dst = {d->gsmp.base.ptr + (SIZE_T)d->gsmp_next * d->gsmp.inc};
 	for (int i = 0; i < 16; i++) {
 		D3D12_CPU_DESCRIPTOR_HANDLE one = {dst.ptr + (SIZE_T)i * d->gsmp.inc};

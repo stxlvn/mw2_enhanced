@@ -58,7 +58,9 @@ unsigned nat12_shader_nconst(const nat_shader *s); // constant registers (float4
 
 // the CPU descriptor of a sampler made from a description (cached by the caller), and a shader-visible table of 16 of them
 int nat12_sampler_create(nat_device *d, const D3D12_SAMPLER_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE *cpu);
+// returns 0 when the table cache is full: the caller finishes the frame's commands (nat12_flush), calls nat12_sampler_reset and starts again (a flush resets the list's bindings)
 int nat12_sampler_table(nat_device *d, const D3D12_CPU_DESCRIPTOR_HANDLE cpu[16], D3D12_GPU_DESCRIPTOR_HANDLE *gpu);
+void nat12_sampler_reset(nat_device *d);
 
 // the scene's swap: the present of the frame (called by nat_present only), the render target's width and height
 unsigned nat12_scene_samples(const nat_device *d);

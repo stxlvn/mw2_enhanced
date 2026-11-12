@@ -716,7 +716,11 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 	}
 	{
 		D3D12_GPU_DESCRIPTOR_HANDLE smp_gpu;
-		nat12_sampler_table(d->dev, smp_h, &smp_gpu);
+		if (!nat12_sampler_table(d->dev, smp_h, &smp_gpu)) { // the table cache is full: finish the commands, start the heap again, draw again
+			nat12_flush(d->dev);
+			nat12_sampler_reset(d->dev);
+			return nd_draw_indexed(d, g, base_vertex, start_index, prim_count);
+		}
 		if (smp_gpu.ptr != d->smp_last_key) {
 			ID3D12GraphicsCommandList_SetGraphicsRootDescriptorTable(d->list, RS_SMP, smp_gpu);
 			d->smp_last_key = smp_gpu.ptr;
@@ -957,7 +961,11 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 	for (int i = 0; i < 16; i++)
 		smp_h[i] = d->blit_smp[lk];
 	D3D12_GPU_DESCRIPTOR_HANDLE sg;
-	nat12_sampler_table(d->dev, smp_h, &sg);
+	if (!nat12_sampler_table(d->dev, smp_h, &sg)) {
+		nat12_flush(d->dev);
+		nat12_sampler_reset(d->dev);
+		return nd_stretch(d, src, sr, dst, dr, linear);
+	}
 	ID3D12GraphicsCommandList_SetGraphicsRootDescriptorTable(d->list, RS_SMP, sg);
 	d->smp_last_key = 0;
 	D3D12_VIEWPORT vp = {(float)dr->left, (float)dr->top, (float)(dr->right - dr->left), (float)(dr->bottom - dr->top), 0, 1};
