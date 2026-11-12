@@ -12,6 +12,7 @@
 #include <string.h>
 
 #include "console.h"
+#include "dx/natboot.h"
 #include "game.h"
 #include "log.h"
 #include "native.h"
@@ -3649,6 +3650,8 @@ static void console_apply_native_cursor_state(HWND h, int hidden)
 static void console_set_native_cursor_hidden(HWND h, int hidden)
 {
 	DWORD window_thread;
+	if (natboot_active()) // the native renderer has no sprite for the console's own cursor: the system cursor stays
+		hidden = 0;
 	InterlockedExchange(&console_native_cursor_hidden, hidden != 0);
 	if (!h || !IsWindow(h))
 		return;
