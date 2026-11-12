@@ -656,3 +656,74 @@ int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size
 	return 0;
 }
 #endif
+
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ queries and gamma
+#ifdef _WIN32
+struct nat_query {
+	nat_device *dev;
+	ID3D11Query *q;
+	int occlusion;
+};
+
+nat_query *nat_query_create(nat_device *d, int occlusion)
+{
+	D3D11_QUERY_DESC qd = {occlusion ? D3D11_QUERY_OCCLUSION : D3D11_QUERY_EVENT, 0};
+	nat_query *q = calloc(1, sizeof(*q));
+	q->dev = d;
+	q->occlusion = occlusion;
+	if (FAILED(ID3D11Device_CreateQuery(d->dev, &qd, &q->q))) {
+		free(q);
+		return NULL;
+	}
+	return q;
+}
+
+void nat_query_destroy(nat_query *q)
+{
+	if (!q)
+		return;
+	REL(q->q);
+	free(q);
+}
+
+void nat_query_end(nat_query *q)
+{
+	ID3D11DeviceContext_End(q->dev->ctx, (ID3D11Asynchronous *)q->q);
+}
+
+int nat_query_get(nat_query *q, unsigned *value)
+{
+	UINT64 v64 = 0;
+	BOOL b = FALSE;
+	HRESULT hr = q->occlusion ? ID3D11DeviceContext_GetData(q->dev->ctx, (ID3D11Asynchronous *)q->q, &v64, sizeof(v64), 0) : ID3D11DeviceContext_GetData(q->dev->ctx, (ID3D11Asynchronous *)q->q, &b, sizeof(b), 0);
+	if (hr == S_OK) {
+		if (value)
+			*value = q->occlusion ? (unsigned)(v64 > 0xffffffffu ? 0xffffffffu : v64) : (b ? 1u : 0u);
+		return 0;
+	}
+	if (hr == S_FALSE)
+		return 1;
+	return -1;
+}
+
+int nat_set_gamma(nat_device *d, const uint16_t ramp[3][256])
+{
+	if (!d->fullscreen_set)
+		return 0;
+	IDXGIOutput *out = NULL;
+	if (FAILED(IDXGISwapChain_GetContainingOutput(d->swap, &out)) || !out)
+		return 0;
+	DXGI_GAMMA_CONTROL gc;
+	memset(&gc, 0, sizeof(gc));
+	gc.Scale.Red = gc.Scale.Green = gc.Scale.Blue = 1.0f;
+	for (int i = 0; i < 1025; i++) {
+		const int j = i * 255 / 1024;
+		gc.GammaCurve[i].Red = ramp[0][j] / 65535.0f;
+		gc.GammaCurve[i].Green = ramp[1][j] / 65535.0f;
+		gc.GammaCurve[i].Blue = ramp[2][j] / 65535.0f;
+	}
+	const HRESULT hr = IDXGIOutput_SetGammaControl(out, &gc);
+	IDXGIOutput_Release(out);
+	return SUCCEEDED(hr);
+}
+#endif

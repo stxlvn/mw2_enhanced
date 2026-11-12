@@ -21,6 +21,9 @@ typedef struct {
 	void (*fn_637a0)(void *particle, void *input);      // 0x637a0: per-particle constants (CPU)
 	void (*fn_efbe0)(uint8_t kind, void *handle, void **index_buffer, int *start_index); // 0xefbe0: the index buffer and start of a mesh kind
 	void (*fn_efdd0)(uint8_t kind, void *handle, void **vertex_buffer, int *byte_offset); // 0xefdd0
+	void (*fn_4fbe0)(void *input, void *obj, int index, int zero); // 0x4fbe0: per-object matrices (CPU)
+	void (*fn_5dd00)(void *ctx, void *a, void *b);                 // 0x5dd00
+	void (*fn_60120)(void *cmd, void *ctx, int mode);              // 0x60120
 	uint8_t tex_thunk[16][32];                          // game-image look-alikes (first field = the native image) for the raw texture pointers of 0x5fe50
 } ngf;
 
@@ -59,3 +62,23 @@ void ngf_draw_63850(ngf *f, const uint8_t *item, void *ctx);
 void ngf_draw_5f220(ngf *f, void *ctx, uintptr_t *cursor);
 // 0x399f0: a full-screen-style draw of one material with its own streams
 void ngf_draw_399f0(ngf *f, void *ctx, void *material, void *draw_info);
+
+// ---- the rest of the small draw-side functions
+// 0x511d0: the polygon offset of mode 1..3 (the dvar values, scaled): bias in fractions of the depth range, slope scale (the nd_ops.poly_offset callback)
+void ngf_poly_offset(const uint8_t *exe, int mode, float *bias, float *slope);
+// 0x51070: clear (flags as Direct3D 9's 1 color, 2 depth, 4 stencil; rgba floats 0..1)
+void ngf_clear(ngf *f, unsigned flags, const float *rgba, float depth, unsigned stencil);
+// 0x266a0 / 0x267b0 / 0x267e0 / 0x26810: unbind all textures / the pixel shader / the vertex shader / the declaration
+void ngf_unbind_textures(ngf *f, unsigned units);
+void ngf_unbind_ps(ngf *f);
+void ngf_unbind_vs(ngf *f);
+void ngf_unbind_decl(ngf *f);
+// 0x504d0: clears stream 0 and 1 (with the game's cache fields of the state at +0xe8 .. +0x110)
+void ngf_clear_streams(ngf *f, void *state);
+// 0x515a0: sets the scissor rectangle (x, y, w, h) and its cache fields (+0xb78 .. +0xb84)
+void ngf_set_scissor(ngf *f, void *state, const int *rect4);
+// 0x3ec20, 0x5da10, 0x5dde0, 0x63f50: more draw loops
+void ngf_draw_3ec20(ngf *f, void *ctx, void *cmd);
+void ngf_draw_5da10(ngf *f, void *ctx, uintptr_t *cursor);
+void ngf_draw_5dde0(ngf *f, void *ctx, int *cmd);
+void ngf_draw_63f50(ngf *f, uintptr_t *cursor, unsigned packed, void *ctx);

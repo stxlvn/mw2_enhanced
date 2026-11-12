@@ -53,6 +53,17 @@ void *nat_scene_dsv(nat_device *d);
 void *nat_scene_srv(nat_device *d); // the scene color as a texture (single sample: resolved first when multisampled)
 void nat_scene_resolve(nat_device *d); // makes nat_scene_srv() current (the game's StretchRect of the scene)
 
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ queries
+// event queries (frame pacing: "has the GPU finished everything issued before") and occlusion queries
+typedef struct nat_query nat_query;
+nat_query *nat_query_create(nat_device *d, int occlusion);
+void nat_query_destroy(nat_query *q);
+void nat_query_end(nat_query *q); // Direct3D 9 Issue(D3DISSUE_END)
+// 0 = the data is ready (*value filled for occlusion queries: the samples that passed), 1 = not ready yet, -1 = the device is lost
+int nat_query_get(nat_query *q, unsigned *value);
+// gamma ramp (3 x 256 words, 0..65535) through the output's gamma control: works in exclusive full screen only; returns 0 when it cannot be applied
+int nat_set_gamma(nat_device *d, const uint16_t ramp[3][256]);
+
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ images
 // d3d9_format: the game's own D3DFORMAT numbers (21 A8R8G8B8, 22 X8R8G8B8, 28 A8, 50 L8, 51 A8L8, DXT1 / 3 / 5 fourcc, 111..116 floats, 'INTZ', D16 / D24S8 as depth ...)
 enum { NAT_IMAGE_2D = 1, NAT_IMAGE_CUBE = 2, NAT_IMAGE_VOLUME = 3 };
