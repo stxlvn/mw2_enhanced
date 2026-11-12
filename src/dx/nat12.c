@@ -1640,6 +1640,16 @@ int nat_read_pixel(nat_device *d, nat_image *im, unsigned x, unsigned y, uint32_
 	return ok;
 }
 
+int nat_sample_scene(nat_device *d, unsigned cols, unsigned rows, uint32_t *out)
+{
+	const unsigned w = d->p.width, h = d->p.height;
+	for (unsigned r = 0; r < rows; r++)
+		for (unsigned c = 0; c < cols; c++)
+			if (!nat_read_pixel(d, NULL, (c * 2 + 1) * w / (cols * 2), (r * 2 + 1) * h / (rows * 2), &out[r * cols + c]))
+				return 0;
+	return 1;
+}
+
 int nat_save_scene_bmp(nat_device *d, const char *path)
 {
 	const unsigned w = d->p.width, h = d->p.height;

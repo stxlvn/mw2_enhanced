@@ -222,8 +222,10 @@ void natboot_shot(const char *name)
 #endif
 	lstrcpynA(shot_name, name, sizeof(shot_name));
 }
+static volatile DWORD render_tid;
 static void w_45060(unsigned flags)
 { InterlockedIncrement(&hits[47]);
+	render_tid = GetCurrentThreadId();
 	if (!N.created || !(flags & 2))
 		return;
 	if (getenv("MW2COOP_NATCON")) { // QA: the console is opened at frame 5000 of the run and closed at 5500
@@ -240,6 +242,27 @@ static void w_45060(unsigned flags)
 		unsigned bw, bh;
 		nat_get_size(N.dev, &bw, &bh);
 		console_native_frame(bw, bh, overlay_show);
+	}
+	if (getenv("MW2COOP_FLASHWATCH")) { // QA: a frame that is (nearly) one colour is saved: the full-screen flashes reported with the native renderers
+		static int skip, saved;
+		if (++skip % 3 == 0) {
+			uint32_t px[48];
+			if (nat_sample_scene(N.dev, 8, 6, px)) {
+				unsigned lo[3] = {255, 255, 255}, hi[3] = {0, 0, 0};
+				for (int i = 0; i < 48; i++)
+					for (int c = 0; c < 3; c++) {
+						const unsigned v = (px[i] >> (8 * c)) & 255;
+						lo[c] = v < lo[c] ? v : lo[c];
+						hi[c] = v > hi[c] ? v : hi[c];
+					}
+				if (skip > 3000 && hi[0] + hi[1] + hi[2] > 60 && hi[0] - lo[0] < 12 && hi[1] - lo[1] < 12 && hi[2] - lo[2] < 12 && saved < 20) {
+					char nm[48];
+					snprintf(nm, sizeof(nm), "flash%d", saved++);
+					log_printf("native11: flashwatch: a one-colour frame (%u,%u,%u) at presented frame %d, saved as %s", px[0] >> 16 & 255, px[0] >> 8 & 255, px[0] & 255, skip, nm);
+					natboot_shot(nm);
+				}
+			}
+		}
 	}
 	if (shot_name[0]) { // !shot <name>
 		char name[96], path[MAX_PATH];
@@ -312,6 +335,75 @@ static LONG CALLBACK veh(EXCEPTION_POINTERS *x)
 	return EXCEPTION_CONTINUE_SEARCH;
 }
 
+// QA: MW2COOP_PROFILE=1: a poor man's profiler. The render thread's instruction pointer is sampled every 2 ms; every 10 s the 12 hottest 64-byte blocks (module + offset) are logged.
+static DWORD WINAPI profiler(LPVOID arg)
+{
+	(void)arg;
+	enum { N = 4096 };
+	static struct {
+		uintptr_t addr;
+		unsigned n;
+		char mod[24];
+	} h[N];
+	for (;;) {
+		memset(h, 0, sizeof(h));
+		unsigned total = 0;
+		for (int i = 0; i < 5000; i++) {
+			Sleep(2);
+			const DWORD tid = render_tid;
+			if (!tid)
+				continue;
+			HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, tid);
+			if (!th)
+				continue;
+			if (SuspendThread(th) != (DWORD)-1) {
+				CONTEXT c;
+				memset(&c, 0, sizeof(c));
+				c.ContextFlags = CONTEXT_CONTROL;
+				if (GetThreadContext(th, &c)) {
+					HMODULE m = NULL;
+					char nm[MAX_PATH] = "?";
+					uintptr_t off = c.Rip;
+					if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)c.Rip, &m) && m) {
+						GetModuleFileNameA(m, nm, MAX_PATH);
+						off = c.Rip - (uintptr_t)m;
+					}
+					const char *base = strrchr(nm, 92) ? strrchr(nm, 92) + 1 : nm;
+					const uintptr_t blk = off & ~(uintptr_t)63;
+					unsigned k = 0;
+					while (k < N && h[k].n && !(h[k].addr == blk && !strncmp(h[k].mod, base, sizeof(h[k].mod) - 1)))
+						k++;
+					if (k < N) {
+						if (!h[k].n) {
+							h[k].addr = blk;
+							lstrcpynA(h[k].mod, base, sizeof(h[k].mod));
+						}
+						h[k].n++;
+					}
+					total++;
+				}
+				ResumeThread(th);
+			}
+			CloseHandle(th);
+		}
+		// report the hottest blocks
+		for (int r = 0; r < 12; r++) {
+			unsigned best = 0, bi = N;
+			for (unsigned k = 0; k < N && h[k].n; k++)
+				if (h[k].n > best) {
+					best = h[k].n;
+					bi = k;
+				}
+			if (bi == N || !best)
+				break;
+			log_printf("native11: profile: %5.1f%% %s+0x%llx", total ? 100.0 * best / total : 0.0, h[bi].mod, (unsigned long long)h[bi].addr);
+			h[bi].n = 0;
+		}
+		log_printf("native11: profile: %u samples", total);
+	}
+	return 0;
+}
+
 static DWORD WINAPI monitor(LPVOID arg)
 {
 	(void)arg;
@@ -336,6 +428,20 @@ static DWORD WINAPI monitor(LPVOID arg)
 			static unsigned o_draws, o_refused;
 			unsigned st, ly, sh, up, dr, rf;
 			nd_stats(N.d, &st, &ly, &sh, &up, &dr, &rf);
+			{ // each new reason a draw was refused for is logged once
+				static char seen[8][96];
+				static unsigned nseen;
+				const char *e = nd_last_error(N.d);
+				if (e && e[0]) {
+					unsigned k = 0;
+					while (k < nseen && strncmp(seen[k], e, 95))
+						k++;
+					if (k == nseen && nseen < 8) {
+						lstrcpynA(seen[nseen++], e, 96);
+						log_printf("native11: draw refused: %s", e);
+					}
+				}
+			}
 			if (dr != o_draws || rf != o_refused) {
 				log_printf("native11: draws %u, refused %u, uploads %u, shaders %u, layouts %u, states %u; last refusal: %s", dr, rf, up, sh, ly, st, nd_last_error(N.d));
 				o_draws = dr;
@@ -559,6 +665,8 @@ static void install_all(void)
 	nat_log_hook = log_printf;
 	AddVectoredExceptionHandler(1, veh);
 	CloseHandle(CreateThread(NULL, 0, monitor, NULL, 0, NULL));
+	if (getenv("MW2COOP_PROFILE"))
+		CloseHandle(CreateThread(NULL, 0, profiler, NULL, 0, NULL));
 	make_traps();
 	N.sentinel = trap_object;
 	// the frame helpers' function pointers

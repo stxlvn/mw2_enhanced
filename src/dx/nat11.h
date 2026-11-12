@@ -57,6 +57,8 @@ int nat_present(nat_device *d);
 void nat_get_size(const nat_device *d, unsigned *w, unsigned *h);
 // QA / tests: one pixel (B8G8R8A8) of an image (NULL = the scene, resolved when multisampled); 1 on success
 int nat_read_pixel(nat_device *d, nat_image *im, unsigned x, unsigned y, uint32_t *out);
+// QA: the scene sampled on a grid of cols x rows points (B8G8R8A8 each, out[row * cols + col]); 1 on success
+int nat_sample_scene(nat_device *d, unsigned cols, unsigned rows, uint32_t *out);
 // QA: the scene as a BMP file (resolved when multisampled); 1 on success
 int nat_save_scene_bmp(nat_device *d, const char *path);
 
