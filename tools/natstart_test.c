@@ -26,9 +26,17 @@ static void on_dvar(void *dvar, int flag)
 	dvar_flag = flag;
 }
 
+static int mem_calls;
+static void on_mem(void *dvar, unsigned value)
+{
+	(void)dvar;
+	(void)value;
+	mem_calls++;
+}
+
 int main(void)
 {
-	uint8_t *exe = calloc(1, 0x4600000);
+	uint8_t *exe = calloc(1, 0x4900000);
 	ngs s = {exe, on_dvar};
 	nat_caps c;
 	memset(&c, 0, sizeof(c));
@@ -75,6 +83,30 @@ int main(void)
 	dvar_aspect[4] = 2;
 	ngs_display_globals(&s, &c, 1, 1280, 720, 1280, 720);
 	CHECK(F32(exe, 0x113738) == 1.6f, "forced 16:10");
+	// memory setup: a card above both thresholds on a roomy machine keeps level 0; a small one raises the levels
+	{
+		static uint8_t dv[5][0x20];
+		*(void **)(exe + 0x41163b8) = dv[0]; // override off
+		*(void **)(exe + 0x4116288) = dv[1];
+		*(void **)(exe + 0x4116330) = dv[2];
+		*(void **)(exe + 0x41162b0) = dv[3];
+		*(void **)(exe + 0x4116358) = dv[4];
+		dv[4][0x10] = 1; // no limit flag set
+		U32(exe, 0x115ae4) = 1024;
+		U32(exe, 0x115ae8) = 512;
+		ngs_memory_setup(&s, 6144, 16384, 8192, on_mem);
+		CHECK(U32(exe, 0x481b818) == 0 && U32(exe, 0x481b81c) == 0 && U32(exe, 0x481b820) == 0 && U32(exe, 0x48c2c94) == 6144 && mem_calls == 3, "roomy machine: levels %u %u %u", U32(exe, 0x481b818), U32(exe, 0x481b81c), U32(exe, 0x481b820));
+		ngs_memory_setup(&s, 256, 16384, 8192, on_mem); // the maximum only grows: 6144 stays
+		CHECK(U32(exe, 0x48c2c94) == 6144, "video memory maximum only grows");
+		U32(exe, 0x48c2c94) = 0;
+		ngs_memory_setup(&s, 256, 16384, 8192, on_mem); // below both thresholds
+		CHECK(U32(exe, 0x481b818) == 1 && U32(exe, 0x481b820) == 1, "small card: levels %u %u", U32(exe, 0x481b818), U32(exe, 0x481b820));
+		ngs_memory_setup(&s, 6144, 1024, 8192, on_mem); // little system memory: level 2
+		CHECK(U32(exe, 0x481b818) == 2 && U32(exe, 0x481b820) == 2, "little system memory: %u %u", U32(exe, 0x481b818), U32(exe, 0x481b820));
+		dv[4][0x10] = 0; // limit flag clear: the third level is forced to 3
+		ngs_memory_setup(&s, 6144, 16384, 8192, on_mem);
+		CHECK(U32(exe, 0x481b820) == 3, "forced third level");
+	}
 	(void)dvar_flag;
 	printf(fails ? "%d checks FAILED\n" : "all checks passed\n", fails);
 	return fails ? 1 : 0;

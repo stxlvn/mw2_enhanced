@@ -155,6 +155,8 @@ static void fill_caps(nat_device *d)
 		DXGI_ADAPTER_DESC desc;
 		if (SUCCEEDED(IDXGIAdapter_GetDesc(ad, &desc)))
 			WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, c->adapter, sizeof(c->adapter), NULL, NULL);
+		if (SUCCEEDED(IDXGIAdapter_GetDesc(ad, &desc)))
+			c->vram_mb = (unsigned)(desc.DedicatedVideoMemory >> 20);
 		IDXGIOutput *out = NULL;
 		if (SUCCEEDED(IDXGIAdapter_EnumOutputs(ad, 0, &out)) && out) {
 			DXGI_OUTPUT_DESC od;

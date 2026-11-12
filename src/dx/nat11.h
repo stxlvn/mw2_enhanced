@@ -31,6 +31,7 @@ typedef struct {
 	int msaa_max;
 	unsigned desktop_w, desktop_h; // the monitor
 	char adapter[128];
+	unsigned vram_mb; // dedicated video memory of the adapter
 } nat_caps;
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ device

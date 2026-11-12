@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "nat11.h"
+#include "natdraw11.h"
 
 typedef struct {
 	nat_device *dev;
@@ -14,6 +15,11 @@ typedef struct {
 	void (*fn_48bd0)(void *image, unsigned flags, int format, unsigned w, unsigned h, unsigned d);
 	// the engine's error report, used when a resource cannot be made ("Create2DTexture( name, ... ) failed")
 	void (*error)(const char *what, const char *name, unsigned w, unsigned h, unsigned format);
+	// for the shader, declaration, ring and particle-buffer creators
+	nd *d;
+	uint8_t *exe;                                             // the game's image base (tables and globals by rva)
+	int (*fn_rand)(void);                                     // 0x2f715c: the engine's random number
+	void (*fn_qsort)(void *base, size_t num, size_t size, void *cmp); // 0x2f6ab0: the engine's qsort (the particle buffer set-up sorts with the comparator at rva 0x25280)
 } ngr;
 
 // image kinds (+8)
@@ -27,3 +33,23 @@ void ngr_image_upload(ngr *r, uint8_t *image, int format, unsigned face, unsigne
 void ngr_image_release(uint8_t *image);
 // 0x391d0: a depth-stencil image the size of the render target (multisampled like the scene when msaa > 1)
 nat_image *ngr_depth_create(ngr *r, unsigned w, unsigned h, int msaa);
+
+// 0x8f60 / 0x9070: the shader object `obj` (its +8 field is the Direct3D shader in the original, an nd_shader here) from the game's shader source `src` (+0 the bytecode pointer, +10 a version stamp
+// that must equal the dvar value at rva 0x4116198 + 0x10; the game's "shaders enabled" dvar is at 0x41161a0 + 0x10). The field is set to NULL when the shader is not made.
+void ngr_create_shader(ngr *r, const uint8_t *src, uint8_t *obj);
+// 0x258a0: the 16 vertex declarations of a vertex format given as (element, usage) byte pairs: `elems` / `count`; they are stored (nd_decl pointers) at +0x20 .. +0x9f of `set`
+void ngr_make_decls(ngr *r, uint8_t *set, const uint8_t *elems, int count);
+// 0x24f00: a dynamic vertex ring {offset, capacity, buffer} of `size` bytes; the struct is the game's (offset at +0, capacity at +4, nat_buffer at +8)
+void ngr_ring_init(ngr *r, void *ring, unsigned size);
+// 0x24fa0: all of the game's dynamic rings (1 MB vertex ring, two 4.5 MB vertex rings, three 2 MB index rings) with their bookkeeping globals
+void ngr_create_rings(ngr *r);
+// 0x24d00 / 0x24df0 + the Unlock calls of 0x252e0: a static buffer is written through a CPU block and made when it is "unlocked"; staged = ngr_stage_*, then the filled block, then ngr_commit
+typedef struct {
+	void *mem;
+	unsigned size;
+	int is_index;
+} ngr_staged;
+ngr_staged *ngr_stage(unsigned size, int is_index);
+nat_buffer *ngr_commit(ngr *r, ngr_staged *s); // creates the buffer from the block and frees the stage
+// 0x252e0: the particle cloud vertex / index buffers, filled with the engine's random numbers; the four buffers are stored at rva 0x4359468, 0x4359470, 0x4359478, 0x4359480
+void ngr_particle_buffers(ngr *r);

@@ -86,3 +86,54 @@ void ngs_display_globals(ngs *s, const nat_caps *c, int windowed, unsigned width
 	WF(e, G_PIX_X, (float)win_h * RF(e, G_ASPECT) / (float)win_w);
 	WF(e, G_PIX_Y, windowed == 0 ? (float)c->desktop_h * RF(e, G_ASPECT) / (float)c->desktop_w : RF(e, C_ONE));
 }
+
+void ngs_memory_setup(ngs *s, unsigned vram_mb, unsigned sys_mb, uint64_t total_virtual_mb, void (*set_dvar)(void *dvar, unsigned value))
+{
+	enum { G_VRAM_MAX = 0x48c2c94, G_Q1 = 0x481b818, G_Q2 = 0x481b81c, G_Q3 = 0x481b820, G_T1 = 0x115ae4, G_T2 = 0x115ae8, G_DVAR_Q1 = 0x4116288, G_DVAR_Q2 = 0x4116330, G_DVAR_Q3 = 0x41162b0, G_OVERRIDE = 0x41163b8, G_NOLIMIT = 0x4116358 };
+	uint8_t *e = s->exe;
+	uint32_t vram = *(uint32_t *)AT(e, G_VRAM_MAX);
+	if (vram < vram_mb)
+		vram = vram_mb;
+	*(uint32_t *)AT(e, G_VRAM_MAX) = vram;
+	uint32_t q1, q2, q3;
+	if (*AT(RP(e, G_OVERRIDE), 0x10) != 0) { // the quality settings are given by the player's dvars
+		q1 = *(uint32_t *)AT(RP(e, G_DVAR_Q1), 0x10);
+		q2 = *(uint32_t *)AT(RP(e, G_DVAR_Q2), 0x10);
+		q3 = *(uint32_t *)AT(RP(e, G_DVAR_Q3), 0x10);
+	} else {
+		q1 = 0;
+		q3 = 0;
+		if (vram < *(uint32_t *)AT(e, G_T1)) {
+			q1 = 0;
+			q3 = 1;
+			if (vram < *(uint32_t *)AT(e, G_T2))
+				q1 = 1;
+		}
+		if (total_virtual_mb < 3000) { // a 32-bit sized address space: at least level 1 for the third setting
+			if (q3 == 0)
+				q3 = 1;
+		}
+		unsigned lvl = 0;
+		if (sys_mb < 0x401)
+			lvl = 2;
+		else if (sys_mb < 0x579)
+			lvl = 1;
+		if (lvl) {
+			if (q1 < lvl)
+				q1 = lvl;
+			if (q3 < lvl)
+				q3 = lvl;
+		}
+		q2 = q3;
+		if (set_dvar) {
+			set_dvar(RP(e, G_DVAR_Q1), q1);
+			set_dvar(RP(e, G_DVAR_Q2), q2);
+			set_dvar(RP(e, G_DVAR_Q3), q3);
+		}
+	}
+	*(uint32_t *)AT(e, G_Q1) = q1;
+	*(uint32_t *)AT(e, G_Q2) = q2;
+	if (*AT(RP(e, G_NOLIMIT), 0x10) == 0)
+		q3 = 3;
+	*(uint32_t *)AT(e, G_Q3) = q3;
+}
