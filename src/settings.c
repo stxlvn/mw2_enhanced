@@ -42,6 +42,7 @@ static int keepads_on = 1;
 static int d3d9ex_on = 0;
 static int directx11_on = 0;
 static int directx12_on = 0;
+static int lowlatency_on = 0;
 static int borderless_on = 1;
 static int netguard_on = 1;
 static int d3d9on12_on = 0;
@@ -228,6 +229,7 @@ void settings_load(void)
 	d3d9ex_on = GetPrivateProfileIntA("display", "d3d9ex", 0, path) != 0;
 	directx11_on = GetPrivateProfileIntA("display", "directx11", 0, path) != 0 || getenv("MW2COOP_NATIVE11") != NULL;
 	directx12_on = GetPrivateProfileIntA("display", "directx12", 0, path) != 0 || getenv("MW2COOP_NATIVE12") != NULL;
+	lowlatency_on = GetPrivateProfileIntA("display", "lowlatency", 0, path) != 0;
 	if (directx12_on)
 		directx11_on = 0; // one native renderer at a time (12 wins)
 	if (directx11_on || directx12_on) { // the native renderer: nothing creates a Direct3D 9 device, so every feature that is built on one is off
@@ -405,6 +407,11 @@ int settings_directx11(void)
 int settings_directx12(void)
 {
 	return directx12_on;
+}
+
+int settings_lowlatency(void)
+{
+	return lowlatency_on;
 }
 
 int settings_d3d9on12(void)

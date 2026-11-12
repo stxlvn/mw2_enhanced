@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "../log.h"
+#include "../settings.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -328,6 +329,7 @@ int nbr_start(nbr *n, uint8_t *p)
 	np.refresh = (unsigned)RD_I32(p, 8);
 	np.fullscreen = RD_I32(p, 0xc) == 0;
 	np.vsync = RD_U8(RD_PTR(e, D_VSYNC), 0x10) != 0;
+	np.low_latency = settings_lowlatency();
 	np.msaa = RD_I32(p, 0x28);
 	char err[160] = "";
 	RD_I32(e, G_DEPTH_FMT) = 0x4b;

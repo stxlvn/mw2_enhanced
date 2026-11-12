@@ -137,6 +137,9 @@ void ngf_target_switch(ngf *f, void *input, void *state, int n)
 		RD_I32(state, 0x144) = -1;
 		RD_F32(state, 0x148) = 0.0f;
 		RD_F32(state, 0x14c) = 1.0f;
+		// Direct3D 9 resets the device's viewport and scissor rectangle to the new target's size when a target is set (the engine relies on it: its blur and downsample passes never set the viewport)
+		nd_set_viewport(f->d, 0.0f, 0.0f, (float)RD_I32(entry, 0x18), (float)RD_I32(entry, 0x1c), 0.0f, 1.0f);
+		nd_set_scissor_rect(f->d, 0, 0, RD_I32(entry, 0x18), RD_I32(entry, 0x1c));
 	}
 	nd_set_targets(f->d, color, depth);
 	RD_I32(state, 0xb98) = n;

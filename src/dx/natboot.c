@@ -223,11 +223,21 @@ void natboot_shot(const char *name)
 	lstrcpynA(shot_name, name, sizeof(shot_name));
 }
 static volatile DWORD render_tid;
+extern int nd_trace;
 static void w_45060(unsigned flags)
 { InterlockedIncrement(&hits[47]);
 	render_tid = GetCurrentThreadId();
 	if (!N.created || !(flags & 2))
 		return;
+	if (getenv("MW2COOP_TRACEFRAME")) { // QA: the draws of one frame are logged (the frame number counts presents, as the scene dumps do)
+		static int tf, from;
+		if (!from)
+			from = atoi(getenv("MW2COOP_TRACEFRAME"));
+		tf++;
+		nd_trace = tf == from;
+		if (tf == from)
+			nat_log_hook("trace: ---- frame %d ----", tf);
+	}
 	if (getenv("MW2COOP_NATCON")) { // QA: the console is opened at frame 5000 of the run and closed at 5500
 		static int f;
 		f++;

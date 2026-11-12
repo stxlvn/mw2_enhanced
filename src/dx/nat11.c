@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
+#include "natswap.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +34,8 @@ struct nat_device {
 	ID3D11DepthStencilView *depth_dsv;
 	ID3D11Texture2D *backbuffer;
 	int fullscreen_set;
+	int tearing; // the swap chain allows tearing
+	HANDLE waitable; // the frame latency waitable object
 };
 
 static HMODULE h_compiler;
@@ -226,17 +229,19 @@ int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size
 	sc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 	sc.SampleDesc.Count = 1;
 	sc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-	sc.BufferCount = 1;
+	sc.BufferCount = 2;
 	sc.OutputWindow = d->hwnd;
 	sc.Windowed = TRUE;
-	sc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-	sc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+	sc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD; // (flip model: variable refresh rate, tearing and the waitable object need it; the scene is a texture of its own, copied into the buffer)
+	d->tearing = ns_tearing_supported((IUnknown *)d->factory);
+	sc.Flags = ns_swap_flags(d->tearing);
 	hr = IDXGIFactory_CreateSwapChain(d->factory, (IUnknown *)d->dev, &sc, &d->swap);
 	if (FAILED(hr)) {
 		set_err(err, err_size, "CreateSwapChain: %lx", (unsigned long)hr);
 		nat_destroy(d);
 		return 0;
 	}
+	d->waitable = ns_waitable((IUnknown *)d->swap, d->p.low_latency ? 1 : 2);
 	IDXGIFactory_MakeWindowAssociation(d->factory, d->hwnd, DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER); // the game handles Alt+Enter itself
 	if (!build_targets(d, err, err_size)) {
 		nat_destroy(d);
@@ -265,6 +270,8 @@ void nat_destroy(nat_device *d)
 		ID3D11DeviceContext_ClearState(d->ctx);
 	release_targets(d);
 	REL(d->swap);
+	if (d->waitable)
+		CloseHandle(d->waitable);
 	REL(d->factory);
 	REL(d->ctx);
 	REL(d->dev);
@@ -295,7 +302,7 @@ int nat_reset(nat_device *d, const nat_params *p, char *err, size_t err_size)
 	IDXGISwapChain_ResizeTarget(d->swap, &m);
 	if (p->fullscreen && !d->fullscreen_set && SUCCEEDED(IDXGISwapChain_SetFullscreenState(d->swap, TRUE, NULL)))
 		d->fullscreen_set = 1;
-	HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, p->width, p->height, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH);
+	HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, p->width, p->height, DXGI_FORMAT_UNKNOWN, ns_swap_flags(d->tearing));
 	if (FAILED(hr)) {
 		set_err(err, err_size, "ResizeBuffers: %lx", (unsigned long)hr);
 		return 0;
@@ -315,7 +322,9 @@ int nat_present(nat_device *d)
 		ID3D11DeviceContext_ResolveSubresource(d->ctx, (ID3D11Resource *)d->backbuffer, 0, (ID3D11Resource *)d->scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
 	else
 		ID3D11DeviceContext_CopyResource(d->ctx, (ID3D11Resource *)d->backbuffer, (ID3D11Resource *)d->scene);
-	HRESULT hr = IDXGISwapChain_Present(d->swap, d->p.vsync ? 1 : 0, 0);
+	HRESULT hr = IDXGISwapChain_Present(d->swap, d->p.vsync ? 1 : 0, ns_present_flags(d->tearing, d->p.vsync, d->fullscreen_set));
+	if (d->waitable) // the next frame starts when the swap chain can take it (at most the set number of frames are queued: lower input latency)
+		WaitForSingleObjectEx(d->waitable, 100, TRUE);
 	if (hr == DXGI_STATUS_OCCLUDED)
 		return 1;
 	if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)

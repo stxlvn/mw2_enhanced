@@ -13,6 +13,7 @@
 
 #include "sm3.h"
 #include "natcache.h"
+#include "natswap.h"
 
 #ifndef D3DCOMPILE_ENABLE_STRICTNESS
 #define D3DCOMPILE_ENABLE_STRICTNESS (1 << 11)
@@ -132,6 +133,8 @@ struct nat_device {
 	nat_caps caps;
 	unsigned samples;
 	int fullscreen_set;
+	int tearing; // the swap chain allows tearing
+	HANDLE waitable; // the frame latency waitable object
 	// commands
 	ID3D12CommandAllocator *alloc[NAT12_FRAMES];
 	UINT64 alloc_value[NAT12_FRAMES];
@@ -791,7 +794,8 @@ static int create_swap(nat_device *d, char *err, size_t err_size)
 	sc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
 	sc.BufferCount = NAT12_FRAMES;
 	sc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-	sc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+	d->tearing = ns_tearing_supported((IUnknown *)d->factory);
+	sc.Flags = ns_swap_flags(d->tearing);
 	IDXGISwapChain1 *s1 = NULL;
 	HRESULT hr = IDXGIFactory4_CreateSwapChainForHwnd(d->factory, (IUnknown *)d->queue, d->hwnd, &sc, NULL, NULL, &s1);
 	if (FAILED(hr)) {
@@ -804,6 +808,7 @@ static int create_swap(nat_device *d, char *err, size_t err_size)
 		set_err(err, err_size, "IDXGISwapChain3: %lx", (unsigned long)hr);
 		return 0;
 	}
+	d->waitable = ns_waitable((IUnknown *)d->swap, d->p.low_latency ? 1 : 2);
 	IDXGIFactory4_MakeWindowAssociation(d->factory, d->hwnd, DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER);
 	return 1;
 }
@@ -931,6 +936,8 @@ void nat_destroy(nat_device *d)
 	release_scene(d);
 	gc_collect(d, 1);
 	REL(d->swap);
+	if (d->waitable)
+		CloseHandle(d->waitable);
 	REL(d->factory);
 	REL(d->list);
 	for (int i = 0; i < NAT12_FRAMES; i++)
@@ -969,7 +976,7 @@ int nat_reset(nat_device *d, const nat_params *p, char *err, size_t err_size)
 	IDXGISwapChain3_ResizeTarget(d->swap, &m);
 	if (p->fullscreen && !d->fullscreen_set && SUCCEEDED(IDXGISwapChain3_SetFullscreenState(d->swap, TRUE, NULL)))
 		d->fullscreen_set = 1;
-	HRESULT hr = IDXGISwapChain3_ResizeBuffers(d->swap, NAT12_FRAMES, p->width, p->height, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH);
+	HRESULT hr = IDXGISwapChain3_ResizeBuffers(d->swap, NAT12_FRAMES, p->width, p->height, DXGI_FORMAT_UNKNOWN, ns_swap_flags(d->tearing));
 	if (FAILED(hr)) {
 		set_err(err, err_size, "ResizeBuffers: %lx", (unsigned long)hr);
 		return 0;
@@ -1022,7 +1029,9 @@ int nat_present(nat_device *d)
 		barrier_res(d, back, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
 	}
 	submit(d, 0);
-	HRESULT hr = IDXGISwapChain3_Present(d->swap, d->p.vsync ? 1 : 0, 0);
+	HRESULT hr = IDXGISwapChain3_Present(d->swap, d->p.vsync ? 1 : 0, ns_present_flags(d->tearing, d->p.vsync, d->fullscreen_set));
+	if (d->waitable) // the next frame starts when the swap chain can take it (lower input latency)
+		WaitForSingleObjectEx(d->waitable, 100, TRUE);
 	d->fidx = (d->fidx + 1) % NAT12_FRAMES;
 	wait_value(d, d->alloc_value[d->fidx]);
 	gc_collect(d, 0);

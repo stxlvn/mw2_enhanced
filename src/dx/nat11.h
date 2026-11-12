@@ -15,6 +15,7 @@ typedef struct {
 	unsigned refresh; // fullscreen only, 0 = the desktop's
 	int fullscreen;
 	int vsync;
+	int low_latency; // one frame may be queued for the display (default two)
 	int msaa; // samples: 0 / 1 none, 2, 4, 8 (lowered to what the adapter supports)
 } nat_params;
 

@@ -127,6 +127,8 @@ void nd_decl_destroy(nd_decl *d)
 	free(d);
 }
 
+int nd_trace; // QA (MW2COOP_TRACEFRAME): while set, every draw / clear / stretch is logged with its target, textures and first constants
+
 struct nd_shader {
 	void **vt;
 	nat_device *dev;
@@ -345,6 +347,8 @@ static void get_views(nd *d, int srgb, ID3D11RenderTargetView **rtv, ID3D11Depth
 
 void nd_clear(nd *d, unsigned flags, const float rgba[4], float depth, unsigned stencil)
 {
+	if (nd_trace && nat_log_hook)
+		nat_log_hook("trace: clear flags %u %.2f %.2f %.2f %.2f", flags, rgba[0], rgba[1], rgba[2], rgba[3]);
 	ID3D11RenderTargetView *rtv;
 	ID3D11DepthStencilView *dsv;
 	get_views(d, 0, &rtv, &dsv);
@@ -565,9 +569,34 @@ static ID3D11SamplerState *sampler_state(nd *d, uint32_t word, int compare)
 	return o;
 }
 
+static void trace_target(nd *d, char *out, size_t n)
+{
+	unsigned w, h, s;
+	if (d->rt) {
+		nat_image_size(d->rt, &w, &h, &s);
+		snprintf(out, n, "rt %p %ux%u x%u", (void *)d->rt, w, h, s);
+	} else {
+		nat_get_size(d->dev, &w, &h);
+		snprintf(out, n, "rt SCENE %ux%u", w, h);
+	}
+}
+
 int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, unsigned prim_count)
 {
 	d->err[0] = 0;
+	if (nd_trace && nat_log_hook) {
+		char t[96], tx[400] = "";
+		trace_target(d, t, sizeof(t));
+		for (int i = 0; i < 16; i++) {
+			nat_image *im = g->tex[i] ? d->ops.image(g->tex[i]) : NULL;
+			if (im) {
+				unsigned w, h, s;
+				nat_image_size(im, &w, &h, &s);
+				snprintf(tx + strlen(tx), sizeof(tx) - strlen(tx), " t%d=%p(%ux%u%s)", i, (void *)im, w, h, im == d->rt ? " =RT" : "");
+			}
+		}
+		nat_log_hook("trace: draw %s vp %.0f,%.0f %.0fx%.0f prims %u ps %p%s | ps c0 %.3f %.3f %.3f %.3f c1 %.3f %.3f %.3f %.3f", t, d->vp[0], d->vp[1], d->vp[2], d->vp[3], prim_count, (void *)g->ps, tx, g->ps_c[0][0], g->ps_c[0][1], g->ps_c[0][2], g->ps_c[0][3], g->ps_c[1][0], g->ps_c[1][1], g->ps_c[1][2], g->ps_c[1][3]);
+	}
 	nd_shader *vsg = g->vs ? d->ops.shader(g->vs) : NULL, *psg = g->ps ? d->ops.shader(g->ps) : NULL;
 	nd_decl *decl = g->decl ? d->ops.decl(g->decl) : NULL;
 	if (!vsg || !decl || !g->words_valid) {
@@ -680,6 +709,8 @@ static DXGI_FORMAT unorm_of(DXGI_FORMAT f)
 int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const nd_rect *dr, int linear)
 {
 	unsigned sw, sh, ss, dw, dh, ds;
+	if (nd_trace && nat_log_hook)
+		nat_log_hook("trace: stretch src %p -> dst %p linear %d", (void *)src, (void *)dst, linear);
 	ID3D11Resource *sres, *dres;
 	DXGI_FORMAT sfmt, dfmt;
 	if (src) {
