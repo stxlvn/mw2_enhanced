@@ -236,11 +236,18 @@ void ngf_draw_5cc10(ngf *f, void *ctx, uintptr_t *cursor)
 	} while ((int16_t)key == (int16_t)first);
 }
 
+void ngf_set_texture_raw(ngf *f, unsigned slot, void *texture);
 static void tex_to_slot(ngf *f, unsigned slot, void *texture)
 {
 	memset(f->tex_thunk[slot], 0, 32);
 	*(void **)f->tex_thunk[slot] = texture;
 	f->g->tex[slot] = texture ? f->tex_thunk[slot] : NULL;
+}
+
+void ngf_set_texture_raw(ngf *f, unsigned slot, void *texture)
+{
+	if (slot < 16)
+		tex_to_slot(f, slot, texture);
 }
 
 void ngf_draw_5fe50(ngf *f, uintptr_t *cursor, void *ctx)

@@ -49,6 +49,8 @@ void ngf_target_switch(ngf *f, void *input, void *state, int n);
 void ngf_draw_26840(ngf *f, void *ctx, const int *cmd);
 // 0x5cc10: the sort-key draw loop (one index buffer, per-key vertex stream); cursor = {cur, end} of 4-byte commands
 void ngf_draw_5cc10(ngf *f, void *ctx, uintptr_t *cursor);
+// binds a raw texture (the native image the game keeps as the first field of its image) to a slot, as a direct SetTexture of the game's own code would
+void ngf_set_texture_raw(ngf *f, unsigned slot, void *texture);
 // 0x5fe50: the sky / probe draw loop: textures 1..3 from the arrays of the game's global at rva 0x410fd08, 44-byte vertices; cursor = {cur, end} of 32-byte commands
 void ngf_draw_5fe50(ngf *f, uintptr_t *cursor, void *ctx);
 // 0x5c960: batches of triangles with the same key: per-batch code constants copied from the scene data, indices from the ring; ctx = {input, state, pointer to the command}, cursor = {cur, end} of 24-byte commands

@@ -668,9 +668,17 @@ static long buffer_release(void *self)
 	return 0;
 }
 
+void (*nat_log_hook)(const char *fmt, ...); // diagnostics (set by natboot.c)
 static long buffer_lock(void *self, unsigned off, unsigned size, void **out, unsigned flags)
 {
 	nat_buffer *b = (nat_buffer *)self;
+	{
+		static int n_logged;
+		if (nat_log_hook && n_logged < 24 && (b->dynamic || b->stage)) {
+			n_logged++;
+			nat_log_hook("native11: Lock buffer %p size %u dynamic %d staged %d, off %u size %u flags %x", (void *)b, b->size, b->dynamic, b->stage != NULL, off, size, flags);
+		}
+	}
 	(void)size;
 	(void)flags;
 	if (b->stage) { // a new frame (Lock with DISCARD): the whole stage is free again
@@ -705,6 +713,13 @@ static long buffer_lock(void *self, unsigned off, unsigned size, void **out, uns
 static long buffer_unlock(void *self)
 {
 	nat_buffer *b = (nat_buffer *)self;
+	{
+		static int n_logged;
+		if (nat_log_hook && n_logged < 12 && (b->dynamic || b->stage)) {
+			n_logged++;
+			nat_log_hook("native11: Unlock buffer %p (mapped %d)", (void *)b, b->mapped);
+		}
+	}
 	if (b->dynamic) {
 		if (b->mapped) {
 			ID3D11DeviceContext_Unmap(b->dev->ctx, (ID3D11Resource *)b->buf, 0);

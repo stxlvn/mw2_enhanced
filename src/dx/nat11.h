@@ -113,6 +113,7 @@ void nat_buffer_destroy(nat_buffer *b);
 nat_buffer *nat_buffer_create_static(nat_device *d, unsigned size, int is_index, void **block);
 // A vertex buffer locked by the engine for a whole frame (Direct3D 9 Lock through the vtable) and written by its worker threads: *used is the engine's counter of the reserved bytes;
 // nat_buffer_sync copies the reserved part to the GPU before a draw reads it (nat_buffer_is_staged tells which buffers need it)
+extern void (*nat_log_hook)(const char *fmt, ...); // diagnostics: set by the mod, NULL in the tests
 nat_buffer *nat_buffer_create_staged(nat_device *d, unsigned size, const volatile int *used);
 int nat_buffer_is_staged(const nat_buffer *b);
 void nat_buffer_sync(nat_buffer *b);

@@ -195,7 +195,7 @@ static void w_45060(unsigned flags)
 		return;
 	static int frame;
 	frame++;
-	if (frame == 300 || frame == 900 || frame == 1800 || frame == 3000) {
+	if (frame == 300 || frame == 900 || frame == 1800 || frame == 3000 || (frame > 3000 && frame <= 24000 && frame % 1500 == 0)) {
 		char path[MAX_PATH];
 		DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
 		while (n > 0 && path[n - 1] != 92)
@@ -288,6 +288,121 @@ static void install(uint32_t rva, void *fn)
 	hook_jump(exe + rva, 14, fn, 0xcc);
 }
 
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ call sites
+// The game's own drawing functions that are not rewritten yet (0x60120 and the ones the tripwire names) still call a few Direct3D 9 device methods through the stored device pointer
+// (`mov rax,[rcx]; call [rax+slot*8]`). Each such call instruction (6 bytes, ff 90 disp32) is made a `call rel32` to a stub that jumps to the native step with the same arguments: the device
+// object stays a tripwire, nothing creates or calls a Direct3D 9 object. A temporary bridge: a function that is rewritten natively stops using its sites (its code is replaced by a jump).
+static long s_set_render_state(void *dev, unsigned state, unsigned value)
+{
+	(void)dev;
+	if (!N.created)
+		return 0;
+	if (state == 174) { // D3DRS_SCISSORTESTENABLE
+		nd_set_scissor_enable(N.d, (int)value);
+		return 0;
+	}
+	static volatile LONG seen_state[256];
+	if (state < 256 && InterlockedExchange(&seen_state[state], 1) == 0)
+		log_printf("native11: SetRenderState %u = %u (not mapped yet)", state, value);
+	return 0;
+}
+static long s_set_texture(void *dev, unsigned stage, void *tex)
+{
+	(void)dev;
+	if (N.created)
+		ngf_set_texture_raw(&N.f, stage, tex);
+	return 0;
+}
+static long s_set_scissor_rect(void *dev, const RECT *r)
+{
+	(void)dev;
+	if (N.created && r)
+		nd_set_scissor_rect(N.d, r->left, r->top, r->right, r->bottom);
+	return 0;
+}
+static long s_draw_indexed(void *dev, unsigned type, int base_vertex, unsigned min_index, unsigned num_vertices, unsigned start_index, unsigned prim_count)
+{
+	(void)dev;
+	(void)min_index;
+	(void)num_vertices;
+	if (!N.created)
+		return 0;
+	if (type != 4) { // D3DPT_TRIANGLELIST
+		static volatile LONG warned;
+		if (InterlockedExchange(&warned, 1) == 0)
+			log_printf("native11: DrawIndexedPrimitive of type %u is not a triangle list", type);
+		return 0;
+	}
+	nd_draw_indexed(N.d, &N.g, base_vertex, start_index, prim_count);
+	return 0;
+}
+static long s_set_indices(void *dev, void *ib)
+{
+	(void)dev;
+	if (N.created)
+		nd_set_indices(N.d, (nat_buffer *)ib, 0);
+	return 0;
+}
+static long s_set_stream(void *dev, unsigned stream, void *vb, unsigned offset, unsigned stride)
+{
+	(void)dev;
+	if (N.created)
+		nd_set_stream(N.d, stream, (nat_buffer *)vb, offset, stride);
+	return 0;
+}
+
+static void patch_sites(void)
+{
+	static const struct {
+		unsigned slot;
+		void *fn;
+	} map[] = {{57, s_set_render_state}, {65, s_set_texture}, {75, s_set_scissor_rect}, {82, s_draw_indexed}, {100, s_set_stream}, {104, s_set_indices}};
+	unsigned patched[8] = {0};
+	uint8_t *page = hook_page_near(exe);
+	if (!page)
+		return;
+	// one 14-byte absolute-jump stub per method
+	for (unsigned i = 0; i < sizeof(map) / sizeof(map[0]); i++)
+		hook_jump_bytes(page + i * 16, map[i].fn);
+	DWORD old;
+	VirtualProtect(page, 0x1000, PAGE_EXECUTE_READ, &old);
+	for (uint32_t rva = 0x40000; rva < 0x66000; rva++) {
+		uint8_t *p = exe + rva;
+		// `call [reg + disp32]`: ff 90..97 (6 bytes) or 41 ff 90..97 (7 bytes, r8..r15)
+		unsigned len = 0;
+		if (p[0] == 0xff && (p[1] & 0xf8) == 0x90)
+			len = 6;
+		else if (p[0] == 0x41 && p[1] == 0xff && (p[2] & 0xf8) == 0x90)
+			len = 7;
+		if (!len)
+			continue;
+		int32_t disp;
+		memcpy(&disp, p + len - 4, 4);
+		if (disp <= 0 || (disp & 7))
+			continue;
+		const unsigned slot = (unsigned)disp / 8;
+		for (unsigned i = 0; i < sizeof(map) / sizeof(map[0]); i++) {
+			if (map[i].slot != slot)
+				continue;
+			const int64_t rel = (int64_t)(page + i * 16) - (int64_t)(p + 5);
+			if (rel > INT32_MAX || rel < INT32_MIN)
+				break;
+			DWORD op;
+			VirtualProtect(p, len, PAGE_EXECUTE_READWRITE, &op);
+			p[0] = 0xe8;
+			const int32_t r32 = (int32_t)rel;
+			memcpy(p + 1, &r32, 4);
+			for (unsigned k = 5; k < len; k++)
+				p[k] = 0x90;
+			VirtualProtect(p, len, op, &op);
+			patched[i]++;
+			break;
+		}
+	}
+	FlushInstructionCache(GetCurrentProcess(), exe + 0x40000, 0x26000);
+	log_printf("native11: device call sites patched: SetRenderState %u, SetTexture %u, SetScissorRect %u, DrawIndexedPrimitive %u, SetStreamSource %u, SetIndices %u", patched[0], patched[1], patched[2], patched[3], patched[4], patched[5]);
+}
+
 static void install_all(void);
 
 // the exe is packed (SteamStub) when this DLL loads: the code can only be patched after the stub has unpacked it, which is when the first bytes of a known function look right
@@ -353,6 +468,7 @@ static void install_all(void)
 	}
 	memset(&N, 0, sizeof(N));
 	nbr_bind(&N, exe);
+	nat_log_hook = log_printf;
 	AddVectoredExceptionHandler(1, veh);
 	CloseHandle(CreateThread(NULL, 0, monitor, NULL, 0, NULL));
 	make_traps();
@@ -429,6 +545,7 @@ static void install_all(void)
 	install(0x2b7840, w_2b7840);
 	install(0x2b7980, w_2b7980);
 	install(0x4d100, w_4d100);
+	patch_sites();
 	install(0x23950, w_23950);
 	install(0x23a90, w_23a90);
 	install(0x23be0, w_23be0);
