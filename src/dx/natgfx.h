@@ -46,6 +46,8 @@ void ng_init(ng_state *s);
 // ng_weapon_k is NULL (off) unless the host sets it; it returns 0 when the weapon keeps the game's field of view.
 extern float (*ng_weapon_k)(void);
 void ng_weapon_viewport(ng_state *s, float min_z);
+// the split screen's scope lens fix (src/native.c t_scissor): called with every scissor rectangle the engine sets (top / bottom may be changed); rt_full: the target is as big as the scene
+extern void (*ng_scissor_hook)(int *top, int *bottom, int left, int right, int rt_full);
 // 0x54a10: selects pass `pass_index` of the current technique (updates state +0x138 / +0x140), applies the render-state words, the pixel shader and the pass's stable arguments (vertex side
 // and samplers; the pixel constants of the stable list are ng_apply_ps_stable's)
 void ng_select_pass(ng_state *s, const ng_ops *ops, void *input, void *state, unsigned pass_index);

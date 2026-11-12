@@ -2346,6 +2346,27 @@ int native_nat_split_frame(int *half)
 	*half = h;
 	return 1;
 }
+// the split screen's scope lens on the native renderers (see t_scissor): a lens rectangle in the upper half of a full-size target is doubled in height (the 3D is squeezed 2:1 into the half)
+void native_nat_scissor(int *top, int *bottom, int left, int right, int rt_full);
+void native_nat_scissor(int *top, int *bottom, int left, int right, int rt_full)
+{
+	unsigned w = 0, h = 0;
+	natboot_scene_size(&w, &h);
+	if (mode != 10 || !native_active || !split_on || layer_pass || !rt_full || !h || *bottom > (int)(h / 2) || right - left <= 64 || !CFG_ONCE("lensfix", 1))
+		return;
+	if (right - left < (int)(w / 2))
+		frame_scope = 1;
+	*top *= 2;
+	*bottom *= 2;
+}
+
+// (the intro's title lines go over the bottom half for half a second after a line was drawn, not while player 1 looks through a scope)
+int native_nat_titles_wanted(void);
+int native_nat_titles_wanted(void)
+{
+	const DWORD now = GetTickCount();
+	return now - title_tick < 500 && now - scope_tick[0] >= 400;
+}
 int native_nat_pair_present(void);
 int native_nat_pair_present(void)
 {
@@ -2353,6 +2374,16 @@ int native_nat_pair_present(void)
 	if (pair < 0)
 		pair = cfg("pairpresent", 1);
 	return pair;
+}
+
+// the native frame end (natframe2.c ngfr_453c0) calls the frame's 2D command list through this: the split screen's layer pass (final2d_hook) when the hook is in, the engine's function otherwise
+void native_final2d_entry(void *vp);
+void native_final2d_entry(void *vp)
+{
+	if (final2d_original)
+		final2d_hook(vp);
+	else
+		((void (*)(void *))(base + XR(0x5c010)))(vp);
 }
 
 static DWORD comp_not_before; // GetTickCount: the device hooks are not (re)installed before it (after a vid_restart the Steam overlay hooks the new device first)

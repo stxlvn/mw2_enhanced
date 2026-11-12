@@ -284,6 +284,15 @@ void nd_get_targets(nd *d, nat_image **color, nat_image **depth)
 	*color = d->rt;
 	*depth = d->ds;
 }
+int nd_target_is_full(nd *d)
+{
+	if (!d->rt)
+		return 1;
+	unsigned w, h, s, sw, sh;
+	nat_image_size(d->rt, &w, &h, &s);
+	nat_get_size(d->dev, &sw, &sh);
+	return w == sw && h == sh;
+}
 void nd_set_viewport(nd *d, float x, float y, float w, float h, float min_z, float max_z)
 {
 	d->vp[0] = x;
@@ -719,7 +728,7 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 	if (nd_layer_mode) {
 		state11_t st;
 		state11_decode(g->word0, g->word1, &st);
-		if (st.z_enable) {
+		if (st.z_enable && st.z_func != 8) { // (a depth test that always passes is a 2D draw)
 			nat_image *rt = d->rt, *ds = d->ds;
 			d->rt = nd_layer_scene_rt;
 			d->ds = nd_layer_scene_ds;

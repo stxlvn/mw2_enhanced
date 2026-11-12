@@ -229,6 +229,7 @@ void natboot_shot(const char *name)
 extern int natframe_skip_present;
 extern int native_nat_split_frame(int *half);
 extern int native_nat_pair_present(void);
+extern int native_nat_titles_wanted(void);
 static nat_image *cp_half[2], *cp_lay[2];
 static unsigned cp_w, cp_h;
 static int cp_have[2], cp_lay_have[2];
@@ -296,6 +297,19 @@ static void cp_layer_end(void)
 #else
 #define DISPATCH12(call) if (settings_directx12()) { call; }
 #endif
+void natboot_scene_size(unsigned *w, unsigned *h)
+{
+#ifndef NAT_BACKEND_12
+	if (settings_directx12()) {
+		extern void b12_natboot_scene_size(unsigned *, unsigned *);
+		b12_natboot_scene_size(w, h);
+		return;
+	}
+#endif
+	*w = *h = 0;
+	if (N.created)
+		nat_get_size(N.dev, w, h);
+}
 int natboot_comp_make(void)
 {
 #ifndef NAT_BACKEND_12
@@ -342,6 +356,11 @@ static int natboot_compose(int half)
 		const nd_rect top_rows = {0, 0, w, h / 2};
 		nd_overlay_premul(N.d, cp_lay[half], &top_rows, cp_half[half], NULL);
 	}
+	// the mission's title lines are drawn by context 0 with the full-screen 2D placement: the rows of its layer below its half hold them; they go over the bottom half
+	if (half == 1 && cp_have[1] && cp_lay_have[0] && native_nat_titles_wanted()) {
+		const nd_rect low_rows = {0, h / 2, w, h};
+		nd_overlay_premul(N.d, cp_lay[0], &low_rows, cp_half[1], NULL);
+	}
 	const nd_rect top = {0, 0, w, h / 2}, bottom = {0, h / 2, w, h};
 	nd_stretch(N.d, cp_half[0], NULL, NULL, &top, 0);
 	nd_stretch(N.d, cp_half[1], NULL, NULL, &bottom, 0);
@@ -357,7 +376,6 @@ static void natboot_comp_frame(void)
 	}
 	const int both = natboot_compose(half);
 	natframe_skip_present = native_nat_pair_present() && half == 0 && both;
-	cp_lay_have[0] = cp_lay_have[1] = 0; // (each frame draws its own layer again)
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ textures for the mod's own code
@@ -914,6 +932,8 @@ static void install_all(void)
 	{
 		extern float native_weapon_k(void);
 		ng_weapon_k = native_weapon_k; // [native] weaponfov on the native renderer
+		extern void native_nat_scissor(int *, int *, int, int, int);
+		ng_scissor_hook = native_nat_scissor; // the split screen's scope lens
 	}
 
 	AddVectoredExceptionHandler(1, veh);
@@ -931,7 +951,10 @@ static void install_all(void)
 	N.frame.fn_211c0 = (void (*)(void *, void *))(exe + 0x211c0);
 	N.frame.fn_29070 = (void (*)(void))(exe + 0x29070);
 	N.frame.fn_b6e0 = (void (*)(int))(exe + 0xb6e0);
-	N.frame.fn_5c010 = (void (*)(void *))(exe + 0x5c010);
+	{ // the frame's 2D command list (rva 0x5c010): the native frame end calls it itself (the call site inside 0x453c0 is not run), so the split screen's layer hook wraps it here
+		extern void native_final2d_entry(void *);
+		N.frame.fn_5c010 = native_final2d_entry;
+	}
 	N.frame.fn_484c0 = (void (*)(void *))(exe + 0x484c0); // the post-process composite (glow, depth of field, fog): the game's own code, its StretchRect / GetSurfaceLevel calls are bridged (patch_sites)
 	N.frame.fn_4e390 = (void (*)(void *, void *, int))(exe + 0x4e390);
 	N.frame.fn_4f070 = (void (*)(void *, void *, void *))(exe + 0x4f070);

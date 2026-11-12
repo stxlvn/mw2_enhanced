@@ -67,6 +67,7 @@ extern int nd_layer_mode;
 extern nat_image *nd_layer_scene_rt, *nd_layer_scene_ds;
 extern int nd_layer_reroute;
 void nd_get_targets(nd *d, nat_image **color, nat_image **depth);
+int nd_target_is_full(nd *d); // the current render target is as big as the scene (the split screen's scope lens fix)
 int nd_overlay_premul(nd *d, nat_image *src, const nd_rect *src_rect, nat_image *dst, const nd_rect *dst_rect);
 int nd_stretch(nd *d, nat_image *src, const nd_rect *src_rect, nat_image *dst, const nd_rect *dst_rect, int linear);
 const char *nd_last_error(const nd *d);

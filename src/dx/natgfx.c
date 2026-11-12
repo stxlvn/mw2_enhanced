@@ -22,6 +22,7 @@ void ng_init(ng_state *s)
 }
 
 float (*ng_weapon_k)(void);
+void (*ng_scissor_hook)(int *top, int *bottom, int left, int right, int rt_full);
 static float wf_orig[16]; // the game's view-projection matrix while the weapon's scaled one is in the registers
 static int wf_scaled;
 
