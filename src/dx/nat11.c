@@ -28,7 +28,7 @@ struct nat_device {
 	nat_caps caps;
 	unsigned samples;
 	ID3D11Texture2D *scene, *resolved, *depth;
-	ID3D11RenderTargetView *scene_rtv;
+	ID3D11RenderTargetView *scene_rtv, *scene_rtv_srgb;
 	ID3D11ShaderResourceView *scene_srv;
 	ID3D11DepthStencilView *depth_dsv;
 	ID3D11Texture2D *backbuffer;
@@ -54,6 +54,7 @@ static void release_targets(nat_device *d)
 		} \
 	} while (0)
 	REL(d->scene_rtv);
+	REL(d->scene_rtv_srgb);
 	REL(d->scene_srv);
 	REL(d->depth_dsv);
 	REL(d->scene);
@@ -87,6 +88,8 @@ static int build_targets(nat_device *d, char *err, size_t err_size)
 	rd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 	rd.ViewDimension = d->samples > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
 	ID3D11Device_CreateRenderTargetView(d->dev, (ID3D11Resource *)d->scene, &rd, &d->scene_rtv);
+	rd.Format = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+	ID3D11Device_CreateRenderTargetView(d->dev, (ID3D11Resource *)d->scene, &rd, &d->scene_rtv_srgb);
 	ID3D11Texture2D *srv_src = d->scene;
 	if (d->samples > 1) {
 		td.SampleDesc.Count = 1;
@@ -324,6 +327,7 @@ void nat_get_size(const nat_device *d, unsigned *w, unsigned *h)
 void *nat_d3d_device(nat_device *d) { return d->dev; }
 void *nat_d3d_context(nat_device *d) { return d->ctx; }
 void *nat_scene_rtv(nat_device *d) { return d->scene_rtv; }
+void *nat_scene_rtv_srgb(nat_device *d) { return d->scene_rtv_srgb; }
 void *nat_scene_dsv(nat_device *d) { return d->depth_dsv; }
 void *nat_scene_srv(nat_device *d) { return d->scene_srv; }
 

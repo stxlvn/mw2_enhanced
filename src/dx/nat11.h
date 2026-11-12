@@ -48,6 +48,7 @@ void nat_get_size(const nat_device *d, unsigned *w, unsigned *h);
 void *nat_d3d_device(nat_device *d);
 void *nat_d3d_context(nat_device *d);
 void *nat_scene_rtv(nat_device *d);
+void *nat_scene_rtv_srgb(nat_device *d); // the same target seen as sRGB (the game's SRGBWRITEENABLE)
 void *nat_scene_dsv(nat_device *d);
 void *nat_scene_srv(nat_device *d); // the scene color as a texture (single sample: resolved first when multisampled)
 void nat_scene_resolve(nat_device *d); // makes nat_scene_srv() current (the game's StretchRect of the scene)
