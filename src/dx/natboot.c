@@ -11,6 +11,7 @@
 #include "../hook.h"
 #include "../log.h"
 #include "../settings.h"
+#include "../console.h"
 #include "natbring.h"
 
 static volatile LONG hits[48];
@@ -190,6 +191,25 @@ static void *w_24df0(void **out, uint64_t size)
 }
 static unsigned w_4f380(void *dev, unsigned slot, unsigned word, unsigned old) { InterlockedIncrement(&hits[45]); (void)dev; (void)slot; (void)old; return word; }
 static void w_39420(void) { InterlockedIncrement(&hits[46]); if (N.created) nbr_targets(&N); }
+// the mod's console panel (src/console.c) over the finished frame: one image, made again when the bitmap's size changes
+static nat_image *overlay_image;
+static unsigned overlay_w, overlay_h;
+static void overlay_show(const uint32_t *bits, int w, int h, int repainted)
+{
+	if (!overlay_image || overlay_w != (unsigned)w || overlay_h != (unsigned)h) {
+		nat_image_destroy(overlay_image);
+		nat_image_desc d = {NAT_IMAGE_2D, (unsigned)w, (unsigned)h, 1, 1, 21 /* A8R8G8B8 */, 0, 0};
+		overlay_image = nat_image_create(N.dev, &d);
+		overlay_w = (unsigned)w;
+		overlay_h = (unsigned)h;
+		repainted = 1;
+	}
+	if (!overlay_image)
+		return;
+	if (repainted)
+		nat_image_upload(overlay_image, 0, 0, bits, (unsigned)w * 4, 0);
+	nd_overlay(N.d, overlay_image);
+}
 static char shot_name[96];
 void natboot_shot(const char *name)
 {
@@ -199,6 +219,21 @@ static void w_45060(unsigned flags)
 { InterlockedIncrement(&hits[47]);
 	if (!N.created || !(flags & 2))
 		return;
+	if (getenv("MW2COOP_NATCON")) { // QA: the console is opened at frame 5000 of the run and closed at 5500
+		static int f;
+		f++;
+		if (f == 5000)
+			console_qa_open(1);
+		if (f == 5100)
+			natboot_shot("natcon");
+		if (f == 5500)
+			console_qa_open(0);
+	}
+	{ // the console panel, when it is open
+		unsigned bw, bh;
+		nat_get_size(N.dev, &bw, &bh);
+		console_native_frame(bw, bh, overlay_show);
+	}
 	if (shot_name[0]) { // !shot <name>
 		char name[96], path[MAX_PATH];
 		lstrcpynA(name, shot_name, sizeof(name));

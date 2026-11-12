@@ -56,6 +56,8 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 typedef struct {
 	int left, top, right, bottom;
 } nd_rect;
+// draws `src` (a whole image, premultiplication not assumed: SRCALPHA / INVSRCALPHA) over the whole scene target: the mod's console panel
+int nd_overlay(nd *d, nat_image *src);
 int nd_stretch(nd *d, nat_image *src, const nd_rect *src_rect, nat_image *dst, const nd_rect *dst_rect, int linear);
 const char *nd_last_error(const nd *d);
 // statistics: state objects and layouts created, shader variants compiled, constant uploads, draws, draws refused

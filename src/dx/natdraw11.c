@@ -198,7 +198,8 @@ struct nd {
 	nat_shader *blit_vs, *blit_ps;
 	ID3D11Buffer *blit_cb;
 	ID3D11SamplerState *blit_smp[2];
-	ID3D11BlendState *blit_blend;
+	ID3D11BlendState *blit_blend, *blit_blend_alpha;
+	int blit_alpha; // nd_overlay: the blit blends by the source's alpha
 	ID3D11RasterizerState *blit_rs;
 	ID3D11DepthStencilState *blit_ds;
 };
@@ -708,7 +709,7 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 		dr = &fd;
 	const int same_rect = sr->right - sr->left == dr->right - dr->left && sr->bottom - sr->top == dr->bottom - dr->top;
 	const int whole = sr->left == 0 && sr->top == 0 && sr->right == (int)sw && sr->bottom == (int)sh && dr->left == 0 && dr->top == 0 && dr->right == (int)dw && dr->bottom == (int)dh;
-	if (same_rect && sfmt == dfmt) {
+	if (same_rect && sfmt == dfmt && !d->blit_alpha) {
 		if (ss > 1 && ds == 1 && whole) {
 			ID3D11DeviceContext_ResolveSubresource(d->ctx, dres, 0, sres, 0, unorm_of(sfmt));
 			return 1;
@@ -738,6 +739,14 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 		D3D11_BLEND_DESC bd = {0};
 		bd.RenderTarget[0].RenderTargetWriteMask = 15;
 		ID3D11Device_CreateBlendState(d->d3d, &bd, &d->blit_blend);
+		bd.RenderTarget[0].BlendEnable = TRUE;
+		bd.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+		bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+		bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+		bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+		bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+		bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+		ID3D11Device_CreateBlendState(d->d3d, &bd, &d->blit_blend_alpha);
 		D3D11_RASTERIZER_DESC rd = {0};
 		rd.FillMode = D3D11_FILL_SOLID;
 		rd.CullMode = D3D11_CULL_NONE;
@@ -756,7 +765,7 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 	D3D11_VIEWPORT vp = {(float)dr->left, (float)dr->top, (float)(dr->right - dr->left), (float)(dr->bottom - dr->top), 0, 1};
 	ID3D11DeviceContext_RSSetViewports(x, 1, &vp);
 	ID3D11DeviceContext_RSSetState(x, d->blit_rs);
-	ID3D11DeviceContext_OMSetBlendState(x, d->blit_blend, NULL, 0xffffffffu);
+	ID3D11DeviceContext_OMSetBlendState(x, d->blit_alpha && d->blit_blend_alpha ? d->blit_blend_alpha : d->blit_blend, NULL, 0xffffffffu);
 	ID3D11DeviceContext_OMSetDepthStencilState(x, d->blit_ds, 0);
 	ID3D11DeviceContext_IASetInputLayout(x, NULL);
 	ID3D11DeviceContext_IASetPrimitiveTopology(x, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -770,6 +779,14 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 	ID3D11ShaderResourceView *none = NULL;
 	ID3D11DeviceContext_PSSetShaderResources(x, 0, 1, &none);
 	return 1;
+}
+
+int nd_overlay(nd *d, nat_image *src)
+{
+	d->blit_alpha = 1;
+	const int ok = nd_stretch(d, src, NULL, NULL, NULL, 1);
+	d->blit_alpha = 0;
+	return ok;
 }
 
 #else

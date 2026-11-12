@@ -7199,6 +7199,73 @@ static void draw_panel(IDirect3DDevice9 *dev, int trace)
 	if (trace) log_printf("console: panel draw complete");
 }
 
+int console_native_frame(unsigned back_width, unsigned back_height, void (*show)(const uint32_t *bits, int w, int h, int repainted))
+{
+	if (!is_open || !show)
+		return 0;
+	if (InterlockedCompareExchange(&panel_draw_busy, 1, 0) != 0)
+		return 0;
+	int drawn = 0;
+	UINT dpi = console_window_dpi(game_window);
+	{
+		LONG previous_dpi = InterlockedExchange(&console_current_dpi, (LONG)dpi);
+		if (previous_dpi != (LONG)dpi)
+			InterlockedExchange(&dirty, 1);
+	}
+	const int w = console_dpi_logical((int)back_width, dpi);
+	const int panel_h = console_dpi_logical(panel_height((int)back_height), dpi);
+	InterlockedExchange(&console_backbuffer_width, w);
+	InterlockedExchange(&console_backbuffer_height, console_dpi_logical((int)back_height, dpi));
+	if (w < 64 || panel_h < 64)
+		goto out;
+	if (!mem_dc) {
+		mem_dc = CreateCompatibleDC(NULL);
+		if (!mem_dc) {
+			log_printf("console: cannot create the panel memory DC");
+			goto out;
+		}
+	}
+	{
+		static DWORD clock_tick;
+		DWORD now = GetTickCount();
+		DWORD repaint_interval = console_watch_count_read() > 0 ? 250u : 1000u;
+		if ((DWORD)(now - clock_tick) >= repaint_interval) {
+			clock_tick = now;
+			InterlockedExchange(&dirty, 1);
+		}
+		if (InterlockedCompareExchange(&console_window_active, 0, 0) && ((now / 500) & 1))
+			InterlockedExchange(&dirty, 1);
+	}
+	int repaint = InterlockedExchange(&dirty, 0) || !dib_bits || dib_w != w || dib_panel_h != panel_h || dib_h != panel_h;
+	if (repaint) {
+		if (!paint(w, panel_h)) {
+			InterlockedExchange(&dirty, 1);
+			if (!dib_bits || dib_w != w || dib_h != panel_h)
+				goto out;
+			repaint = 0;
+		}
+		if (!dib_bits || dib_w != w || dib_h != panel_h) {
+			InterlockedExchange(&dirty, 1);
+			goto out;
+		}
+	}
+	{
+		static int dib_known_w, dib_known_h;
+		static const uint32_t *dib_known;
+		if (dib_known != dib_bits || dib_known_w != w || dib_known_h != dib_h) { // a new bitmap: the caller uploads it
+			dib_known = dib_bits;
+			dib_known_w = w;
+			dib_known_h = dib_h;
+			repaint = 1;
+		}
+	}
+	show(dib_bits, w, dib_h, repaint);
+	drawn = 1;
+out:
+	InterlockedExchange(&panel_draw_busy, 0);
+	return drawn;
+}
+
 // Called by native.c's Present hooks after native frame composition: once per presented frame, on the render thread.
 // Which of the three hooks the game really goes through is the first one that calls.
 void console_present(int via, void *devp)
@@ -7535,6 +7602,11 @@ static DWORD WINAPI setup_thread(LPVOID unused)
 		Sleep(250);
 	}
 	return 0;
+}
+
+void console_qa_open(int open)
+{
+	set_open(open);
 }
 
 static void condump_f(void)

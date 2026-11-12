@@ -16,3 +16,7 @@ void console_print(const char *text);
 // native.c's Present hooks call this after the final back-buffer composition (render thread).
 // The panel is drawn only for a frame that will actually be presented.
 void console_present(int via, void *device);
+// The native renderer's frame hook (src/dx/natboot.c, once per frame on the render thread, before the present): when the console is open, repaints the panel bitmap if it changed and hands it to
+// `show` (a 32-bit B8G8R8A8 bitmap of w x h pixels, `repainted` = it differs from the last call), which draws it over the whole back buffer. Returns 1 when the panel is to be drawn.
+void console_qa_open(int open); // QA: opens / closes the panel without the key
+int console_native_frame(unsigned back_width, unsigned back_height, void (*show)(const uint32_t *bits, int w, int h, int repainted));
