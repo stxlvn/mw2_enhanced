@@ -240,8 +240,8 @@ void settings_load(void)
 		hdr_peak = hdr_white > 600 ? hdr_white : 600;
 	atoc_on = GetPrivateProfileIntA("display", "atoc", 1, path) != 0;
 	msaa_force = (int)GetPrivateProfileIntA("display", "msaa", 0, path);
-	if (msaa_force != 2 && msaa_force != 4 && msaa_force != 8)
-		msaa_force = msaa_force == 1 ? 1 : 0;
+	if (msaa_force != 2 && msaa_force != 4 && msaa_force != 8) // (the Enhanced page's slider gives any number: down to 2, 4 or 8)
+		msaa_force = msaa_force == 1 ? 1 : msaa_force < 0 || msaa_force > 8 ? 0 : msaa_force >= 5 ? 4 : msaa_force >= 2 ? 2 : 0;
 	aniso_level = (int)GetPrivateProfileIntA("display", "aniso", 0, path);
 	if (aniso_level < 2)
 		aniso_level = 0;

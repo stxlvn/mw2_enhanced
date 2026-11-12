@@ -46,7 +46,8 @@
 #define ITEM_TEXT_ALIGN (ITEM_FONT + 4)
 #define ITEM_TEXT_ALIGN_X (ITEM_FONT + 8)
 #define ALIGN_MIDDLE_LEFT 4
-#define ROW_H 18.0f	// the rows of the page are this far apart (the game's pages use 20; this page has more rows than fit above Back at 20)
+#define ROW_H 18.0f	// the rows of the page are this far apart at most (the game's pages use 20; this page has more rows than fit above Back at 20)
+#define PAGE_H 345.0f // the height the rows, the group names and the gaps between groups may fill; with more rows the row distance shrinks
 #define GROUP_GAP 6.0f // extra space before a group's name
 #define SLIDER_BAR_W 96.0f // the drawn bar of the game's slider is about this wide (units; its rectangle is wider, 344 here), measured on 1920 x 1080
 #define DVAR_ARCHIVE 1
@@ -89,6 +90,12 @@ static const opt_t opts[] = {
     {"mw2coop_opt_falldmg", "@MW2COOP_ENH_FALLDMG", K_YESNO, 0, 1, 0, "gameplay", "fall_damage", 1, LIVE_FALL, 0, "Enhanced: fall damage in a co-op session", GROUP_COOP},
 #ifdef _WIN64
     {"mw2coop_opt_directx", "@MW2COOP_ENH_DIRECTX", K_DIRECTX, 0, 4, 0, "display", NULL, 1, LIVE_NONE, 1, "Enhanced: DirectX version, 0 = 9 (the game's own), 1 = 9Ex ([display] d3d9ex), 2 = 12 (Direct3D 9 on the Direct3D 12 layer, [display] d3d9on12; FSR 3 and DLSS need it), 3 = 11 (the mod's own Direct3D 11 renderer, experimental: [display] directx11; no console overlay, screenshots or upscalers yet) (next start)", GROUP_WINDOW},
+#endif
+#ifdef _WIN64
+    {"mw2coop_opt_msaa", "@MW2COOP_ENH_MSAA", K_SLIDER, 0, 8, 0, "display", "msaa", 1, LIVE_NONE, 1, "Enhanced: native DirectX 11 / 12 anti-aliasing samples, 0 = the game's own setting, 1 = off, 2 / 4 / 8 (next start)", GROUP_WINDOW},
+    {"mw2coop_opt_aniso", "@MW2COOP_ENH_ANISO", K_SLIDER, 0, 16, 0, "display", "aniso", 1, LIVE_NONE, 1, "Enhanced: native DirectX 11 / 12 anisotropic filtering, 0 = the game's own setting, 2-16 = that level (next start)", GROUP_WINDOW},
+    {"mw2coop_opt_hdr", "@MW2COOP_ENH_HDR", K_YESNO, 0, 1, 0, "display", "hdr", 1, LIVE_NONE, 1, "Enhanced: HDR output (native DirectX 11 / 12, a monitor with HDR on in Windows) (next start)", GROUP_WINDOW},
+    {"mw2coop_opt_lowlat", "@MW2COOP_ENH_LOWLAT", K_YESNO, 0, 1, 0, "display", "lowlatency", 1, LIVE_NONE, 1, "Enhanced: low latency presenting (native DirectX 11 / 12) (next start)", GROUP_WINDOW},
 #endif
     {"mw2coop_opt_borderless", "@MW2COOP_ENH_BORDERLESS", K_YESNO, 0, 1, 1, "display", "borderless", 1, LIVE_NONE, 1, "Enhanced: full screen as a borderless window (next start)", GROUP_WINDOW},
     {"mw2coop_opt_darktitle", "@MW2COOP_ENH_DARKTITLE", K_YESNO, 0, 1, 1, "display", "darktitle", 1, LIVE_NONE, 1, "Enhanced: dark title bar (next start)", GROUP_WINDOW},
@@ -409,7 +416,19 @@ static void add_page(void)
 	const float slider_dy = *(float *)(slider + ITEM_RECT_Y) - *(float *)(slider_label + ITEM_RECT_Y);
 	void *click = ui_script_set("\"play\" \"mouse_click\" ; ");
 	int used_slider = 0, used_yesno = 0, used_label = 0, rows = 0;
-	float y = 28.0f; // the next row's top: the rows are 20 units apart, a group starts 8 units lower than the end of the one above
+	int lines = 0, groups_used = 0; // the rows and group names the page will have: the row distance is chosen from them
+	for (int g = 0; g < GROUPS; g++) {
+		int has = 0;
+		for (int o = 0; o < OPTS; o++)
+			if (opts[o].group == g)
+				has++, lines++;
+		if (has)
+			lines++, groups_used++;
+	}
+	float rh = ROW_H;
+	if (lines > 0 && (lines * ROW_H + (groups_used - 1) * GROUP_GAP) > PAGE_H)
+		rh = (PAGE_H - (groups_used - 1) * GROUP_GAP) / (float)lines;
+	float y = 28.0f; // the next row's top: the rows are rh units apart, a group starts GROUP_GAP units lower than the end of the one above
 	for (int g = 0; g < GROUPS; g++) {
 		int first = 1;
 		for (int o = 0; o < OPTS; o++) {
@@ -452,7 +471,7 @@ static void add_page(void)
 				color[0] = 1.0f, color[1] = 0.82f, color[2] = 0.3f, color[3] = 1.0f;
 				place(head, y);
 				list[n++] = head;
-				y += ROW_H;
+				y += rh;
 			}
 			place(control, t->kind == K_SLIDER ? y + slider_dy : y);
 			place(text, y);
@@ -477,7 +496,7 @@ static void add_page(void)
 				list[n++] = tag;
 			}
 			rows++;
-			y += ROW_H;
+			y += rh;
 		}
 	}
 	for (int i = title_at + 1; i < count; i++) { // the Back items stay
