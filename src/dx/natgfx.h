@@ -53,6 +53,8 @@ void ng_apply_ps_args(ng_state *s, const ng_ops *ops, void *input, void *state, 
 void ng_apply_object_args(ng_state *s, const ng_ops *ops, void *input, void *state, const void *args, unsigned count);
 // 0x54220: only the code vertex constants (type 3) of a list (the sort-key draws call it with the pass's stable list when the key changed)
 void ng_apply_code_vc_args(ng_state *s, const ng_ops *ops, void *input, void *state, const void *args, unsigned count);
+// 0x543b0: the vertex-side stable arguments (types 0-4) of a list the caller passes
+void ng_apply_vs_stable_args(ng_state *s, const ng_ops *ops, void *input, void *state, const void *args, unsigned count);
 // 0x53d00: the per-object arguments of the current pass (code vertex constants and code samplers)
 void ng_apply_object(ng_state *s, const ng_ops *ops, void *input, void *state);
 // 0x53f10: the per-primitive arguments of the current pass (code vertex constants)

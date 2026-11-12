@@ -223,3 +223,8 @@ void ng_apply_code_vc_args(ng_state *s, const ng_ops *ops, void *input, void *st
 {
 	apply_args(s, ops, input, state, args, count, 1u << A_CODE_VC);
 }
+
+void ng_apply_vs_stable_args(ng_state *s, const ng_ops *ops, void *input, void *state, const void *args, unsigned count)
+{
+	apply_args(s, ops, input, state, args, count, 0x1f);
+}

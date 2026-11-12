@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 LLVM_MINGW=${LLVM_MINGW:-../tools/llvm-mingw/llvm-mingw-20261006-ucrt-x86_64}
 CC="$LLVM_MINGW/bin/x86_64-w64-mingw32-clang"
 SRC="src/main.c src/d3dcap.c src/log.c src/proxy.c src/hooks.c src/hook.c src/game.c src/control.c src/discord.c src/crash.c src/scripts.c src/localize.c src/memdump.c src/menus.c src/mirror.c src/transplant.c src/access.c src/settings.c src/inimerge.c src/inisync.c src/voicefix.c src/upnp.c src/steamnet.c src/firewall.c src/zones.c src/missions.c src/menutable.c src/logo.c src/ctexts.c src/addr.c src/net.c src/netguard.c src/fonts.c src/devices.c src/console.c src/native.c src/guards.c src/climbads.c src/window.c
-	src/party.c src/progress.c src/scrdebug.c src/scrdebug_stack.c src/shot.c src/fov.c src/padicon.c src/padopts.c src/gfxopts.c src/enhopts.c src/upscale.c src/fsr3.c src/padglyphs.c src/rawinput.c src/weaponfov.c src/ctxdiff.c src/inputlog.c src/loadprof.c src/rumble.c src/dx/state11.c src/dx/stateprobe.c src/dx/sm3.c src/dx/mirror11.c src/dx/d3dcallers.c src/dx/natgfx.c src/dx/natcheck.c src/winmm_stubs.S src/winmm.def"
+	src/party.c src/progress.c src/scrdebug.c src/scrdebug_stack.c src/shot.c src/fov.c src/padicon.c src/padopts.c src/gfxopts.c src/enhopts.c src/upscale.c src/fsr3.c src/padglyphs.c src/rawinput.c src/weaponfov.c src/ctxdiff.c src/inputlog.c src/loadprof.c src/rumble.c src/dx/state11.c src/dx/stateprobe.c src/dx/sm3.c src/dx/mirror11.c src/dx/d3dcallers.c src/dx/natgfx.c src/dx/natcheck.c src/dx/natdraw11.c src/dx/nat11.c src/dx/natdrawfn.c src/dx/natdrawfn2.c src/dx/natres.c src/dx/natres2.c src/dx/natres3.c src/dx/natstart.c src/dx/natframe.c src/dx/natframe2.c src/dx/natbring.c src/dx/natboot.c src/winmm_stubs.S src/winmm.def"
 if [ "$1" = x86 ]; then
 	STRIP=; { [ "$2" = release ] || [ "$3" = release ]; } && STRIP=-s   # release: stripped, no local paths in the DLL
 	# the 32-bit build of the game (see docs/32bit-plan.md): only the first slice is ported so far
@@ -23,9 +23,9 @@ if [ "$1" = x86 ]; then
 fi
 mkdir -p build
 if [ "$1" = release ]; then
-	"$CC" -O2 -Wall -Wextra -shared -static -static-libgcc -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -s -o build/winmm.dll $SRC -lws2_32 -liphlpapi -lgdi32 -lshell32
+	"$CC" -O2 -Wall -Wextra -shared -static -static-libgcc -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -s -o build/winmm.dll $SRC -lws2_32 -liphlpapi -lgdi32 -lshell32 -ld3d11 -ldxgi -luuid
 else
-	"$CC" -O2 -g -Wall -Wextra -shared -static -static-libgcc -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -o build/winmm.dll $SRC -lws2_32 -liphlpapi -lgdi32 -lshell32 \
+	"$CC" -O2 -g -Wall -Wextra -shared -static -static-libgcc -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -o build/winmm.dll $SRC -lws2_32 -liphlpapi -lgdi32 -lshell32 -ld3d11 -ldxgi -luuid \
 		-Wl,--pdb=build/winmm.pdb
 fi
 echo "built build/winmm.dll${1:+ ($1)}"

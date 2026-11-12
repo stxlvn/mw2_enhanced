@@ -52,12 +52,12 @@ int main(void)
 	c.desktop_w = 1920;
 	c.desktop_h = 1080;
 	ngs_caps_globals(&s, &c);
-	CHECK(U32(exe, 0x113748) == 16 && U32(exe, 0x115b00) == 6 && U32(exe, 0x113744) == 16384 && U32(exe, 0x115afc) == 16, "capped caps");
-	CHECK(exe[0x11374c] == 1 && exe[0x115af8] == 1 && exe[0x115af9] == 1 && exe[0x115b15] == 1 && exe[0x115b16] == 1 && exe[0x115b17] == 0, "flags");
-	CHECK(exe[0x115b04] == 1 && U32(exe, 0x115b08) == 0x4b && U32(exe, 0x115b0c) == 0x4c4c554e && U32(exe, 0x115b10) == 2 && exe[0x115b14] == 0x62 && U32(exe, 0x10fd40) == 0x4b, "shadow format decision, success case");
+	CHECK(U32(exe, 0x4113748) == 16 && U32(exe, 0x4115b00) == 6 && U32(exe, 0x4113744) == 16384 && U32(exe, 0x4115afc) == 16, "capped caps");
+	CHECK(exe[0x411374c] == 1 && exe[0x4115af8] == 1 && exe[0x4115af9] == 1 && exe[0x4115b15] == 1 && exe[0x4115b16] == 1 && exe[0x4115b17] == 0, "flags");
+	CHECK(exe[0x4115b04] == 1 && U32(exe, 0x4115b08) == 0x4b && U32(exe, 0x4115b0c) == 0x4c4c554e && U32(exe, 0x4115b10) == 2 && exe[0x4115b14] == 0x62 && U32(exe, 0x410fd40) == 0x4b, "shadow format decision, success case");
 	c.hw_shadow_depth = 0;
 	ngs_caps_globals(&s, &c);
-	CHECK(exe[0x115b04] == 0 && U32(exe, 0x115b0c) == 0x4d && U32(exe, 0x115b08) == 0x72 && U32(exe, 0x115b10) == 3 && exe[0x115b14] == 0x61, "shadow format decision, fallback");
+	CHECK(exe[0x4115b04] == 0 && U32(exe, 0x4115b0c) == 0x4d && U32(exe, 0x4115b08) == 0x72 && U32(exe, 0x4115b10) == 3 && exe[0x4115b14] == 0x61, "shadow format decision, fallback");
 
 	// display globals: the aspect dvar struct (value at +0x10) and the float constants
 	static int dvar_aspect[8];
@@ -71,18 +71,18 @@ int main(void)
 	F32(exe, 0x385a54) = 1.0f;
 	dvar_aspect[4] = 0; // auto
 	ngs_display_globals(&s, &c, 1, 1280, 720, 1280, 720);
-	CHECK(F32(exe, 0x113738) == 1.7777f && U32(exe, 0x113728) == 1280 && U32(exe, 0x11372c) == 720 && U32(exe, 0x113734) == 1, "auto aspect 16:9 (%g)", F32(exe, 0x113738));
-	CHECK(F32(exe, 0x113740) == 1.0f && dvar_calls == 1, "windowed pixel ratio / dvar call");
-	CHECK(U32(exe, 0x10fd30) == 1920 && U32(exe, 0x10fd34) == 1080 && exe[0x10fd2c] == 1, "monitor size");
+	CHECK(F32(exe, 0x4113738) == 1.7777f && U32(exe, 0x4113728) == 1280 && U32(exe, 0x411372c) == 720 && U32(exe, 0x4113734) == 1, "auto aspect 16:9 (%g)", F32(exe, 0x4113738));
+	CHECK(F32(exe, 0x4113740) == 1.0f && dvar_calls == 1, "windowed pixel ratio / dvar call");
+	CHECK(U32(exe, 0x410fd30) == 1920 && U32(exe, 0x410fd34) == 1080 && exe[0x410fd2c] == 1, "monitor size");
 	ngs_display_globals(&s, &c, 1, 1280, 800, 1280, 800);
-	CHECK(F32(exe, 0x113738) == 1.6f, "auto aspect 16:10");
+	CHECK(F32(exe, 0x4113738) == 1.6f, "auto aspect 16:10");
 	ngs_display_globals(&s, &c, 1, 1024, 768, 1024, 768);
-	CHECK(F32(exe, 0x113738) == 1.3333f, "auto aspect 4:3");
+	CHECK(F32(exe, 0x4113738) == 1.3333f, "auto aspect 4:3");
 	ngs_display_globals(&s, &c, 0, 1024, 768, 1024, 768); // full screen takes the monitor's ratio (16:9)
-	CHECK(F32(exe, 0x113738) == 1.7777f && F32(exe, 0x113740) > 0.99f && F32(exe, 0x113740) < 1.01f, "full screen: aspect of the monitor (%g, %g)", F32(exe, 0x113738), F32(exe, 0x113740));
+	CHECK(F32(exe, 0x4113738) == 1.7777f && F32(exe, 0x4113740) > 0.99f && F32(exe, 0x4113740) < 1.01f, "full screen: aspect of the monitor (%g, %g)", F32(exe, 0x4113738), F32(exe, 0x4113740));
 	dvar_aspect[4] = 2;
 	ngs_display_globals(&s, &c, 1, 1280, 720, 1280, 720);
-	CHECK(F32(exe, 0x113738) == 1.6f, "forced 16:10");
+	CHECK(F32(exe, 0x4113738) == 1.6f, "forced 16:10");
 	// memory setup: a card above both thresholds on a roomy machine keeps level 0; a small one raises the levels
 	{
 		static uint8_t dv[5][0x20];
@@ -92,8 +92,8 @@ int main(void)
 		*(void **)(exe + 0x41162b0) = dv[3];
 		*(void **)(exe + 0x4116358) = dv[4];
 		dv[4][0x10] = 1; // no limit flag set
-		U32(exe, 0x115ae4) = 1024;
-		U32(exe, 0x115ae8) = 512;
+		U32(exe, 0x4115ae4) = 1024;
+		U32(exe, 0x4115ae8) = 512;
 		ngs_memory_setup(&s, 6144, 16384, 8192, on_mem);
 		CHECK(U32(exe, 0x481b818) == 0 && U32(exe, 0x481b81c) == 0 && U32(exe, 0x481b820) == 0 && U32(exe, 0x48c2c94) == 6144 && mem_calls == 3, "roomy machine: levels %u %u %u", U32(exe, 0x481b818), U32(exe, 0x481b81c), U32(exe, 0x481b820));
 		ngs_memory_setup(&s, 256, 16384, 8192, on_mem); // the maximum only grows: 6144 stays

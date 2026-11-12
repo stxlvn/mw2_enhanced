@@ -34,6 +34,16 @@ typedef struct {
 	unsigned vram_mb; // dedicated video memory of the adapter
 } nat_caps;
 
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ before a device exists
+typedef struct {
+	unsigned w, h, hz;
+} nat_mode;
+// the display modes (32-bit colour, as the game lists them) of output `output` of the first adapter, unsorted, refresh rate in whole Hz (0 when the driver gives none); returns the count (at most max)
+int nat_list_modes(int output, nat_mode *out, int max);
+// the HMONITOR of that output (NULL when it does not exist) and the number of outputs
+void *nat_output_monitor(int output);
+int nat_output_count(void);
+
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ device
 int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size);
 void nat_destroy(nat_device *d);
@@ -43,6 +53,8 @@ int nat_reset(nat_device *d, const nat_params *p, char *err, size_t err_size);
 // resolves the scene to the back buffer and presents; 0 = shown, 1 = occluded (nothing to do), -1 = device lost / removed
 int nat_present(nat_device *d);
 void nat_get_size(const nat_device *d, unsigned *w, unsigned *h);
+// QA: the scene as a BMP file (resolved when multisampled); 1 on success
+int nat_save_scene_bmp(nat_device *d, const char *path);
 
 // the raw interfaces, for the back end's own draw code (void * so that this header stays free of the Direct3D headers): ID3D11Device, ID3D11DeviceContext, the scene's color target view
 // (multisampled when msaa > 1), the scene's depth view (D24S8, same size and sample count)

@@ -3,7 +3,6 @@
 
 #ifdef _WIN32
 #define COBJMACROS
-#define INITGUID
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
@@ -736,5 +735,136 @@ int nat_set_gamma(nat_device *d, const uint16_t ramp[3][256])
 	const HRESULT hr = IDXGIOutput_SetGammaControl(out, &gc);
 	IDXGIOutput_Release(out);
 	return SUCCEEDED(hr);
+}
+#endif
+
+#ifdef _WIN32
+int nat_list_modes(int output, nat_mode *out, int max)
+{
+	IDXGIFactory *fac = NULL;
+	IDXGIAdapter *ad = NULL;
+	IDXGIOutput *o = NULL;
+	int n = 0;
+	if (FAILED(CreateDXGIFactory(&IID_IDXGIFactory, (void **)&fac)) || FAILED(IDXGIFactory_EnumAdapters(fac, 0, &ad)) || FAILED(IDXGIAdapter_EnumOutputs(ad, (UINT)output, &o)))
+		goto done;
+	{
+		UINT count = 0;
+		IDXGIOutput_GetDisplayModeList(o, DXGI_FORMAT_B8G8R8A8_UNORM, 0, &count, NULL);
+		DXGI_MODE_DESC *m = calloc(count ? count : 1, sizeof(*m));
+		if (m && SUCCEEDED(IDXGIOutput_GetDisplayModeList(o, DXGI_FORMAT_B8G8R8A8_UNORM, 0, &count, m))) {
+			for (UINT i = 0; i < count && n < max; i++) {
+				out[n].w = m[i].Width;
+				out[n].h = m[i].Height;
+				out[n].hz = m[i].RefreshRate.Denominator ? (m[i].RefreshRate.Numerator + m[i].RefreshRate.Denominator / 2) / m[i].RefreshRate.Denominator : 0;
+				n++;
+			}
+		}
+		free(m);
+	}
+done:
+	if (o)
+		IDXGIOutput_Release(o);
+	if (ad)
+		IDXGIAdapter_Release(ad);
+	if (fac)
+		IDXGIFactory_Release(fac);
+	return n;
+}
+
+void *nat_output_monitor(int output)
+{
+	IDXGIFactory *fac = NULL;
+	IDXGIAdapter *ad = NULL;
+	IDXGIOutput *o = NULL;
+	void *mon = NULL;
+	if (SUCCEEDED(CreateDXGIFactory(&IID_IDXGIFactory, (void **)&fac)) && SUCCEEDED(IDXGIFactory_EnumAdapters(fac, 0, &ad)) && SUCCEEDED(IDXGIAdapter_EnumOutputs(ad, (UINT)output, &o))) {
+		DXGI_OUTPUT_DESC od;
+		if (SUCCEEDED(IDXGIOutput_GetDesc(o, &od)))
+			mon = od.Monitor;
+	}
+	if (o)
+		IDXGIOutput_Release(o);
+	if (ad)
+		IDXGIAdapter_Release(ad);
+	if (fac)
+		IDXGIFactory_Release(fac);
+	return mon;
+}
+
+int nat_output_count(void)
+{
+	IDXGIFactory *fac = NULL;
+	IDXGIAdapter *ad = NULL;
+	int n = 0;
+	if (SUCCEEDED(CreateDXGIFactory(&IID_IDXGIFactory, (void **)&fac)) && SUCCEEDED(IDXGIFactory_EnumAdapters(fac, 0, &ad))) {
+		IDXGIOutput *o = NULL;
+		while (SUCCEEDED(IDXGIAdapter_EnumOutputs(ad, (UINT)n, &o))) {
+			IDXGIOutput_Release(o);
+			n++;
+		}
+	}
+	if (ad)
+		IDXGIAdapter_Release(ad);
+	if (fac)
+		IDXGIFactory_Release(fac);
+	return n;
+}
+#endif
+
+#ifdef _WIN32
+int nat_save_scene_bmp(nat_device *d, const char *path)
+{
+	D3D11_TEXTURE2D_DESC td = {0};
+	td.Width = d->p.width;
+	td.Height = d->p.height;
+	td.MipLevels = 1;
+	td.ArraySize = 1;
+	td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+	td.SampleDesc.Count = 1;
+	td.Usage = D3D11_USAGE_STAGING;
+	td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	ID3D11Texture2D *st = NULL;
+	if (FAILED(ID3D11Device_CreateTexture2D(d->dev, &td, NULL, &st)))
+		return 0;
+	ID3D11Texture2D *src = d->scene;
+	ID3D11Texture2D *tmp = NULL;
+	if (d->samples > 1) {
+		D3D11_TEXTURE2D_DESC rd = td;
+		rd.Usage = D3D11_USAGE_DEFAULT;
+		rd.CPUAccessFlags = 0;
+		rd.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS;
+		if (SUCCEEDED(ID3D11Device_CreateTexture2D(d->dev, &rd, NULL, &tmp))) {
+			ID3D11DeviceContext_ResolveSubresource(d->ctx, (ID3D11Resource *)tmp, 0, (ID3D11Resource *)d->scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
+			src = tmp;
+		}
+	}
+	ID3D11DeviceContext_CopyResource(d->ctx, (ID3D11Resource *)st, (ID3D11Resource *)src);
+	D3D11_MAPPED_SUBRESOURCE m;
+	int ok = 0;
+	if (SUCCEEDED(ID3D11DeviceContext_Map(d->ctx, (ID3D11Resource *)st, 0, D3D11_MAP_READ, 0, &m))) {
+		FILE *f = fopen(path, "wb");
+		if (f) {
+			const unsigned w = d->p.width, h = d->p.height;
+			uint8_t hdr[54] = {'B', 'M'};
+			const uint32_t size = 54 + w * h * 4, off = 54, dib = 40, planes_bpp = 1 | 32u << 16;
+			memcpy(hdr + 2, &size, 4);
+			memcpy(hdr + 10, &off, 4);
+			memcpy(hdr + 14, &dib, 4);
+			memcpy(hdr + 18, &w, 4);
+			const int32_t nh = -(int32_t)h;
+			memcpy(hdr + 22, &nh, 4);
+			memcpy(hdr + 26, &planes_bpp, 4);
+			fwrite(hdr, 1, 54, f);
+			for (unsigned y = 0; y < h; y++)
+				fwrite((uint8_t *)m.pData + (size_t)y * m.RowPitch, 4, w, f);
+			fclose(f);
+			ok = 1;
+		}
+		ID3D11DeviceContext_Unmap(d->ctx, (ID3D11Resource *)st, 0);
+	}
+	if (tmp)
+		ID3D11Texture2D_Release(tmp);
+	ID3D11Texture2D_Release(st);
+	return ok;
 }
 #endif

@@ -9,6 +9,7 @@
 #include "control.h"
 #include "crash.h"
 #include "d3dcap.h"
+#include "dx/natboot.h"
 #include "firewall.h"
 #include "devices.h"
 #include "console.h"
@@ -130,6 +131,7 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved)
 	log_printf("main: %04d-%02d-%02d, attached to %s, image base %p, pid %lu", day.wYear, day.wMonth, day.wDay, exe,
 		   (void *)base, GetCurrentProcessId());
 
+	natboot_install(); // MW2COOP_NATIVE11=1: the native renderer in place of the Direct3D 9 back end
 	d3dcap_install(); // [display] d3d9ex: the exe's import of Direct3DCreate9 is pointed at the extended Direct3D 9 before the game creates its device
 	if (!proxy_init()) {
 		log_printf("main: could not load the real winmm.dll");

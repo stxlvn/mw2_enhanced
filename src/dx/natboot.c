@@ -1,0 +1,353 @@
+// MW2COOP_NATIVE11=1 (64-bit retail exe): installs the native renderer in place of the game's Direct3D 9 back end (docs/native-dx-plan.md, M5). The rewritten functions are redirected with
+// hook_jump (the originals never run); the device the game believes it has is a tripwire object whose every method logs "unrewritten Direct3D 9 method #slot called from rva ..." and returns 0, so
+// that a run shows exactly which function still has to be rewritten. No Direct3D 9 object is created.
+#include "natboot.h"
+
+#ifdef _WIN64
+#include <windows.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "../hook.h"
+#include "../log.h"
+#include "natbring.h"
+
+static volatile LONG hits[48];
+static const char *const hit_names[48] = {"w_54a10","w_54940","w_54070","w_543b0","w_53d00","w_53f10","w_54220","w_50a20","w_50b10","w_50c60","w_3cc00","w_50ec0","w_515a0","w_26730","w_54820","w_54b30","w_504d0","w_51070","w_26840","w_399f0","w_5c960","w_5cc10","w_5f220","w_5fe50","w_63850","w_3ec20","w_5da10","w_5dde0","w_63f50","w_266a0","w_267b0","w_267e0","w_26810","w_492d0","w_49170","w_23920","w_8f60","w_258a0","w_24f00","w_44d00","w_453c0","w_10410","w_45010","w_2f800","w_10de0","w_4f380","w_39420","w_45060"};
+static nbr N;
+static uint8_t *exe;
+
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ the tripwire object
+#define TRAP_SLOTS 128
+static void *trap_vtable[TRAP_SLOTS];
+static void *trap_object[2] = {trap_vtable, NULL};
+static struct {
+	unsigned slot;
+	uintptr_t ret;
+	volatile LONG count;
+} seen[256];
+static volatile LONG n_seen;
+
+static void trap_log(unsigned slot, uintptr_t ret)
+{
+	const uintptr_t rva = ret - (uintptr_t)exe;
+	for (LONG i = 0; i < n_seen && i < 256; i++)
+		if (seen[i].slot == slot && seen[i].ret == rva) {
+			InterlockedIncrement(&seen[i].count);
+			return;
+		}
+	const LONG k = InterlockedIncrement(&n_seen) - 1;
+	if (k < 256) {
+		seen[k].slot = slot;
+		seen[k].ret = rva;
+		seen[k].count = 1;
+		log_printf("native11: unrewritten Direct3D 9 method #%u called from rva 0x%llx", slot, (unsigned long long)rva);
+	}
+}
+
+static void make_traps(void)
+{
+	static const uint8_t pro[] = {0x51, 0x52, 0x41, 0x50, 0x41, 0x51, 0x48, 0x83, 0xec, 0x28}; // push rcx, rdx, r8, r9; sub rsp, 28h
+	uint8_t *page = VirtualAlloc(NULL, 65536, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+	size_t used = 0;
+	for (unsigned s = 0; s < TRAP_SLOTS; s++) {
+		uint8_t *p = page + used, *q = p;
+		memcpy(q, pro, sizeof(pro));
+		q += sizeof(pro);
+		*q++ = 0xb9; // mov ecx, slot
+		memcpy(q, &s, 4);
+		q += 4;
+		*q++ = 0x48; *q++ = 0x8b; *q++ = 0x54; *q++ = 0x24; *q++ = 0x48; // mov rdx, [rsp+48h]
+		*q++ = 0x48; *q++ = 0xb8; // mov rax, trap_log
+		void *fn = (void *)trap_log;
+		memcpy(q, &fn, 8);
+		q += 8;
+		*q++ = 0xff; *q++ = 0xd0; // call rax
+		*q++ = 0x48; *q++ = 0x83; *q++ = 0xc4; *q++ = 0x28; // add rsp, 28h
+		*q++ = 0x41; *q++ = 0x59; *q++ = 0x41; *q++ = 0x58; *q++ = 0x5a; *q++ = 0x59; // pop r9, r8, rdx, rcx
+		*q++ = 0x31; *q++ = 0xc0; // xor eax, eax
+		*q++ = 0xc3;              // ret
+		trap_vtable[s] = p;
+		used += (size_t)(q - p + 15) & ~15u;
+	}
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ wrappers (the game's calling conventions)
+#define CTX(c) ((void **)(c))[0], ((void **)(c))[1]
+
+static void w_54a10(void *ctx, unsigned pass) { InterlockedIncrement(&hits[0]); ng_select_pass(&N.g, &N.gops, ((void **)ctx)[0], ((void **)ctx)[1], pass); }
+static void w_54940(void *state) { InterlockedIncrement(&hits[1]); ng_apply_decl_shader(&N.g, &N.gops, state); }
+static void w_54070(void *ctx, int count, void *args) { InterlockedIncrement(&hits[2]); ng_apply_ps_args(&N.g, &N.gops, CTX(ctx), args, (unsigned)count); }
+static void w_543b0(void *ctx, int count, void *args) { InterlockedIncrement(&hits[3]); ng_apply_vs_stable_args(&N.g, &N.gops, CTX(ctx), args, (unsigned)count); }
+static void w_53d00(void *ctx, int count, void *args) { InterlockedIncrement(&hits[4]); ng_apply_object_args(&N.g, &N.gops, CTX(ctx), args, (unsigned)count); }
+static void w_53f10(void *ctx) { InterlockedIncrement(&hits[5]); ng_apply_prim(&N.g, &N.gops, CTX(ctx)); }
+static void w_54220(void *ctx, int count, void *args) { InterlockedIncrement(&hits[6]); ng_apply_code_vc_args(&N.g, &N.gops, CTX(ctx), args, (unsigned)count); }
+static void w_50a20(void *ctx, unsigned slot, uint8_t byte, void *image) { InterlockedIncrement(&hits[7]); ng_bind_sampler(&N.g, &N.gops, slot, byte, image); (void)ctx; }
+static void w_50b10(void *state, unsigned slot, uint8_t byte) { InterlockedIncrement(&hits[8]); ng_set_sampler_state(&N.g, &N.gops, slot, byte); (void)state; }
+static void w_50c60(void *state, int *vp) { InterlockedIncrement(&hits[9]); if (!N.created) return; ngf_set_viewport(&N.f, state, vp); }
+static void w_3cc00(void *state, int flag) { InterlockedIncrement(&hits[10]); if (!N.created) return; ngf_depth_range(&N.f, state, flag); }
+static void w_50ec0(void *ctx, int target) { InterlockedIncrement(&hits[11]); if (!N.created) return; ngf_target_switch(&N.f, ((void **)ctx)[0], ((void **)ctx)[1], target); }
+static void w_515a0(void *state, int *rect) { InterlockedIncrement(&hits[12]); if (!N.created) return; ngf_set_scissor(&N.f, state, rect); }
+static void w_26730(void *dev, void *buf, int off, int stride) { InterlockedIncrement(&hits[13]); if (!N.created) return; ngf_set_streams(&N.f, (uint8_t *)dev - 0xd0, buf, off, stride); }
+static int w_54820(void *dev, void *src, int tris) { InterlockedIncrement(&hits[14]); return ngf_ring_indices(&N.f, (uint8_t *)dev - 0xd0, src, tris); }
+static int w_54b30(void *a, void *src, int count) { InterlockedIncrement(&hits[15]); (void)a; return ngf_ring_vertices(&N.f, src, count); }
+static void w_504d0(void *dev) { InterlockedIncrement(&hits[16]); if (!N.created) return; ngf_clear_streams(&N.f, (uint8_t *)dev - 0xd0); }
+static void w_51070(void *dev, uint8_t flags, float *rgba, float depth, uint8_t stencil) { InterlockedIncrement(&hits[17]); if (!N.created) return; (void)dev; ngf_clear(&N.f, flags, rgba, depth, stencil); }
+static void w_26840(void *ctx, int *cmd) { InterlockedIncrement(&hits[18]); if (!N.created) return; ngf_draw_26840(&N.f, ctx, cmd); }
+static void w_399f0(void *ctx, void *material, void *info) { InterlockedIncrement(&hits[19]); if (!N.created) return; ngf_draw_399f0(&N.f, ctx, material, info); }
+static void w_5c960(void *ctx, uintptr_t *cur) { InterlockedIncrement(&hits[20]); if (!N.created) return; ngf_draw_5c960(&N.f, ctx, cur); }
+static void w_5cc10(void *ctx, uintptr_t *cur) { InterlockedIncrement(&hits[21]); if (!N.created) return; ngf_draw_5cc10(&N.f, ctx, cur); }
+static void w_5f220(void *ctx, uintptr_t *cur) { InterlockedIncrement(&hits[22]); if (!N.created) return; ngf_draw_5f220(&N.f, ctx, cur); }
+static void w_5fe50(uintptr_t *cur, void *ctx) { InterlockedIncrement(&hits[23]); if (!N.created) return; ngf_draw_5fe50(&N.f, cur, ctx); }
+static void w_63850(void *item, void *ctx) { InterlockedIncrement(&hits[24]); if (!N.created) return; ngf_draw_63850(&N.f, item, ctx); }
+static void w_3ec20(void *ctx, void *cmd) { InterlockedIncrement(&hits[25]); if (!N.created) return; ngf_draw_3ec20(&N.f, ctx, cmd); }
+static void w_5da10(void *ctx, uintptr_t *cur) { InterlockedIncrement(&hits[26]); if (!N.created) return; ngf_draw_5da10(&N.f, ctx, cur); }
+static void w_5dde0(void *ctx, int *cmd) { InterlockedIncrement(&hits[27]); if (!N.created) return; ngf_draw_5dde0(&N.f, ctx, cmd); }
+static void w_63f50(uintptr_t *cur, unsigned packed, void *ctx) { InterlockedIncrement(&hits[28]); if (!N.created) return; ngf_draw_63f50(&N.f, cur, packed, ctx); }
+static void w_266a0(void) { InterlockedIncrement(&hits[29]); if (!N.created) return; ngf_unbind_textures(&N.f, *(uint32_t *)(exe + 0x4113748)); }
+static void w_267b0(void) { InterlockedIncrement(&hits[30]); if (!N.created) return; ngf_unbind_ps(&N.f); }
+static void w_267e0(void) { InterlockedIncrement(&hits[31]); if (!N.created) return; ngf_unbind_vs(&N.f); }
+static void w_26810(void) { InterlockedIncrement(&hits[32]); if (!N.created) return; ngf_unbind_decl(&N.f); }
+static int w_492d0(uint8_t *image, unsigned w, unsigned h, unsigned d, unsigned flags, int fmt) { InterlockedIncrement(&hits[33]); if (!N.created) return 0; return ngr_image_create(&N.r, image, w & 0xffff, h & 0xffff, d & 0xffff, flags, fmt); }
+static void w_49170(uint8_t *image, unsigned fmt, unsigned face, int level, const void *data) { InterlockedIncrement(&hits[34]); if (!N.created) return; ngr_image_upload(&N.r, image, (int)fmt, face, (unsigned)level, data); }
+static void w_23920(uint8_t *image) { InterlockedIncrement(&hits[35]); ngr_image_release(image); *(uint64_t *)(image + 0x10) = 0; }
+static void w_8f60(uint8_t *src, uint8_t *obj) { InterlockedIncrement(&hits[36]); if (!N.created) return; ngr_create_shader(&N.r, src, obj); }
+static void w_258a0(uint8_t *set, int count) { InterlockedIncrement(&hits[37]); if (!N.created) return; ngr_make_decls(&N.r, set, set, count); }
+static void w_24f00(void *ring, unsigned size) { InterlockedIncrement(&hits[38]); if (!N.created) return; ngr_ring_init(&N.r, ring, size); }
+static void w_44d00(uint8_t *scene) { InterlockedIncrement(&hits[39]); if (!N.created) return; ngfr_44d00(&N.frame, scene); }
+static void w_453c0(void) { InterlockedIncrement(&hits[40]); if (!N.created) return; ngfr_453c0(&N.frame); }
+static void w_10410(void) { InterlockedIncrement(&hits[41]); ngfr_retire(&N.pace); }
+static int w_45010(void) { InterlockedIncrement(&hits[42]); return !ngfr_pending(&N.pace, *(void **)(exe + NGFR_LAST_EVENT)) ; }
+static int w_2f800(void) { InterlockedIncrement(&hits[43]); return ngfr_pending(&N.pace, *(void **)(*(uint8_t **)(exe + 0x410fd00) + 0x419c8)); }
+static void w_10de0(void) { InterlockedIncrement(&hits[44]); nbr_init(&N); }
+static void w_noop(void) {}
+static unsigned w_4f380(void *dev, unsigned slot, unsigned word, unsigned old) { InterlockedIncrement(&hits[45]); (void)dev; (void)slot; (void)old; return word; }
+static void w_39420(void) { InterlockedIncrement(&hits[46]); if (N.created) nbr_targets(&N); }
+static void w_45060(unsigned flags)
+{ InterlockedIncrement(&hits[47]);
+	if (!N.created || !(flags & 2))
+		return;
+	static int frame;
+	frame++;
+	if (frame == 300 || frame == 900 || frame == 1800 || frame == 3000) {
+		char path[MAX_PATH];
+		DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
+		while (n > 0 && path[n - 1] != 92)
+			n--;
+		path[n] = 0;
+		lstrcatA(path, "mw2coop");
+		CreateDirectoryA(path, NULL);
+		lstrcatA(path, "\\native11");
+		CreateDirectoryA(path, NULL);
+		char name[64];
+		snprintf(name, sizeof(name), "\\scene-%d.bmp", frame);
+		lstrcatA(path, name);
+		log_printf("native11: frame %d, scene saved: %s", frame, nat_save_scene_bmp(N.dev, path) ? "yes" : "no");
+	}
+	ngfr_present_and_issue(&N.pace);
+}
+static const char *safe_str(const char *p) { return (p && !IsBadReadPtr(p, 1)) ? p : "?"; }
+static void w_sys_error(const char *fmt, const char *a, const char *b, const char *c)
+{
+	log_printf("native11: ENGINE ERROR: %s | %s | %s | %s", safe_str(fmt), safe_str(a), safe_str(b), safe_str(c));
+	ExitProcess(3);
+}
+static void w_242a0(void)
+{
+	if (!N.created)
+		return;
+	MEMORYSTATUSEX ms;
+	memset(&ms, 0, sizeof(ms));
+	ms.dwLength = sizeof(ms);
+	GlobalMemoryStatusEx(&ms);
+	ngs_memory_setup(&N.ngs_, nat_get_caps(N.dev)->vram_mb, (unsigned)N.fn.dvar_int("sys_sysMB"), ms.ullTotalVirtual >> 20, (void (*)(void *, unsigned))N.fn.dvar_set);
+}
+static int w_2a0a0_dummy;
+
+static LONG CALLBACK veh(EXCEPTION_POINTERS *x)
+{
+	const DWORD c = x->ExceptionRecord->ExceptionCode;
+	if (c == EXCEPTION_ACCESS_VIOLATION || c == EXCEPTION_ILLEGAL_INSTRUCTION || c == EXCEPTION_INT_DIVIDE_BY_ZERO || c == EXCEPTION_STACK_OVERFLOW) {
+		static LONG n;
+		if (InterlockedIncrement(&n) <= 8) {
+			const uintptr_t ip = (uintptr_t)x->ExceptionRecord->ExceptionAddress;
+			HMODULE m = NULL;
+			char name[MAX_PATH] = "?";
+			if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)ip, &m) && m)
+				GetModuleFileNameA(m, name, MAX_PATH);
+			const char *file = strrchr(name, '\\') ? strrchr(name, '\\') + 1 : name;
+			log_printf("native11: exception %lx at %s+0x%llx (access address %llx), caller return %llx", (unsigned long)c, file, (unsigned long long)(ip - (uintptr_t)m), (unsigned long long)(x->ExceptionRecord->NumberParameters > 1 ? x->ExceptionRecord->ExceptionInformation[1] : 0),
+				   (unsigned long long)(x->ContextRecord->Rsp ? *(uintptr_t *)x->ContextRecord->Rsp - (uintptr_t)exe : 0));
+		}
+	}
+	return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static DWORD WINAPI monitor(LPVOID arg)
+{
+	(void)arg;
+	LONG last[sizeof(hits) / sizeof(hits[0])] = {0};
+	for (;;) {
+		Sleep(500);
+		char line[1024] = "";
+		for (size_t i = 0; i < sizeof(hits) / sizeof(hits[0]); i++)
+			if (hits[i] != last[i]) {
+				snprintf(line + strlen(line), sizeof(line) - strlen(line), " %s=%ld", hit_names[i], (long)hits[i]);
+				last[i] = hits[i];
+			}
+		if (line[0])
+			log_printf("native11: calls (totals):%s", line);
+	}
+	return 0;
+}
+
+static void install(uint32_t rva, void *fn)
+{
+	hook_jump(exe + rva, 14, fn, 0xcc);
+}
+
+static void install_all(void);
+
+// the exe is packed (SteamStub) when this DLL loads: the code can only be patched after the stub has unpacked it, which is when the first bytes of a known function look right
+static DWORD WINAPI waiter(LPVOID arg)
+{
+	(void)arg;
+	static const uint8_t head[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7c, 0x24, 0x20}; // rva 0x54a10
+	for (int i = 0; i < 60000; i++) {
+		if (!IsBadReadPtr(exe + 0x54a10, sizeof(head)) && memcmp(exe + 0x54a10, head, sizeof(head)) == 0) {
+			install_all();
+			return 0;
+		}
+		Sleep(1);
+	}
+	log_printf("native11: the exe never looked unpacked, nothing installed");
+	return 0;
+}
+
+void natboot_install(void)
+{
+	if (!getenv("MW2COOP_NATIVE11"))
+		return;
+	exe = (uint8_t *)GetModuleHandleA(NULL);
+	CloseHandle(CreateThread(NULL, 0, waiter, NULL, 0, NULL));
+}
+
+static void install_all(void)
+{
+	log_printf("native11: the exe looks unpacked, installing");
+	if (getenv("MW2COOP_NATIVE11_DRY")) {
+		log_printf("native11: dry run, nothing installed");
+		return;
+	}
+	IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(exe + ((IMAGE_DOS_HEADER *)exe)->e_lfanew);
+	if (nt->OptionalHeader.SizeOfImage < 0x4585400) {
+		log_printf("native11: not the retail exe, off");
+		return;
+	}
+	memset(&N, 0, sizeof(N));
+	nbr_bind(&N, exe);
+	AddVectoredExceptionHandler(1, veh);
+	CloseHandle(CreateThread(NULL, 0, monitor, NULL, 0, NULL));
+	make_traps();
+	N.sentinel = trap_object;
+	// the frame helpers' function pointers
+	N.frame.f = &N.f;
+	N.frame.r = &N.r;
+	N.frame.fn_clear_modified = N.fn.clear_modified;
+	N.frame.fn_default_states = (void (*)(void))(exe + 0x4f760);
+	N.frame.fn_21570 = (int (*)(void *))(exe + 0x21570);
+	N.frame.fn_211c0 = (void (*)(void *, void *))(exe + 0x211c0);
+	N.frame.fn_29070 = (void (*)(void))(exe + 0x29070);
+	N.frame.fn_b6e0 = (void (*)(int))(exe + 0xb6e0);
+	N.frame.fn_5c010 = (void (*)(void *))(exe + 0x5c010);
+	N.frame.fn_4e390 = (void (*)(void *, void *, int))(exe + 0x4e390);
+	N.frame.fn_4f070 = (void (*)(void *, void *, void *))(exe + 0x4f070);
+	N.frame.fn_4ec20 = (void (*)(void *))(exe + 0x4ec20);
+	N.frame.fn_45320 = (void (*)(void *))(exe + 0x45320);
+	N.frame.fn_26a60 = (void (*)(void))(exe + 0x26a60);
+	N.f.fn_2d_constants = (void (*)(void *))(exe + 0x4ec20);
+	N.f.fn_viewport_rect = (void (*)(void *, int *))(exe + 0x50ba0);
+	N.f.fn_projection = (void (*)(void *, int *))(exe + 0x50d70);
+	N.f.fn_5c8d0 = (void (*)(void *))(exe + 0x5c8d0);
+	N.f.fn_5d650 = (void (*)(void *, void *, int))(exe + 0x5d650);
+	N.f.fn_4fbe0 = (void (*)(void *, void *, int, int))(exe + 0x4fbe0);
+	N.f.fn_5dd00 = (void (*)(void *, void *, void *))(exe + 0x5dd00);
+	N.f.fn_60120 = (void (*)(void *, void *, int))(exe + 0x60120);
+	N.f.fn_637a0 = (void (*)(void *, void *))(exe + 0x637a0);
+	N.f.fn_efbe0 = (void (*)(uint8_t, void *, void **, int *))(exe + 0xefbe0);
+	N.f.fn_efdd0 = (void (*)(uint8_t, void *, void **, int *))(exe + 0xefdd0);
+	// pass apply and state
+	install(0x54a10, w_54a10);
+	install(0x54940, w_54940);
+	install(0x54070, w_54070);
+	install(0x543b0, w_543b0);
+	install(0x53d00, w_53d00);
+	install(0x53f10, w_53f10);
+	install(0x54220, w_54220);
+	install(0x50a20, w_50a20);
+	install(0x50b10, w_50b10);
+	install(0x50c60, w_50c60);
+	install(0x3cc00, w_3cc00);
+	install(0x50ec0, w_50ec0);
+	install(0x515a0, w_515a0);
+	install(0x26730, w_26730);
+	install(0x54820, w_54820);
+	install(0x54b30, w_54b30);
+	install(0x504d0, w_504d0);
+	install(0x51070, w_51070);
+	// draw loops
+	install(0x26840, w_26840);
+	install(0x399f0, w_399f0);
+	install(0x5c960, w_5c960);
+	install(0x5cc10, w_5cc10);
+	install(0x5f220, w_5f220);
+	install(0x5fe50, w_5fe50);
+	install(0x63850, w_63850);
+	install(0x3ec20, w_3ec20);
+	install(0x5da10, w_5da10);
+	install(0x5dde0, w_5dde0);
+	install(0x63f50, w_63f50);
+	install(0x266a0, w_266a0);
+	install(0x267b0, w_267b0);
+	install(0x267e0, w_267e0);
+	install(0x26810, w_26810);
+	// resources
+	install(0x492d0, w_492d0);
+	install(0x49170, w_49170);
+	install(0x23920, w_23920);
+	install(0x8f60, w_8f60);
+	install(0x9070, w_8f60);
+	install(0x258a0, w_258a0);
+	install(0x24f00, w_24f00);
+	install(0x44d00, w_44d00);
+	install(0x453c0, w_453c0);
+	install(0x10410, w_10410);
+	install(0x45010, w_45010);
+	install(0x2f800, w_2f800);
+	install(0x10de0, w_10de0);
+	install(0x39420, w_39420);
+	install(0x45060, w_45060);
+	// the loose render / sampler state setters: the native back end derives its state from the words at every draw
+	install(0x51280, w_noop);
+	install(0x4f660, w_noop);
+	install(0x4f6e0, w_noop);
+	install(0x4e940, w_noop);
+	install(0x4f510, w_noop);
+	install(0x505a0, w_noop);
+	install(0x50810, w_noop);
+	install(0x511d0, w_noop);
+	install(0x4f380, w_4f380);
+	install(0x2906b0, w_sys_error);
+	install(0x242a0, w_242a0);
+	(void)w_2a0a0_dummy;
+	log_printf("native11: the native renderer is installed (%u functions redirected); the game's Direct3D 9 device is a tripwire", 52u);
+}
+
+void *natboot_trap_device(void)
+{
+	return trap_object;
+}
+#else
+void natboot_install(void) {}
+void *natboot_trap_device(void) { return 0; }
+#endif
