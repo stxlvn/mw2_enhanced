@@ -1486,10 +1486,70 @@ static int continuing, add_member;
 static volatile LONG partner_confirmed;
 
 // Host a lobby: what the Spec Ops "two players online" button runs, then mw2coop_online [map] (or, for a Spec Ops op, the op).
+// The game's own "listen" starts with a check that the game is signed in to IWNet (64-bit 0x28fc00; offline it opens "Connecting to IWNet..." and does nothing else: issue 21, a PC
+// without internet; the 32-bit game's check, 0x416590 (VA), prints a line and stops). A split screen lobby has no use for IWNet, so the check inside `listen` says yes while a split
+// screen lobby is being made; a network lobby still gets the game's own answer.
+#ifdef _WIN64
+#define LISTEN_SIGNIN_CALL XR(0xd25f6) // the call in listen (function at 0xd25e0)
+#else
+#define LISTEN_SIGNIN_CALL XR(0x17a886) // VA 0x57a886 in listen (function at VA 0x57a860)
+#endif
+static int (*listen_signin_original)(int);
+static int listen_signin_hook(int local)
+{
+	if (InterlockedCompareExchange(&split_mode, 0, 0) || InterlockedCompareExchange(&split_pending, 0, 0)) {
+		static int logged;
+		if (!logged++)
+			log_printf("menus: a split screen lobby needs no IWNet: listen's sign-in check is passed");
+		return 1;
+	}
+	return listen_signin_original ? listen_signin_original(local) : 0;
+}
+
+static void listen_signin_install(void)
+{
+	static int done;
+	if (done)
+		return;
+	done = 1;
+	void *original = NULL;
+	if (hook_call(base + LISTEN_SIGNIN_CALL, (void *)listen_signin_hook, &original)) {
+		listen_signin_original = (int (*)(int))original;
+		log_printf("menus: listen's IWNet sign-in check is behind ours (a split screen lobby works without internet)");
+	} else
+		log_printf("menus: the sign-in call inside listen is not where it was expected: a split screen lobby needs IWNet");
+}
+
+// QA only (MW2COOP_FAKE_IWNET_OFF=1, 64-bit): the game believes it is not connected to IWNet, as on a PC without internet (issue 21: "Connecting to IWNet..." forever in the split
+// screen lobby). The game's "connected to IWNet" query (0x1bab60) is replaced by a function that says no.
+#ifdef _WIN64
+static int fake_iwnet_off_query(void)
+{
+	return 0;
+}
+
+static void fake_iwnet_off_install(void)
+{
+	static int done;
+	if (done || !getenv("MW2COOP_FAKE_IWNET_OFF"))
+		return;
+	done = 1;
+	hook_jump(base + 0x1bab60, 14, (const void *)fake_iwnet_off_query, 0xcc);
+	log_printf("menus: QA: the game is told it is not connected to IWNet (MW2COOP_FAKE_IWNET_OFF)");
+}
+#else
+static void fake_iwnet_off_install(void)
+{
+}
+#endif
+
 static void host_lobby(const char *map)
 {
-	if (split_pending)
+	if (split_pending) {
 		steam_lobby_fail_install();
+		listen_signin_install();
+	}
+	fake_iwnet_off_install();
 	int specops = so_name(map); // a Special Ops op: the lobby is the native one, only the second player is on this PC
 	lobby_music_patch(!specops); // listen activates coop_lobby immediately after mw2coop_online
 	char cmd[512];
@@ -1501,12 +1561,15 @@ static void host_lobby(const char *map)
 		snprintf(online, sizeof(online), "set specialops 1\nset coop_mapName %s\n", map);
 	} else
 		snprintf(online, sizeof(online), "mw2coop_online %s\n", map ? map : "");
+	// xrequirelivesignin: the game wants to be signed in to IWNet, and without a connection to it (a PC without internet) it opens "Connecting to IWNet..." and waits for ever (issue 21).
+	// A split screen lobby needs no IWNet (nor Steam lobby, see above), so it does not ask for it; a network lobby keeps the game's own check.
+	const int split_now = split_pending != 0;
 	snprintf(cmd, sizeof(cmd),
 		 "set arcademode 0\nset arcademode_full 0\nset solo_play 0\nset ui_skip_level_select 1\n"
-		 "set so_ophud_player0 0\nset so_ophud_player1 0\nxrequirelivesignin\n"
+		 "set so_ophud_player0 0\nset so_ophud_player1 0\n%s"
 		 "stopListening\nset arcademode_lives 2\nset arcademode_combined_score 0\nset mblur_enable 0\n"
 		 "%slisten\n",
-		 online);
+		 split_now ? "" : "xrequirelivesignin\n", online);
 	game_cbuf_addtext(cmd);
 	if (InterlockedExchange(&split_pending, 0)) { // a split screen lobby: the second player presses a button on his device first
 		InterlockedExchange(&split_mode, 1);

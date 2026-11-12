@@ -2250,7 +2250,9 @@ static void scene2d_hook(void *vp)
 			log_printf("native: frames whose half was not found: %ld of %ld", (long)lost, (long)seen);
 		}
 	}
+#ifdef _WIN64 // (the native renderers are 64-bit only)
 	{ extern int nd_trace; if (nd_trace) log_printf("trace: ==== scene2d begin"); }
+#endif
 	if (natboot_active() && !(mode == 10 && native_active && split_on) && natboot_hud_begin()) { // upscaled picture: the HUD is drawn at the output resolution
 		scene2d_original(vp);
 		natboot_hud_end();
@@ -2388,7 +2390,9 @@ void native_final2d_entry(void *vp);
 void native_final2d_entry(void *vp)
 {
 	native_hud_install();
+#ifdef _WIN64 // (the native renderers are 64-bit only)
 	{ extern int nd_trace; if (nd_trace) log_printf("trace: ==== final2d begin"); }
+#endif
 	if (!(mode == 10 && native_active && split_on) && natboot_hud_begin()) { // upscaled picture: the 2D list (fades, texts) is drawn at the output resolution
 		((void (*)(void *))(base + XR(0x5c010)))(vp);
 		natboot_hud_end();
