@@ -255,7 +255,7 @@ static void w_45060(unsigned flags)
 						lo[c] = v < lo[c] ? v : lo[c];
 						hi[c] = v > hi[c] ? v : hi[c];
 					}
-				if (skip > 3000 && hi[0] + hi[1] + hi[2] > 60 && hi[0] - lo[0] < 12 && hi[1] - lo[1] < 12 && hi[2] - lo[2] < 12 && saved < 20) {
+				if (skip > 300 && hi[0] + hi[1] + hi[2] > 60 && hi[0] - lo[0] < 12 && hi[1] - lo[1] < 12 && hi[2] - lo[2] < 12 && saved < 20) {
 					char nm[48];
 					snprintf(nm, sizeof(nm), "flash%d", saved++);
 					log_printf("native11: flashwatch: a one-colour frame (%u,%u,%u) at presented frame %d, saved as %s", px[0] >> 16 & 255, px[0] >> 8 & 255, px[0] & 255, skip, nm);
