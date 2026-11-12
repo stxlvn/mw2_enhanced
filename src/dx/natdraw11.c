@@ -694,7 +694,9 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 		d->ops.poly_offset(st.polygon_offset, &bias, &slope);
 	ID3D11DeviceContext *c = d->ctx;
 	ID3D11DeviceContext_OMSetRenderTargets(c, rtv ? 1 : 0, &rtv, dsv);
-	D3D11_VIEWPORT vp = {d->vp[0], d->vp[1], d->vp[2], d->vp[3], d->vp[4], d->vp[5]};
+	// Direct3D 9 has its pixel centres on whole numbers, Direct3D 10+ at half: the game's 2D quads carry the usual -0.5 (the full-screen quad is -0.5 .. size - 0.5), which Direct3D 11 / 12 would not cover
+	// in the last row and column (a line of the previous picture at the bottom and right edges). The viewport is moved half a pixel to give the Direct3D 9 coverage and texel alignment back.
+	D3D11_VIEWPORT vp = {d->vp[0] + 0.5f, d->vp[1] + 0.5f, d->vp[2], d->vp[3], d->vp[4], d->vp[5]};
 	ID3D11DeviceContext_RSSetViewports(c, 1, &vp);
 	ID3D11DeviceContext_RSSetScissorRects(c, 1, &d->scissor);
 	ID3D11DeviceContext_RSSetState(c, raster_state(d, &st, d->scissor_on, bias, slope));

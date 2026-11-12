@@ -3292,8 +3292,22 @@ static void fs_pace(void)
 #endif
 static const char *vision_name_of(int ctx);
 static void npc_log(void);
+// The picture's size for the split screen's layout and aspect (comp_w / comp_h): the Direct3D 9 compositor fills them in at its first frame; the native renderers have no such frame, the scene's size is it
+static void native_comp_size(void)
+{
+	if (natboot_active()) {
+		unsigned w = 0, h = 0;
+		natboot_scene_size(&w, &h);
+		if (w && h) {
+			comp_w = w;
+			comp_h = h;
+		}
+	}
+}
+
 static void cg_draw_hook(unsigned local_client, int a, int b)
 {
+	native_comp_size();
 #ifdef _WIN64
 	if (fs_on)
 		fs_draw0 = fs_qpc();
