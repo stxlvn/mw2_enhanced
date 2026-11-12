@@ -127,6 +127,7 @@ void nd_decl_destroy(nd_decl *d)
 	free(d);
 }
 
+int nd_aniso_override; // [display] aniso: 0 = the game's own, 2..16 = forced for mipmapped textures
 int nd_trace; // QA (MW2COOP_TRACEFRAME): while set, every draw / clear / stretch is logged with its target, textures and first constants
 
 struct nd_shader {
@@ -555,6 +556,11 @@ static ID3D11SamplerState *sampler_state(nd *d, uint32_t word, int compare)
 	desc.AddressW = (D3D11_TEXTURE_ADDRESS_MODE)(sd.addr_w >= 1 && sd.addr_w <= 4 ? sd.addr_w : 1);
 	desc.MaxAnisotropy = sd.aniso >= 2 ? (UINT)(sd.aniso > 16 ? 16 : sd.aniso) : 1;
 	desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+	if (nd_aniso_override >= 2 && !compare && sd.min >= 2 && sd.mag >= 2 && sd.mip >= 1) { // forced anisotropic filtering ([display] aniso): textures the game filters with mipmaps and linear / anisotropic min and mag
+		desc.Filter = D3D11_FILTER_ANISOTROPIC;
+		if ((UINT)nd_aniso_override > desc.MaxAnisotropy)
+			desc.MaxAnisotropy = (UINT)nd_aniso_override;
+	}
 	if (compare) { // a hardware shadow map: depth <= stored, filtered bilinearly when the sampler's filter is (PCF); clamped to the edge
 		desc.Filter = (D3D11_FILTER)(0x80 | (sd.min == 2 || sd.mag == 2 ? 0x15 : 0));
 		desc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;

@@ -34,6 +34,8 @@ typedef struct {
 } nd_ops;
 
 nd *nd_create(nat_device *dev, const nd_ops *ops);
+// [display] aniso: forced anisotropic filtering (2..16) for mipmapped textures, 0 = the game's own (one variable: natdraw12.c reads it too)
+extern int nd_aniso_override;
 void nd_destroy(nd *d);
 
 // targets: color / depth images made by nat_image_create (NULL color = the device's scene target, NULL depth = the scene depth, NO_DEPTH below = none)

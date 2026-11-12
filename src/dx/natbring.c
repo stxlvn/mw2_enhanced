@@ -330,6 +330,7 @@ int nbr_start(nbr *n, uint8_t *p)
 	np.fullscreen = RD_I32(p, 0xc) == 0;
 	np.vsync = RD_U8(RD_PTR(e, D_VSYNC), 0x10) != 0;
 	np.low_latency = settings_lowlatency();
+	np.hdr = settings_hdr(&np.hdr_white, &np.hdr_peak);
 	np.msaa = RD_I32(p, 0x28);
 	char err[160] = "";
 	RD_I32(e, G_DEPTH_FMT) = 0x4b;
@@ -375,6 +376,7 @@ int nbr_start(nbr *n, uint8_t *p)
 	n->pace.dev = n->dev;
 	n->pace.exe = e;
 	n->d = nd_create(n->dev, &n_ops);
+	nd_aniso_override = settings_aniso();
 	n->f.d = n->d;
 	n->r.d = n->d;
 	n->r.fn_rand = (int (*)(void))(e + 0x2f715c);
@@ -382,6 +384,7 @@ int nbr_start(nbr *n, uint8_t *p)
 	n->r.fn_1fa40 = (void (*)(const uint8_t *, uint8_t *))(e + 0x1fa40);
 	n->created = 1;
 	log_printf("native11: native %s device created on %s (%u MB)", nat_backend_name(), caps->adapter, caps->vram_mb);
+	log_printf("native11: swap chain: flip model, frame latency %d, HDR %s%s, forced anisotropy %d", np.low_latency ? 1 : 2, nat_hdr_active(n->dev) ? "on (scRGB)" : "off", np.hdr && !nat_hdr_active(n->dev) ? " (asked for, the monitor has no HDR on)" : "", nd_aniso_override);
 	// The original start (0x10550) requests the common zones right after the device and the display mode exist (0xf3f0: DB_LoadXAssets of the gfx zones, which hold $white and the other
 	// default images); the loader thread creates their images through the native image creation. Without it 0xf570 found no default image (QA 2026-11-12).
 	RD_I32(e, 0x4113270) = 0;

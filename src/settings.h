@@ -39,6 +39,11 @@ int settings_directx11(void);
 int settings_directx12(void);
 // settings.ini [display] lowlatency (default 0): the native renderers queue one frame for the display instead of two (lower input latency, a little less smooth when the GPU is the limit)
 int settings_lowlatency(void);
+// settings.ini [display] aniso (default 0 = the game's own setting): 2, 4, 8 or 16 forces anisotropic filtering on the textures the game filters with mipmaps (native DirectX 11 / 12)
+int settings_aniso(void);
+// settings.ini [display] hdr (default 0), hdr_white (paper white in nits, default 200), hdr_peak (the highlights' peak in nits, default 600): the native renderers present to an HDR (scRGB) swap chain
+// when Windows has HDR on for the monitor the window is on. Returns hdr; white / peak may be NULL.
+int settings_hdr(int *white, int *peak);
 // settings.ini [network] guard (default 1): packets no co-op session sends (joinParty, rcon, a co-op command from a stranger, a map name with a command separator) are dropped before the game sees them (netguard.c); 0: the game sees everything.
 int settings_netguard(void);
 // settings.ini [display] d3d9on12 (default 0, experimental): the game's Direct3D 9 runs on Windows' Direct3D 12 (d3d9.dll Direct3DCreate9On12), the way to DX12 and, through D3D11On12, DX11 (d3dcap.c).

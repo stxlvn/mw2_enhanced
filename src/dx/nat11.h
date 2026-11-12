@@ -15,6 +15,9 @@ typedef struct {
 	unsigned refresh; // fullscreen only, 0 = the desktop's
 	int fullscreen;
 	int vsync;
+	int hdr; // HDR wanted: an scRGB swap chain when the window's monitor has HDR on in Windows (nat_hdr_active tells)
+	int hdr_white; // paper white in nits (the picture's 100 per cent)
+	int hdr_peak; // the nits the brightest highlights are stretched to
 	int low_latency; // one frame may be queued for the display (default two)
 	int msaa; // samples: 0 / 1 none, 2, 4, 8 (lowered to what the adapter supports)
 } nat_params;
@@ -71,6 +74,7 @@ void *nat_scene_rtv(nat_device *d);
 void *nat_scene_rtv_srgb(nat_device *d); // the same target seen as sRGB (the game's SRGBWRITEENABLE)
 void *nat_scene_dsv(nat_device *d);
 void *nat_scene_srv(nat_device *d); // the scene color as a texture (single sample: resolved first when multisampled)
+int nat_hdr_active(const nat_device *d); // the swap chain is HDR (scRGB)
 void nat_scene_resolve(nat_device *d); // makes nat_scene_srv() current (the game's StretchRect of the scene)
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ queries

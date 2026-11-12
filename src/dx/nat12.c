@@ -14,6 +14,7 @@
 #include "sm3.h"
 #include "natcache.h"
 #include "natswap.h"
+#include <dxgi1_6.h>
 
 #ifndef D3DCOMPILE_ENABLE_STRICTNESS
 #define D3DCOMPILE_ENABLE_STRICTNESS (1 << 11)
@@ -135,6 +136,10 @@ struct nat_device {
 	int fullscreen_set;
 	int tearing; // the swap chain allows tearing
 	HANDLE waitable; // the frame latency waitable object
+	int hdr_on, hdr_failed; // HDR: scRGB swap chain, the present is a conversion pass
+	ID3D12RootSignature *hdr_rs;
+	ID3D12PipelineState *hdr_pso;
+	UINT back_rtv[NAT12_FRAMES]; // render target view slots of the back buffers (HDR pass)
 	// commands
 	ID3D12CommandAllocator *alloc[NAT12_FRAMES];
 	UINT64 alloc_value[NAT12_FRAMES];
@@ -784,6 +789,8 @@ static void fill_caps(nat_device *d)
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ the device
+static void hdr_setup(nat_device *d);
+
 static int create_swap(nat_device *d, char *err, size_t err_size)
 {
 	DXGI_SWAP_CHAIN_DESC1 sc = {0};
@@ -810,6 +817,8 @@ static int create_swap(nat_device *d, char *err, size_t err_size)
 	}
 	d->waitable = ns_waitable((IUnknown *)d->swap, d->p.low_latency ? 1 : 2);
 	IDXGIFactory4_MakeWindowAssociation(d->factory, d->hwnd, DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER);
+	if (d->p.hdr)
+		hdr_setup(d);
 	return 1;
 }
 
@@ -976,7 +985,7 @@ int nat_reset(nat_device *d, const nat_params *p, char *err, size_t err_size)
 	IDXGISwapChain3_ResizeTarget(d->swap, &m);
 	if (p->fullscreen && !d->fullscreen_set && SUCCEEDED(IDXGISwapChain3_SetFullscreenState(d->swap, TRUE, NULL)))
 		d->fullscreen_set = 1;
-	HRESULT hr = IDXGISwapChain3_ResizeBuffers(d->swap, NAT12_FRAMES, p->width, p->height, DXGI_FORMAT_UNKNOWN, ns_swap_flags(d->tearing));
+	HRESULT hr = IDXGISwapChain3_ResizeBuffers(d->swap, NAT12_FRAMES, p->width, p->height, d->hdr_on ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_UNKNOWN, ns_swap_flags(d->tearing));
 	if (FAILED(hr)) {
 		set_err(err, err_size, "ResizeBuffers: %lx", (unsigned long)hr);
 		return 0;
@@ -1013,11 +1022,156 @@ static void barrier_res(nat_device *d, ID3D12Resource *r, D3D12_RESOURCE_STATES 
 	ID3D12GraphicsCommandList_ResourceBarrier(d->list, 1, &rb);
 }
 
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ HDR
+// When the monitor the window is on has HDR on in Windows (or MW2COOP_HDRFORCE is set: a test on an SDR monitor), the swap chain becomes scRGB (R16G16B16A16_FLOAT, linear, 1.0 = 80 nits) and the
+// present is a pass that converts the scene into it: linearised (gamma 2.2), scaled to the paper white, the brightest highlights stretched towards the peak.
+static void hdr_setup(nat_device *d)
+{
+	int on = getenv("MW2COOP_HDRFORCE") != NULL;
+	IDXGIOutput *out = NULL;
+	if (!on && SUCCEEDED(IDXGISwapChain3_GetContainingOutput(d->swap, &out)) && out) {
+		IDXGIOutput6 *o6 = NULL;
+		DXGI_OUTPUT_DESC1 od;
+		if (SUCCEEDED(IUnknown_QueryInterface((IUnknown *)out, &IID_IDXGIOutput6, (void **)&o6)) && o6) {
+			if (SUCCEEDED(IDXGIOutput6_GetDesc1(o6, &od)))
+				on = od.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+			IDXGIOutput6_Release(o6);
+		}
+	}
+	if (out)
+		IDXGIOutput_Release(out);
+	if (!on)
+		return;
+	UINT support = 0;
+	// (the support is asked for the swap chain's current format: the buffers become half float first, and go back when scRGB is not available)
+	const HRESULT hr = IDXGISwapChain3_ResizeBuffers(d->swap, NAT12_FRAMES, d->p.width, d->p.height, DXGI_FORMAT_R16G16B16A16_FLOAT, ns_swap_flags(d->tearing));
+	const HRESULT hc = SUCCEEDED(hr) ? IDXGISwapChain3_CheckColorSpaceSupport(d->swap, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, &support) : hr;
+	if (SUCCEEDED(hc) && (support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) && SUCCEEDED(IDXGISwapChain3_SetColorSpace1(d->swap, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)))
+		d->hdr_on = 1;
+	else if (SUCCEEDED(hr))
+		IDXGISwapChain3_ResizeBuffers(d->swap, NAT12_FRAMES, d->p.width, d->p.height, DXGI_FORMAT_B8G8R8A8_UNORM, ns_swap_flags(d->tearing));
+}
+
+int nat_hdr_active(const nat_device *d) { return d->hdr_on; }
+
+static const char HDR_VS[] = "void main(uint id : SV_VertexID, out float4 p : SV_Position) { float2 uv = float2((id << 1) & 2, id & 2); p = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1); }";
+static const char HDR_PS[] =
+	"Texture2D t : register(t0);\n"
+	"cbuffer C : register(b0) { float4 k; };\n" // x = paper white / 80, y = peak / paper white
+	"float4 main(float4 p : SV_Position) : SV_Target {\n"
+	"  float3 c = saturate(t.Load(int3(p.xy, 0)).rgb);\n"
+	"  float3 lin = pow(c, 2.2);\n"
+	"  float m = max(lin.r, max(lin.g, lin.b));\n"
+	"  float e = 1.0 + (k.y - 1.0) * pow(smoothstep(0.55, 1.0, m), 2.0);\n"
+	"  return float4(lin * e * k.x, 1.0);\n"
+	"}\n";
+
+static int hdr_pipeline(nat_device *d)
+{
+	if (d->hdr_pso)
+		return 1;
+	if (d->hdr_failed)
+		return 0;
+	d->hdr_failed = 1;
+	char err[160];
+	nat_shader *vs = nat_shader_from_hlsl(d, HDR_VS, 1, err, sizeof(err)), *ps = nat_shader_from_hlsl(d, HDR_PS, 0, err, sizeof(err));
+	if (!vs || !ps)
+		return 0;
+	D3D12_DESCRIPTOR_RANGE range = {D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0, 0, 0};
+	D3D12_ROOT_PARAMETER rp[2] = {0};
+	rp[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+	rp[0].Constants.Num32BitValues = 4;
+	rp[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+	rp[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+	rp[1].DescriptorTable.NumDescriptorRanges = 1;
+	rp[1].DescriptorTable.pDescriptorRanges = &range;
+	rp[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+	D3D12_ROOT_SIGNATURE_DESC rd = {2, rp, 0, NULL, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+	ID3DBlob *blob = NULL, *errs = NULL;
+	if (FAILED(D3D12SerializeRootSignature(&rd, D3D_ROOT_SIGNATURE_VERSION_1_0, &blob, &errs)))
+		return 0;
+	HRESULT hr = ID3D12Device_CreateRootSignature(d->dev, 0, ID3D10Blob_GetBufferPointer(blob), ID3D10Blob_GetBufferSize(blob), &IID_ID3D12RootSignature, (void **)&d->hdr_rs);
+	ID3D10Blob_Release(blob);
+	if (FAILED(hr))
+		return 0;
+	size_t vsz, psz;
+	void *vb = nat12_shader_blob(vs, &vsz), *pb = nat12_shader_blob(ps, &psz);
+	D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {0};
+	pd.pRootSignature = d->hdr_rs;
+	pd.VS.pShaderBytecode = vb;
+	pd.VS.BytecodeLength = vsz;
+	pd.PS.pShaderBytecode = pb;
+	pd.PS.BytecodeLength = psz;
+	pd.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+	pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+	pd.RasterizerState.DepthClipEnable = TRUE;
+	pd.BlendState.RenderTarget[0].RenderTargetWriteMask = 15;
+	pd.SampleMask = 0xffffffffu;
+	pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+	pd.NumRenderTargets = 1;
+	pd.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+	pd.SampleDesc.Count = 1;
+	if (FAILED(ID3D12Device_CreateGraphicsPipelineState(d->dev, &pd, &IID_ID3D12PipelineState, (void **)&d->hdr_pso)))
+		return 0;
+	d->hdr_failed = 0;
+	return 1;
+}
+
+static void barrier_res(nat_device *d, ID3D12Resource *r, D3D12_RESOURCE_STATES a, D3D12_RESOURCE_STATES b);
+
+// the scene into the back buffer through the HDR pass; 0 when it cannot (the caller copies as usual)
+static int hdr_present(nat_device *d, ID3D12Resource *back, UINT bi)
+{
+	if (!hdr_pipeline(d))
+		return 0;
+	nat_image *src = d->scene;
+	if (d->samples > 1) {
+		if (!d->resolved)
+			return 0;
+		nat_scene_resolve(d);
+		src = d->resolved;
+	}
+	D3D12_CPU_DESCRIPTOR_HANDLE cpu, gpu_cpu;
+	D3D12_GPU_DESCRIPTOR_HANDLE gpu;
+	if (!nat12_srv_alloc(d, 1, &cpu, &gpu))
+		return 0;
+	gpu_cpu = nat12_image_srv(src, 0);
+	ID3D12Device_CopyDescriptorsSimple(d->dev, 1, cpu, gpu_cpu, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+	if (!d->back_rtv[bi]) {
+		d->back_rtv[bi] = dheap_alloc(&d->rtv);
+		if (!d->back_rtv[bi])
+			return 0;
+	}
+	const D3D12_CPU_DESCRIPTOR_HANDLE rtv = dheap_cpu(&d->rtv, d->back_rtv[bi]);
+	ID3D12Device_CreateRenderTargetView(d->dev, back, NULL, rtv);
+	nat12_image_transition(d, src, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+	barrier_res(d, back, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+	nat12_set_heaps(d);
+	ID3D12GraphicsCommandList *l = d->list;
+	const float white = (float)(d->p.hdr_white > 0 ? d->p.hdr_white : 200), peak = (float)(d->p.hdr_peak > 0 ? d->p.hdr_peak : 600);
+	const float k[4] = {white / 80.0f, peak > white ? peak / white : 1.0f, 0, 0};
+	ID3D12GraphicsCommandList_SetGraphicsRootSignature(l, d->hdr_rs);
+	ID3D12GraphicsCommandList_SetPipelineState(l, d->hdr_pso);
+	ID3D12GraphicsCommandList_SetGraphicsRoot32BitConstants(l, 0, 4, k, 0);
+	ID3D12GraphicsCommandList_SetGraphicsRootDescriptorTable(l, 1, gpu);
+	D3D12_VIEWPORT vp = {0, 0, (float)d->p.width, (float)d->p.height, 0, 1};
+	D3D12_RECT sc = {0, 0, (LONG)d->p.width, (LONG)d->p.height};
+	ID3D12GraphicsCommandList_RSSetViewports(l, 1, &vp);
+	ID3D12GraphicsCommandList_RSSetScissorRects(l, 1, &sc);
+	ID3D12GraphicsCommandList_IASetPrimitiveTopology(l, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	ID3D12GraphicsCommandList_OMSetRenderTargets(l, 1, &rtv, FALSE, NULL);
+	ID3D12GraphicsCommandList_DrawInstanced(l, 3, 1, 0, 0);
+	barrier_res(d, back, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+	return 1;
+}
+
 int nat_present(nat_device *d)
 {
 	const UINT bi = IDXGISwapChain3_GetCurrentBackBufferIndex(d->swap);
 	ID3D12Resource *back = d->back[bi];
-	if (d->samples > 1) {
+	if (d->hdr_on && hdr_present(d, back, bi)) {
+		// (the scene went through the HDR pass)
+	} else if (d->samples > 1) {
 		nat12_image_transition(d, d->scene, D3D12_RESOURCE_STATE_RESOLVE_SOURCE);
 		barrier_res(d, back, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RESOLVE_DEST);
 		ID3D12GraphicsCommandList_ResolveSubresource(d->list, back, 0, d->scene->res, 0, DXGI_FORMAT_B8G8R8A8_UNORM);

@@ -43,6 +43,8 @@ static int d3d9ex_on = 0;
 static int directx11_on = 0;
 static int directx12_on = 0;
 static int lowlatency_on = 0;
+static int aniso_level = 0;
+static int hdr_on = 0, hdr_white = 200, hdr_peak = 600;
 static int borderless_on = 1;
 static int netguard_on = 1;
 static int d3d9on12_on = 0;
@@ -230,6 +232,18 @@ void settings_load(void)
 	directx11_on = GetPrivateProfileIntA("display", "directx11", 0, path) != 0 || getenv("MW2COOP_NATIVE11") != NULL;
 	directx12_on = GetPrivateProfileIntA("display", "directx12", 0, path) != 0 || getenv("MW2COOP_NATIVE12") != NULL;
 	lowlatency_on = GetPrivateProfileIntA("display", "lowlatency", 0, path) != 0;
+	hdr_on = GetPrivateProfileIntA("display", "hdr", 0, path) != 0;
+	hdr_white = (int)GetPrivateProfileIntA("display", "hdr_white", 200, path);
+	hdr_peak = (int)GetPrivateProfileIntA("display", "hdr_peak", 600, path);
+	if (hdr_white < 80 || hdr_white > 1000)
+		hdr_white = 200;
+	if (hdr_peak < hdr_white || hdr_peak > 4000)
+		hdr_peak = hdr_white > 600 ? hdr_white : 600;
+	aniso_level = (int)GetPrivateProfileIntA("display", "aniso", 0, path);
+	if (aniso_level < 2)
+		aniso_level = 0;
+	if (aniso_level > 16)
+		aniso_level = 16;
 	if (directx12_on)
 		directx11_on = 0; // one native renderer at a time (12 wins)
 	if (directx11_on || directx12_on) { // the native renderer: nothing creates a Direct3D 9 device, so every feature that is built on one is off
@@ -412,6 +426,20 @@ int settings_directx12(void)
 int settings_lowlatency(void)
 {
 	return lowlatency_on;
+}
+
+int settings_aniso(void)
+{
+	return aniso_level;
+}
+
+int settings_hdr(int *white, int *peak)
+{
+	if (white)
+		*white = hdr_white;
+	if (peak)
+		*peak = hdr_peak;
+	return hdr_on;
 }
 
 int settings_d3d9on12(void)

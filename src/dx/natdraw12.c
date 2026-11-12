@@ -585,6 +585,11 @@ static int sampler_cpu(nd *d, uint32_t word, int compare, D3D12_CPU_DESCRIPTOR_H
 	desc.AddressW = (D3D12_TEXTURE_ADDRESS_MODE)(sd.addr_w >= 1 && sd.addr_w <= 5 ? sd.addr_w : 1);
 	desc.MaxAnisotropy = sd.aniso >= 2 ? (UINT)(sd.aniso > 16 ? 16 : sd.aniso) : 1;
 	desc.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+	if (nd_aniso_override >= 2 && !compare && sd.min >= 2 && sd.mag >= 2 && sd.mip >= 1) { // forced anisotropic filtering ([display] aniso): textures the game filters with mipmaps and linear / anisotropic min and mag
+		desc.Filter = D3D12_FILTER_ANISOTROPIC;
+		if ((UINT)nd_aniso_override > desc.MaxAnisotropy)
+			desc.MaxAnisotropy = (UINT)nd_aniso_override;
+	}
 	if (compare) {
 		desc.Filter = (D3D12_FILTER)(0x80 | (sd.min == 2 || sd.mag == 2 ? 0x15 : 0));
 		desc.ComparisonFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;

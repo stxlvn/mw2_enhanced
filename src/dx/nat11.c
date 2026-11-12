@@ -7,6 +7,7 @@
 #include <d3d11.h>
 #include <dxgi.h>
 #include "natswap.h"
+#include <dxgi1_6.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,6 +37,14 @@ struct nat_device {
 	int fullscreen_set;
 	int tearing; // the swap chain allows tearing
 	HANDLE waitable; // the frame latency waitable object
+	// HDR: the swap chain is scRGB (R16G16B16A16_FLOAT, linear, 1.0 = 80 nits) and the present is a pass that converts the scene into it
+	int hdr_on;
+	ID3D11RenderTargetView *back_rtv;
+	nat_shader *hdr_vs, *hdr_ps;
+	ID3D11Buffer *hdr_cb;
+	ID3D11RasterizerState *hdr_rs;
+	ID3D11DepthStencilState *hdr_ds;
+	ID3D11BlendState *hdr_bs;
 };
 
 static HMODULE h_compiler;
@@ -64,6 +73,107 @@ static void release_targets(nat_device *d)
 	REL(d->resolved);
 	REL(d->depth);
 	REL(d->backbuffer);
+	REL(d->back_rtv);
+}
+
+static nat_shader *shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, char *err, size_t err_size);
+
+// HDR: when the monitor the window is on has HDR on in Windows (or MW2COOP_HDRFORCE is set: a test on an SDR monitor), the swap chain becomes scRGB
+static void hdr_setup(nat_device *d)
+{
+	int on = getenv("MW2COOP_HDRFORCE") != NULL;
+	IDXGIOutput *out = NULL;
+	if (!on && SUCCEEDED(IDXGISwapChain_GetContainingOutput(d->swap, &out)) && out) {
+		IDXGIOutput6 *o6 = NULL;
+		DXGI_OUTPUT_DESC1 od;
+		if (SUCCEEDED(IUnknown_QueryInterface((IUnknown *)out, &IID_IDXGIOutput6, (void **)&o6)) && o6) {
+			if (SUCCEEDED(IDXGIOutput6_GetDesc1(o6, &od)))
+				on = od.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+			IDXGIOutput6_Release(o6);
+		}
+	}
+	if (out)
+		IDXGIOutput_Release(out);
+	if (!on)
+		return;
+	IDXGISwapChain3 *s3 = NULL;
+	UINT support = 0;
+	if (FAILED(IUnknown_QueryInterface((IUnknown *)d->swap, &IID_IDXGISwapChain3, (void **)&s3)) || !s3)
+		return;
+	// (the support is asked for the swap chain's current format: the buffers become half float first, and go back when scRGB is not available)
+	const HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, d->p.width, d->p.height, DXGI_FORMAT_R16G16B16A16_FLOAT, ns_swap_flags(d->tearing));
+	const HRESULT hc = SUCCEEDED(hr) ? IDXGISwapChain3_CheckColorSpaceSupport(s3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, &support) : hr;
+	if (SUCCEEDED(hc) && (support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) && SUCCEEDED(IDXGISwapChain3_SetColorSpace1(s3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)))
+		d->hdr_on = 1;
+	else if (SUCCEEDED(hr))
+		IDXGISwapChain_ResizeBuffers(d->swap, 0, d->p.width, d->p.height, DXGI_FORMAT_B8G8R8A8_UNORM, ns_swap_flags(d->tearing));
+	if (nat_log_hook)
+		nat_log_hook("native11: HDR: ResizeBuffers %lx, colour space support %lx / %x -> %s", (unsigned long)hr, (unsigned long)hc, support, d->hdr_on ? "scRGB on" : "off");
+	IDXGISwapChain3_Release(s3);
+}
+
+int nat_hdr_active(const nat_device *d) { return d->hdr_on; }
+
+static const char HDR_VS[] = "void main(uint id : SV_VertexID, out float4 p : SV_Position) { float2 uv = float2((id << 1) & 2, id & 2); p = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1); }";
+// the picture is display-referred gamma 2.2: linearised, scaled to the paper white (scRGB 1.0 = 80 nits) and its brightest highlights stretched towards the peak
+static const char HDR_PS[] =
+	"Texture2D t : register(t0);\n"
+	"cbuffer C : register(b0) { float4 k; };\n" // x = paper white / 80, y = peak / paper white
+	"float4 main(float4 p : SV_Position) : SV_Target {\n"
+	"  float3 c = saturate(t.Load(int3(p.xy, 0)).rgb);\n"
+	"  float3 lin = pow(c, 2.2);\n"
+	"  float m = max(lin.r, max(lin.g, lin.b));\n"
+	"  float e = 1.0 + (k.y - 1.0) * pow(smoothstep(0.55, 1.0, m), 2.0);\n"
+	"  return float4(lin * e * k.x, 1.0);\n"
+	"}\n";
+
+static int hdr_present(nat_device *d)
+{
+	if (!d->hdr_vs) {
+		char err[160];
+		d->hdr_vs = shader_from_hlsl(d, HDR_VS, 1, err, sizeof(err));
+		d->hdr_ps = shader_from_hlsl(d, HDR_PS, 0, err, sizeof(err));
+		D3D11_BUFFER_DESC bd = {16, D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE, 0, 0};
+		ID3D11Device_CreateBuffer(d->dev, &bd, NULL, &d->hdr_cb);
+		D3D11_RASTERIZER_DESC rd = {0};
+		rd.FillMode = D3D11_FILL_SOLID;
+		rd.CullMode = D3D11_CULL_NONE;
+		ID3D11Device_CreateRasterizerState(d->dev, &rd, &d->hdr_rs);
+		D3D11_DEPTH_STENCIL_DESC dd = {0};
+		ID3D11Device_CreateDepthStencilState(d->dev, &dd, &d->hdr_ds);
+		D3D11_BLEND_DESC bl = {0};
+		bl.RenderTarget[0].RenderTargetWriteMask = 15;
+		ID3D11Device_CreateBlendState(d->dev, &bl, &d->hdr_bs);
+	}
+	if (!d->hdr_vs || !d->hdr_ps || !d->hdr_cb || !d->back_rtv)
+		return 0;
+	nat_scene_resolve(d);
+	D3D11_MAPPED_SUBRESOURCE m;
+	if (SUCCEEDED(ID3D11DeviceContext_Map(d->ctx, (ID3D11Resource *)d->hdr_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) {
+		float *k = (float *)m.pData;
+		const float white = (float)(d->p.hdr_white > 0 ? d->p.hdr_white : 200), peak = (float)(d->p.hdr_peak > 0 ? d->p.hdr_peak : 600);
+		k[0] = white / 80.0f;
+		k[1] = peak > white ? peak / white : 1.0f;
+		k[2] = k[3] = 0;
+		ID3D11DeviceContext_Unmap(d->ctx, (ID3D11Resource *)d->hdr_cb, 0);
+	}
+	ID3D11DeviceContext *x = d->ctx;
+	ID3D11DeviceContext_OMSetRenderTargets(x, 1, &d->back_rtv, NULL);
+	D3D11_VIEWPORT vp = {0, 0, (float)d->p.width, (float)d->p.height, 0, 1};
+	ID3D11DeviceContext_RSSetViewports(x, 1, &vp);
+	ID3D11DeviceContext_RSSetState(x, d->hdr_rs);
+	ID3D11DeviceContext_OMSetBlendState(x, d->hdr_bs, NULL, 0xffffffffu);
+	ID3D11DeviceContext_OMSetDepthStencilState(x, d->hdr_ds, 0);
+	ID3D11DeviceContext_IASetInputLayout(x, NULL);
+	ID3D11DeviceContext_IASetPrimitiveTopology(x, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	ID3D11DeviceContext_VSSetShader(x, (ID3D11VertexShader *)nat_shader_object(d->hdr_vs), NULL, 0);
+	ID3D11DeviceContext_PSSetShader(x, (ID3D11PixelShader *)nat_shader_object(d->hdr_ps), NULL, 0);
+	ID3D11DeviceContext_PSSetConstantBuffers(x, 0, 1, &d->hdr_cb);
+	ID3D11DeviceContext_PSSetShaderResources(x, 0, 1, &d->scene_srv);
+	ID3D11DeviceContext_Draw(x, 3, 0);
+	ID3D11ShaderResourceView *none = NULL;
+	ID3D11DeviceContext_PSSetShaderResources(x, 0, 1, &none);
+	return 1;
 }
 
 static int build_targets(nat_device *d, char *err, size_t err_size)
@@ -73,6 +183,8 @@ static int build_targets(nat_device *d, char *err, size_t err_size)
 		set_err(err, err_size, "swap chain buffer: %lx", (unsigned long)hr);
 		return 0;
 	}
+	if (d->hdr_on)
+		ID3D11Device_CreateRenderTargetView(d->dev, (ID3D11Resource *)d->backbuffer, NULL, &d->back_rtv);
 	D3D11_TEXTURE2D_DESC td = {0};
 	td.Width = d->p.width;
 	td.Height = d->p.height;
@@ -243,6 +355,8 @@ int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size
 	}
 	d->waitable = ns_waitable((IUnknown *)d->swap, d->p.low_latency ? 1 : 2);
 	IDXGIFactory_MakeWindowAssociation(d->factory, d->hwnd, DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER); // the game handles Alt+Enter itself
+	if (d->p.hdr)
+		hdr_setup(d);
 	if (!build_targets(d, err, err_size)) {
 		nat_destroy(d);
 		return 0;
@@ -302,7 +416,7 @@ int nat_reset(nat_device *d, const nat_params *p, char *err, size_t err_size)
 	IDXGISwapChain_ResizeTarget(d->swap, &m);
 	if (p->fullscreen && !d->fullscreen_set && SUCCEEDED(IDXGISwapChain_SetFullscreenState(d->swap, TRUE, NULL)))
 		d->fullscreen_set = 1;
-	HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, p->width, p->height, DXGI_FORMAT_UNKNOWN, ns_swap_flags(d->tearing));
+	HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, p->width, p->height, d->hdr_on ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_UNKNOWN, ns_swap_flags(d->tearing));
 	if (FAILED(hr)) {
 		set_err(err, err_size, "ResizeBuffers: %lx", (unsigned long)hr);
 		return 0;
@@ -318,7 +432,9 @@ void nat_scene_resolve(nat_device *d)
 
 int nat_present(nat_device *d)
 {
-	if (d->samples > 1)
+	if (d->hdr_on && hdr_present(d))
+		;
+	else if (d->samples > 1)
 		ID3D11DeviceContext_ResolveSubresource(d->ctx, (ID3D11Resource *)d->backbuffer, 0, (ID3D11Resource *)d->scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
 	else
 		ID3D11DeviceContext_CopyResource(d->ctx, (ID3D11Resource *)d->backbuffer, (ID3D11Resource *)d->scene);
