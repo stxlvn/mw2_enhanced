@@ -49,6 +49,7 @@ int nat_output_count(void);
 int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size);
 void nat_destroy(nat_device *d);
 const nat_caps *nat_get_caps(const nat_device *d);
+const char *nat_backend_name(void); // "Direct3D 11" / "Direct3D 12"
 // vid_restart / a changed resolution or mode; the resources made by the caller stay valid (the scene targets are rebuilt by the device)
 int nat_reset(nat_device *d, const nat_params *p, char *err, size_t err_size);
 // resolves the scene to the back buffer and presents; 0 = shown, 1 = occluded (nothing to do), -1 = device lost / removed

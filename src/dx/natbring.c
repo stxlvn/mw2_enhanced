@@ -379,7 +379,7 @@ int nbr_start(nbr *n, uint8_t *p)
 	n->r.fn_qsort = (void (*)(void *, size_t, size_t, void *))(e + 0x2f6ab0);
 	n->r.fn_1fa40 = (void (*)(const uint8_t *, uint8_t *))(e + 0x1fa40);
 	n->created = 1;
-	log_printf("native11: native device created on %s (%u MB)", caps->adapter, caps->vram_mb);
+	log_printf("native11: native %s device created on %s (%u MB)", nat_backend_name(), caps->adapter, caps->vram_mb);
 	// The original start (0x10550) requests the common zones right after the device and the display mode exist (0xf3f0: DB_LoadXAssets of the gfx zones, which hold $white and the other
 	// default images); the loader thread creates their images through the native image creation. Without it 0xf570 found no default image (QA 2026-11-12).
 	RD_I32(e, 0x4113270) = 0;

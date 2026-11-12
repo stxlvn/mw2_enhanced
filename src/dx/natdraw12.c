@@ -379,6 +379,7 @@ static void set_targets(nd *d, nat_image *rt, nat_image *ds, int srgb)
 void nd_clear(nd *d, unsigned flags, const float rgba[4], float depth, unsigned stencil)
 {
 	check_list(d);
+	nat12_note_commands(d->dev);
 	nat_image *rt = rt_image(d), *ds = ds_image(d);
 	if ((flags & 1) && rt && nat12_image_has_rtv(rt)) {
 		nat12_image_transition(d->dev, rt, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -659,6 +660,7 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 		return 0;
 	}
 	check_list(d);
+	nat12_note_commands(d->dev);
 	float bias = 0, slope = 0;
 	if (st.polygon_offset && d->ops.poly_offset)
 		d->ops.poly_offset(st.polygon_offset, &bias, &slope);
@@ -868,6 +870,7 @@ static void barrier_cur(nd *d, nat_image *i, D3D12_RESOURCE_STATES s) { nat12_im
 int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const nd_rect *dr, int linear)
 {
 	check_list(d);
+	nat12_note_commands(d->dev);
 	nat_image *s_img = src ? src : nat12_scene_image(d->dev), *d_img = dst ? dst : nat12_scene_image(d->dev);
 	unsigned sw, sh, ss, dw, dh, ds;
 	nat_image_size(s_img, &sw, &sh, &ss);

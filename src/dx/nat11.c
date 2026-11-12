@@ -270,6 +270,8 @@ void nat_destroy(nat_device *d)
 	free(d);
 }
 
+const char *nat_backend_name(void) { return "Direct3D 11"; }
+
 const nat_caps *nat_get_caps(const nat_device *d)
 {
 	return &d->caps;

@@ -20,6 +20,8 @@ unsigned long long nat12_pending_value(const nat_device *d);
 unsigned long long nat12_completed_value(nat_device *d);
 // submits what is recorded and waits until the GPU is done with it (readbacks, a full upload ring, a resize); the list is open again afterwards
 void nat12_flush(nat_device *d);
+// commands were recorded in the list (an event query issued before any is complete with the submissions already made)
+void nat12_note_commands(nat_device *d);
 // the frame's upload memory for constants and the like: 256-byte aligned, valid until the GPU is done with the frame; NULL when the frame's ring is full (nat12_flush and ask again)
 void *nat12_upload_alloc(nat_device *d, unsigned size, D3D12_GPU_VIRTUAL_ADDRESS *gpu);
 // shader-visible descriptor rings of the frame (count descriptors, contiguous): NULL when full. The heaps are set on the list by nat12_set_heaps.

@@ -138,6 +138,7 @@ struct nat_device {
 	ID3D12GraphicsCommandList *list;
 	unsigned list_gen;
 	int heaps_set;
+	int cmds; // commands recorded since the list was reset
 	// copy queue (texture uploads)
 	ID3D12CommandAllocator *calloc_;
 	ID3D12GraphicsCommandList *clist;
@@ -223,6 +224,7 @@ static void begin_list(nat_device *d)
 	ID3D12CommandAllocator_Reset(d->alloc[d->fidx]);
 	ID3D12GraphicsCommandList_Reset(d->list, d->alloc[d->fidx], NULL);
 	d->list_gen++;
+	d->cmds = 0;
 	d->heaps_set = 0;
 	d->ring_off = 0;
 	d->ring_seg = (UINT64)d->fidx * (d->ring_size / NAT12_FRAMES);
@@ -256,6 +258,8 @@ static void submit(nat_device *d, int wait_idle)
 	if (wait_idle)
 		wait_value(d, d->pending - 1);
 }
+
+void nat12_note_commands(nat_device *d) { d->cmds = 1; }
 
 void nat12_flush(nat_device *d)
 {
@@ -675,6 +679,7 @@ void nat12_image_transition(nat_device *d, nat_image *i, D3D12_RESOURCE_STATES s
 	b.Transition.StateBefore = i->state;
 	b.Transition.StateAfter = state;
 	ID3D12GraphicsCommandList_ResourceBarrier(d->list, 1, &b);
+	d->cmds = 1;
 	i->state = state;
 }
 
@@ -941,6 +946,7 @@ void nat_destroy(nat_device *d)
 }
 
 const nat_caps *nat_get_caps(const nat_device *d) { return &d->caps; }
+const char *nat_backend_name(void) { return "Direct3D 12"; }
 
 int nat_reset(nat_device *d, const nat_params *p, char *err, size_t err_size)
 {
@@ -1119,7 +1125,8 @@ void nat_query_end(nat_query *q)
 		}
 		d->qended[d->qended_n++] = q;
 	}
-	q->value = d->pending; // the submission of the list the commands are in signals this value
+	// an event: everything before it is done when the submission of the list the commands are in is; with nothing recorded since the last submission that is the last one
+	q->value = (d->cmds || q->occlusion) ? d->pending : d->pending - 1;
 }
 
 void nat12_query_resolve(nat_device *d, nat_query *q)
@@ -1136,6 +1143,8 @@ int nat_query_get(nat_query *q, unsigned *value)
 			*value = 0;
 		return 0;
 	}
+	if (q->value >= d->pending && d->cmds)
+		nat12_flush(d); // the query belongs to commands not submitted yet: nothing would ever finish it
 	if (ID3D12Fence_GetCompletedValue(d->fence) < q->value)
 		return 1;
 	if (value) {
