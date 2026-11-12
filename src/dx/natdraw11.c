@@ -337,16 +337,16 @@ static DXGI_FORMAT decl_format(int type)
 }
 static const char *const SEMANTICS[14] = {"POSITION", "BLENDWEIGHT", "BLENDINDICES", "NORMAL", "PSIZE", "TEXCOORD", "TANGENT", "BINORMAL", "TESSFACTOR", "POSITIONT", "COLOR", "FOG", "DEPTH", "SAMPLE"};
 
-static nat_shader *variant(nd *d, nd_shader *s, const nd_decl *decl)
+static nat_shader *variant(nd *d, nd_shader *s, const nd_decl *decl, unsigned shadow_mask)
 {
-	const unsigned sig = s->is_vs && decl ? decl->sig : 0;
+	const unsigned sig = s->is_vs ? (decl ? decl->sig : 0) : shadow_mask;
 	for (int i = 0; i < s->nvar; i++)
 		if (s->var[i].sig == sig)
 			return s->var[i].s;
 	if (s->nvar >= 8 || s->failed)
 		return NULL;
 	char err[160] = "";
-	nat_shader *n = nat_shader_from_sm3(d->dev, s->code, s->dwords, 1, s->is_vs && decl ? (const void *)decl->ints : NULL, s->is_vs && decl ? decl->nints : 0, err, sizeof(err));
+	nat_shader *n = nat_shader_from_sm3(d->dev, s->code, s->dwords, 1 | (s->is_vs ? 0 : (int)((shadow_mask & 0xffffu) << 8)), s->is_vs && decl ? (const void *)decl->ints : NULL, s->is_vs && decl ? decl->nints : 0, err, sizeof(err));
 	if (!n) {
 		s->failed = 1;
 		snprintf(d->err, sizeof(d->err), "shader: %.110s", err);
@@ -492,9 +492,9 @@ static ID3D11RasterizerState *raster_state(nd *d, const state11_t *s, int scisso
 	return r;
 }
 
-static ID3D11SamplerState *sampler_state(nd *d, uint32_t word)
+static ID3D11SamplerState *sampler_state(nd *d, uint32_t word, int compare)
 {
-	uint32_t key[8] = {word & ~0x4000000u, 0, 0, 0, 0, 0, 0, 0}; // the sRGB bit belongs to the view, not the sampler
+	uint32_t key[8] = {word & ~0x4000000u, (uint32_t)compare, 0, 0, 0, 0, 0, 0}; // the sRGB bit belongs to the view, not the sampler
 	int found;
 	ID3D11SamplerState *o = kc_get(&d->sampler, key, &found);
 	if (found)
@@ -511,6 +511,12 @@ static ID3D11SamplerState *sampler_state(nd *d, uint32_t word)
 	desc.AddressW = (D3D11_TEXTURE_ADDRESS_MODE)(sd.addr_w >= 1 && sd.addr_w <= 4 ? sd.addr_w : 1);
 	desc.MaxAnisotropy = sd.aniso >= 2 ? (UINT)(sd.aniso > 16 ? 16 : sd.aniso) : 1;
 	desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+	if (compare) { // a hardware shadow map: depth <= stored, filtered bilinearly when the sampler's filter is (PCF); clamped to the edge
+		desc.Filter = (D3D11_FILTER)(0x80 | (sd.min == 2 || sd.mag == 2 ? 0x15 : 0));
+		desc.ComparisonFunc = D3D11_COMPARISON_LESS_EQUAL;
+		desc.AddressU = desc.AddressV = desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+		desc.MaxAnisotropy = 1;
+	}
 	desc.MaxLOD = sd.mip == 0 ? 0 : D3D11_FLOAT32_MAX;
 	if (FAILED(ID3D11Device_CreateSamplerState(d->d3d, &desc, &o)))
 		o = NULL;
@@ -529,7 +535,13 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 		d->n_refused++;
 		return 0;
 	}
-	nat_shader *vs = variant(d, vsg, decl), *ps = psg ? variant(d, psg, NULL) : NULL;
+	unsigned shadow_mask = 0; // the samplers that hold depth textures (hardware shadow maps)
+	for (int i = 0; i < 16; i++) {
+		nat_image *im = g->tex[i] ? d->ops.image(g->tex[i]) : NULL;
+		if (im && im != d->rt && im != d->ds && nat_image_is_depth(im))
+			shadow_mask |= 1u << i;
+	}
+	nat_shader *vs = variant(d, vsg, decl, 0), *ps = psg ? variant(d, psg, NULL, shadow_mask) : NULL;
 	if (!vs || (psg && !ps)) {
 		d->n_refused++;
 		return 0;
@@ -559,7 +571,7 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 		if (!im || im == d->rt || im == d->ds)
 			continue;
 		srv[i] = nat_image_srv(im, (g->sampler_word[i] >> 26) & 1);
-		smp[i] = sampler_state(d, g->sampler_word[i]);
+		smp[i] = sampler_state(d, g->sampler_word[i], (shadow_mask >> i) & 1);
 	}
 	// constants
 	int vs_dirty = 0, ps_dirty = 0;

@@ -77,6 +77,7 @@ static void sb_add(sb_t *b, const char *fmt, ...)
 
 typedef struct {
 	char err[96];
+	unsigned shadow; // samplers holding hardware shadow maps (SM3_SHADOW_MASK)
 } ctx_t;
 
 #define FAIL(c, ...) do { snprintf((c)->err, sizeof((c)->err), __VA_ARGS__); return 0; } while (0)
@@ -519,6 +520,11 @@ static int emit_instr(const shader_t *sh, const instr_t *in, sb_t *L, flow_t *st
 			if (!src(sh, &ops[4], 0, s4, sizeof(s4), c))
 				return 0;
 			snprintf(a, sizeof(a), "%s.SampleGrad(%s, (%s)%s, (%s)%s, (%s)%s)", tex, ss, S[1], dim, S[3], dim, s4, dim);
+		} else if ((c->shadow >> s_n & 1) && kind == 2 && !sh->vs) { // tex2Dproj on a depth texture: the hardware comparison of z / w with the stored depth (bilinear: PCF), in all four channels
+			if (in->ctl & 1)
+				snprintf(a, sizeof(a), "(%s.SampleCmpLevelZero(%s, (%s).xy / (%s).w, (%s).z / (%s).w)).xxxx", tex, ss, S[1], S[1], S[1], S[1]);
+			else
+				snprintf(a, sizeof(a), "(%s.SampleCmpLevelZero(%s, (%s).xy, (%s).z)).xxxx", tex, ss, S[1], S[1]);
 		} else if (in->ctl & 1) {
 			snprintf(a, sizeof(a), "%s.Sample(%s, (%s)%s / (%s).w)", tex, ss, S[1], dim, S[1]);
 		} else if (in->ctl & 2) {
@@ -625,6 +631,7 @@ int sm3_translate_vs(const uint32_t *code, size_t count, int flags, const sm3_in
 {
 	shader_t *sh = calloc(1, sizeof(*sh));
 	ctx_t c = {{0}};
+	c.shadow = ((unsigned)flags >> 8) & 0xffffu;
 	sb_t L = {0};
 	int ok = 0;
 	if (!parse(sh, code, count, &c))
@@ -640,6 +647,10 @@ int sm3_translate_vs(const uint32_t *code, size_t count, int flags, const sm3_in
 		if (!sh->sampler_used[n])
 			continue;
 		const int k = sh->sampler_kind[n];
+		if ((((unsigned)flags >> 8) >> n & 1) && !sh->vs && k == 2) { // a hardware shadow map (see SM3_SHADOW_MASK)
+			sb_add(&L, "Texture2D<float> tex_s%d : register(t%d); SamplerComparisonState smp_s%d : register(s%d);\n", n, n, n, n);
+			continue;
+		}
 		sb_add(&L, "%s tex_s%d : register(t%d); SamplerState smp_s%d : register(s%d);\n", k == 3 ? "TextureCube" : k == 4 ? "Texture3D" : "Texture2D", n, n, n, n);
 	}
 	sb_t ins = {0};

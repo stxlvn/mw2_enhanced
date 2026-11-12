@@ -515,6 +515,7 @@ int nat_image_upload(nat_image *i, unsigned face, unsigned level, const void *da
 	return 1;
 }
 
+int nat_image_is_depth(const nat_image *i) { return i && (i->desc.flags & NAT_DEPTH) != 0; }
 void *nat_image_srv(nat_image *i, int srgb) { return srgb && i->srv_srgb ? i->srv_srgb : i->srv; }
 void *nat_image_rtv(nat_image *i, int srgb) { return srgb && i->rtv_srgb ? i->rtv_srgb : i->rtv; }
 void *nat_image_dsv(nat_image *i) { return i->dsv; }
@@ -805,7 +806,8 @@ nat_shader *nat_shader_from_sm3(nat_device *d, const uint32_t *code, size_t dwor
 {
 	char *hlsl = NULL, why[160] = "";
 	int is_vs = 0;
-	if (!sm3_translate_vs(code, dwords, alpha_test ? SM3_ALPHA_TEST : 0, (const sm3_int_input *)int_inputs, nint_inputs, &hlsl, &is_vs, why, sizeof(why))) {
+	// (alpha_test: bit 0 = the alpha test, bits 8..23 = SM3_SHADOW_MASK)
+	if (!sm3_translate_vs(code, dwords, (alpha_test & 1 ? SM3_ALPHA_TEST : 0) | (alpha_test & 0xffff00), (const sm3_int_input *)int_inputs, nint_inputs, &hlsl, &is_vs, why, sizeof(why))) {
 		if (err && err_size)
 			snprintf(err, err_size, "translate: %s", why);
 		return NULL;

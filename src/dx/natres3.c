@@ -68,6 +68,8 @@ void ngr_model_lighting(ngr *r, uint8_t *volume_image, const uint8_t *entries, u
 			r->fn_1fa40(en, at);
 		}
 	}
+	if (getenv("MW2COOP_LIGHTWHITE")) // diagnostics: a flat white volume
+		memset(light_shadow, 0xff, total);
 	nat_image_upload(vol, 0, 0, light_shadow, row, slice);
 	RD_I32(e, G_LOCK + 8) = 0;
 	RD_I32(e, G_LOCK + 12) = 0;
