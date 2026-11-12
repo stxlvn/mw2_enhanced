@@ -255,11 +255,27 @@ static void w_45060(unsigned flags)
 						lo[c] = v < lo[c] ? v : lo[c];
 						hi[c] = v > hi[c] ? v : hi[c];
 					}
-				if (skip > 300 && hi[0] + hi[1] + hi[2] > 60 && hi[0] - lo[0] < 12 && hi[1] - lo[1] < 12 && hi[2] - lo[2] < 12 && saved < 20) {
-					char nm[48];
-					snprintf(nm, sizeof(nm), "flash%d", saved++);
-					log_printf("native11: flashwatch: a one-colour frame (%u,%u,%u) at presented frame %d, saved as %s", px[0] >> 16 & 255, px[0] >> 8 & 255, px[0] & 255, skip, nm);
-					natboot_shot(nm);
+				static int in_flash, start_frame, last_frame;
+				static unsigned first_col, last_col, spans;
+				const int uniform = hi[0] + hi[1] + hi[2] > 60 && hi[0] - lo[0] < 12 && hi[1] - lo[1] < 12 && hi[2] - lo[2] < 12;
+				const unsigned col = (px[0] & 0xffffff);
+				if (skip > 300 && uniform) {
+					if (!in_flash) {
+						in_flash = 1;
+						start_frame = skip;
+						first_col = col;
+						if (saved < 6) {
+							char nm[48];
+							snprintf(nm, sizeof(nm), "flash%d", saved++);
+							natboot_shot(nm);
+						}
+					}
+					last_frame = skip;
+					last_col = col;
+				} else if (in_flash) {
+					in_flash = 0;
+					spans++;
+					log_printf("native11: flashwatch: one-colour frames from frame %d to %d (about %d frames), colour %06x -> %06x, then the picture returned (span %u)", start_frame, last_frame, last_frame - start_frame + 3, first_col, last_col, spans);
 				}
 			}
 		}

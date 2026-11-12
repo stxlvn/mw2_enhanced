@@ -233,6 +233,9 @@ main()
 		case "downs":
 			downs();
 			break;
+		case "dmg":
+			dmg();
+			break;
 		case "sceneskill":
 			sceneskill();
 			break;
@@ -1210,6 +1213,19 @@ downaudio()
 	{
 		wait 1;
 		report( "downaudio after " + i + ": p1 red " + level.player ent_flag( "player_has_red_flashing_overlay" ) + ", p2 red " + level.player2 ent_flag( "player_has_red_flashing_overlay" ) );
+	}
+	report( "done" );
+}
+
+// dmg (run with MW2COOP_PRE "set mw2coop_god 0;set mw2coop_qa dmg"): the player takes a hit every 4 s for a minute, to look at the damage overlays on the native renderers
+dmg()
+{
+	wait 20;
+	for ( i = 0; i < 15; i++ )
+	{
+		wait 4;
+		report( "dmg " + i + ": hp " + level.player.health );
+		level.player DoDamage( 25, level.player.origin + ( 100, 0, 40 ) );
 	}
 	report( "done" );
 }
