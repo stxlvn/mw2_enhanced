@@ -51,6 +51,8 @@ void nbr_bind(nbr *n, uint8_t *exe)
 	BIND(fn_28690, 0x28690);
 	BIND(fn_4e940, 0x4e940);
 	BIND(fn_4f760, 0x4f760);
+	BIND(fn_f3f0, 0xf3f0);
+	BIND(fn_dvar_set_int, 0x26e020);
 	BIND(fn_f570, 0xf570);
 	BIND(fn_e340, 0x26e340);
 	BIND(fn_203b00, 0x203b00);
@@ -254,6 +256,65 @@ static const nd_ops n_ops = {res_shader, res_decl, res_image, res_poly};
 
 static void nbr_bee0(nbr *n);
 
+// QA: where the other threads are (an asset loader that stopped making progress): each thread is stopped for a moment and its instruction pointer and the code addresses on the top of
+// its stack are logged as module+offset (exe addresses as rva).
+#include <tlhelp32.h>
+static void nbr_dump_threads(uint8_t *exe)
+{
+	HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+	if (snap == INVALID_HANDLE_VALUE)
+		return;
+	THREADENTRY32 te;
+	te.dwSize = sizeof(te);
+	const DWORD me = GetCurrentThreadId(), pid = GetCurrentProcessId();
+	for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+		if (te.th32OwnerProcessID != pid || te.th32ThreadID == me)
+			continue;
+		HANDLE th = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, te.th32ThreadID);
+		if (!th)
+			continue;
+		if (SuspendThread(th) != (DWORD)-1) {
+			CONTEXT c;
+			memset(&c, 0, sizeof(c));
+			c.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+			if (GetThreadContext(th, &c)) {
+				char line[700];
+				int n = snprintf(line, sizeof(line), "native11: thread %lu rip %llx", (unsigned long)te.th32ThreadID, (unsigned long long)c.Rip);
+				const uintptr_t exe_lo = (uintptr_t)exe, exe_hi = exe_lo + 0x4900000;
+				HMODULE self = NULL;
+				GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)nbr_dump_threads, &self);
+				const uintptr_t mw_lo = (uintptr_t)self, mw_hi = mw_lo + 0x400000;
+				HMODULE m;
+				if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)c.Rip, &m)) {
+					char nm[MAX_PATH];
+					GetModuleFileNameA(m, nm, MAX_PATH);
+					const char *base = strrchr(nm, 92) ? strrchr(nm, 92) + 1 : nm; // 92 = backslash
+					n += snprintf(line + n, sizeof(line) - n, " (%s+0x%llx)", base, (unsigned long long)(c.Rip - (uintptr_t)m));
+				}
+				const uintptr_t *sp = (const uintptr_t *)c.Rsp;
+				int shown = 0;
+				n += snprintf(line + n, sizeof(line) - n, " stack:");
+				for (int k = 0; k < 400 && shown < 18 && n < (int)sizeof(line) - 24; k++) {
+					uintptr_t v;
+					if (!ReadProcessMemory(GetCurrentProcess(), sp + k, &v, sizeof(v), NULL))
+						break;
+					if (v > exe_lo && v < exe_hi) {
+						n += snprintf(line + n, sizeof(line) - n, " exe+%llx", (unsigned long long)(v - exe_lo));
+						shown++;
+					} else if (v > mw_lo && v < mw_hi) { // this DLL (winmm.dll): module offsets
+						n += snprintf(line + n, sizeof(line) - n, " mw+%llx", (unsigned long long)(v - mw_lo));
+						shown++;
+					}
+				}
+				log_printf("%s", line);
+			}
+			ResumeThread(th);
+		}
+		CloseHandle(th);
+	}
+	CloseHandle(snap);
+}
+
 int nbr_start(nbr *n, uint8_t *p)
 {
 	uint8_t *e = n->exe;
@@ -310,6 +371,12 @@ int nbr_start(nbr *n, uint8_t *p)
 	n->r.fn_1fa40 = (void (*)(const uint8_t *))(e + 0x1fa40);
 	n->created = 1;
 	log_printf("native11: native device created on %s (%u MB)", caps->adapter, caps->vram_mb);
+	// The original start (0x10550) requests the common zones right after the device and the display mode exist (0xf3f0: DB_LoadXAssets of the gfx zones, which hold $white and the other
+	// default images); the loader thread creates their images through the native image creation. Without it 0xf570 found no default image (QA 2026-11-12).
+	RD_I32(e, 0x4113270) = 0;
+	// 0xef10's last act on the dvar: r_rendererInUse = 0 (shader model 3.0), the version the game's shaders are made for (the shaders of another version are skipped)
+	n->fn.fn_dvar_set_int(RD_PTR(e, 0x4116198), 0);
+	n->fn.fn_f3f0();
 	// the fixed resources of 0xf760: the render-target table first, then the CPU-side tables, the model lighting volume, the dynamic vertex buffer, rings, queries
 	nbr_targets(n);
 	if (RD_U8(e, G_NO_RENDER) == 0) {
@@ -400,6 +467,22 @@ int nbr_start(nbr *n, uint8_t *p)
 	RD_I32(e, 0x40d2910) = 0x1000;
 	RD_I32(e, 0x40d2914) = 0x2000;
 	memcpy(e + 0x40d2918, e + 0x385c90, 16);
+	// The asset loader thread creates the zone's images (through the native image creation) once the device exists; the original start reaches 0xf570 about half a second after
+	// the device, by when the default images ($white ...) are registered. 0xef500 is the lookup without the default fallback: wait for it (QA 2026-11-12: the first native boot
+	// asked 16 ms after the device and the engine stopped with "Could not load default asset $white").
+	{
+		const DWORD t0 = GetTickCount();
+		uint8_t *(*raw_find)(int, const char *) = (uint8_t *(*)(int, const char *))(e + 0xef500);
+		int dumped = 0;
+		while (!raw_find(10, "$white") && GetTickCount() - t0 < 20000) {
+			Sleep(5);
+			if (!dumped && GetTickCount() - t0 > 3000) {
+				dumped = 1;
+				nbr_dump_threads(e);
+			}
+		}
+		log_printf("native11: $white %s after %lu ms", raw_find(10, "$white") ? "is registered" : "was NOT registered", (unsigned long)(GetTickCount() - t0));
+	}
 	n->fn.fn_f570(); // default images and materials
 	for (unsigned i = 0; i < 2; i++) {
 		void *dv = RD_PTR(e, 0x41164a0 + (size_t)i * 8);

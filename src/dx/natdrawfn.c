@@ -61,6 +61,8 @@ int ngf_ring_indices(ngf *f, void *state, const void *src, int tri_count)
 
 void ngf_set_streams(ngf *f, void *state, void *buffer, int offset, int stride)
 {
+	if (nat_buffer_is_staged((nat_buffer *)buffer)) // the frame's skinned vertices: what the worker threads have reserved so far goes to the GPU now
+		nat_buffer_sync((nat_buffer *)buffer);
 	if (RD_PTR(state, 0xf0) != buffer || RD_I32(state, 0xf8) != offset || RD_I32(state, 0xe8) != stride) {
 		RD_PTR(state, 0xf0) = buffer;
 		RD_I32(state, 0xf8) = offset;

@@ -29,6 +29,10 @@ enum { NGR_KIND_1D = 2, NGR_KIND_2D = 3, NGR_KIND_VOLUME = 4, NGR_KIND_CUBE = 5 
 // flags bits of 0x492d0: 1 no picmip, 2 no mip chain, 15 dynamic, 16 / 17 (0x30000: 0 2D, 0x10000 cube, 0x20000 volume), 25 render target or depth, 26 system memory
 // 0x492d0: creates the native image for `image` (w, h, d, flags, d3d format) and fills the struct; returns 1, or 0 (and the error report) when the resource could not be made
 int ngr_image_create(ngr *r, uint8_t *image, unsigned w, unsigned h, unsigned d, unsigned flags, int format);
+// the game's three image creators on their own (0x23950, 0x23a90, 0x23be0)
+int ngr_creator_2d(ngr *r, uint8_t *image, unsigned w, unsigned h, unsigned levels, unsigned flags, int format);
+int ngr_creator_volume(ngr *r, uint8_t *image, unsigned w, unsigned h, unsigned d, unsigned flags, int format);
+int ngr_creator_cube(ngr *r, uint8_t *image, unsigned w, unsigned nomip, int format);
 // 0x49170 / 0x48fa0: uploads one level (and face) from `data`, laid out as the game's loader has it (rows of w pixels or 4x4 blocks, the formats of 0x48e80); `format` is the d3d format number
 void ngr_image_upload(ngr *r, uint8_t *image, int format, unsigned face, unsigned level, const void *data);
 // releases the native image of the struct

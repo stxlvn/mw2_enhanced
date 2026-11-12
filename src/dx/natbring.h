@@ -35,6 +35,8 @@ typedef struct {
 	void (*fn_28690)(int a);                                                                     // 0x28690
 	void (*fn_4e940)(void);                                                                      // 0x4e940 (default sampler / render states: native version resets the shadow)
 	void (*fn_4f760)(void);                                                                      // 0x4f760
+	void (*fn_dvar_set_int)(void *dvar, int value);                                               // 0x26e020 (sets a dvar's value)
+	void (*fn_f3f0)(void);                                                                       // 0x0f3f0 (requests the common zones: DB_LoadXAssets of the gfx zones, $white ...)
 	void (*fn_f570)(void);                                                                       // 0x0f570 (default images, materials)
 	void (*fn_e340)(void *dvar);                                                                 // 0x26e340
 	void (*fn_203b00)(int v);                                                                    // 0x203b00

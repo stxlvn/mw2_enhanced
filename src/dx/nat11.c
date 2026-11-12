@@ -531,11 +531,46 @@ unsigned nat_scene_samples(const nat_device *d) { return d->samples; }
 unsigned nat_image_levels(const nat_image *i) { return i->levels; }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ buffers
+// The first member is the vtable pointer of a Direct3D 9 vertex / index buffer: the engine's loader creates static buffers through 0x24d00 / 0x24df0 and then writes and releases them
+// through the stored pointer with the Direct3D 9 calls (Lock +0x58, Unlock +0x60, Release +0x10); only those slots are real, the others do nothing.
 struct nat_buffer {
+	void **vt;
 	nat_device *dev;
 	ID3D11Buffer *buf;
 	int dynamic;
+	int is_index;
+	unsigned size;
+	uint8_t *cpu; // a static buffer being written (Lock .. Unlock): the block, uploaded and freed at Unlock
+	uint8_t *stage;        // a staged buffer: the memory the engine writes through Lock for the whole frame (its worker threads fill it), copied to the GPU buffer by nat_buffer_sync
+	unsigned synced;       // the bytes of the stage already copied
+	const volatile int *used; // the engine's own count of the bytes it has reserved in the stage (the ring struct's first field)
 };
+
+static long buffer_nop(void *self)
+{
+	(void)self;
+	return 0;
+}
+static long buffer_addref(void *self)
+{
+	(void)self;
+	return 1;
+}
+static long buffer_release(void *self);
+static long buffer_lock(void *self, unsigned off, unsigned size, void **out, unsigned flags);
+static long buffer_unlock(void *self);
+static void *buffer_vt[32];
+static void buffer_vt_init(void)
+{
+	if (buffer_vt[0])
+		return;
+	for (int i = 0; i < 32; i++)
+		buffer_vt[i] = (void *)buffer_nop;
+	buffer_vt[1] = (void *)buffer_addref;
+	buffer_vt[2] = (void *)buffer_release; // +0x10
+	buffer_vt[11] = (void *)buffer_lock;   // +0x58
+	buffer_vt[12] = (void *)buffer_unlock; // +0x60
+}
 
 nat_buffer *nat_buffer_create(nat_device *d, unsigned size, int is_index, int dynamic, const void *initial)
 {
@@ -550,8 +585,12 @@ nat_buffer *nat_buffer_create(nat_device *d, unsigned size, int is_index, int dy
 	}
 	D3D11_SUBRESOURCE_DATA sd = {initial, 0, 0};
 	nat_buffer *b = calloc(1, sizeof(*b));
+	buffer_vt_init();
+	b->vt = buffer_vt;
 	b->dev = d;
 	b->dynamic = dynamic;
+	b->is_index = is_index;
+	b->size = size;
 	if (FAILED(ID3D11Device_CreateBuffer(d->dev, &bd, initial ? &sd : NULL, &b->buf))) {
 		free(b);
 		return NULL;
@@ -564,7 +603,109 @@ void nat_buffer_destroy(nat_buffer *b)
 	if (!b)
 		return;
 	REL(b->buf);
+	free(b->cpu);
+	free(b->stage);
 	free(b);
+}
+
+// A vertex buffer the engine locks for a whole frame and writes from several threads (the skinned-vertex rings): a GPU buffer plus a stage of the same size. Lock hands out the stage;
+// `used` is the engine's byte counter for it; nat_buffer_sync copies what is reserved so far to the GPU buffer, and is called before a draw reads the buffer.
+nat_buffer *nat_buffer_create_staged(nat_device *d, unsigned size, const volatile int *used)
+{
+	nat_buffer *b = nat_buffer_create(d, size, 0, 0, NULL);
+	if (!b)
+		return NULL;
+	b->stage = calloc(1, size);
+	if (!b->stage) {
+		nat_buffer_destroy(b);
+		return NULL;
+	}
+	b->used = used;
+	return b;
+}
+
+int nat_buffer_is_staged(const nat_buffer *b) { return b && b->stage != NULL; }
+
+void nat_buffer_sync(nat_buffer *b)
+{
+	if (!b || !b->stage || !b->used)
+		return;
+	int u = *b->used;
+	if (u < 0)
+		return;
+	if ((unsigned)u > b->size)
+		u = (int)b->size;
+	if ((unsigned)u <= b->synced)
+		return;
+	D3D11_BOX box = {b->synced, 0, 0, (UINT)u, 1, 1};
+	ID3D11DeviceContext_UpdateSubresource(b->dev->ctx, (ID3D11Resource *)b->buf, 0, &box, b->stage + b->synced, 0, 0);
+	b->synced = (unsigned)u;
+}
+
+// A static buffer the engine writes after creating it (0x24d00 / 0x24df0): no Direct3D 11 buffer exists until Unlock, which makes it from the written block. Returns the block to write.
+nat_buffer *nat_buffer_create_static(nat_device *d, unsigned size, int is_index, void **block)
+{
+	nat_buffer *b = calloc(1, sizeof(*b));
+	buffer_vt_init();
+	b->vt = buffer_vt;
+	b->dev = d;
+	b->is_index = is_index;
+	b->size = size;
+	b->cpu = calloc(1, size ? size : 1);
+	if (!b->cpu) {
+		free(b);
+		return NULL;
+	}
+	*block = b->cpu;
+	return b;
+}
+
+static long buffer_release(void *self)
+{
+	nat_buffer_destroy((nat_buffer *)self);
+	return 0;
+}
+
+static long buffer_lock(void *self, unsigned off, unsigned size, void **out, unsigned flags)
+{
+	nat_buffer *b = (nat_buffer *)self;
+	(void)size;
+	(void)flags;
+	if (b->stage) { // a new frame (Lock with DISCARD): the whole stage is free again
+		if (off > b->size)
+			return -1;
+		b->synced = 0;
+		*out = b->stage + off;
+		return 0;
+	}
+	if (b->dynamic || off > b->size)
+		return -1;
+	if (!b->cpu) // a second Lock of a made buffer: a fresh block (the first contents are not read back)
+		b->cpu = calloc(1, b->size ? b->size : 1);
+	if (!b->cpu)
+		return -1;
+	*out = b->cpu + off;
+	return 0;
+}
+
+static long buffer_unlock(void *self)
+{
+	nat_buffer *b = (nat_buffer *)self;
+	if (!b->cpu || b->dynamic)
+		return 0;
+	D3D11_BUFFER_DESC bd = {0};
+	bd.ByteWidth = b->size;
+	bd.BindFlags = b->is_index ? D3D11_BIND_INDEX_BUFFER : D3D11_BIND_VERTEX_BUFFER;
+	bd.Usage = D3D11_USAGE_DEFAULT;
+	D3D11_SUBRESOURCE_DATA sd = {b->cpu, 0, 0};
+	ID3D11Buffer *nb = NULL;
+	if (SUCCEEDED(ID3D11Device_CreateBuffer(b->dev->dev, &bd, &sd, &nb))) {
+		REL(b->buf);
+		b->buf = nb;
+	}
+	free(b->cpu);
+	b->cpu = NULL;
+	return 0;
 }
 
 void *nat_buffer_map(nat_buffer *b, int mode)
@@ -670,15 +811,70 @@ int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ queries and gamma
 #ifdef _WIN32
 struct nat_query {
+	void **vt; // a Direct3D 9 query vtable first (see query_vt)
 	nat_device *dev;
 	ID3D11Query *q;
 	int occlusion;
 };
 
+// A nat_query starts with the vtable pointer of a Direct3D 9 query, because the engine's loops that were not rewritten call GetData (+0x38) and Issue (+0x30) on the stored pointer.
+void nat_query_destroy(nat_query *q);
+void nat_query_end(nat_query *q);
+int nat_query_get(nat_query *q, unsigned *value);
+static void *query_vt[16];
+static long query_nop(void *self)
+{
+	(void)self;
+	return 0;
+}
+static long query_release(void *self)
+{
+	nat_query_destroy((nat_query *)self);
+	return 0;
+}
+static long query_issue(void *self, unsigned flags)
+{
+	nat_query *q = (nat_query *)self;
+	if (flags & 2) { // D3DISSUE_BEGIN (occlusion queries only)
+		if (q->occlusion)
+			ID3D11DeviceContext_Begin(q->dev->ctx, (ID3D11Asynchronous *)q->q);
+	} else {
+		nat_query_end(q);
+	}
+	return 0;
+}
+static long query_getdata(void *self, void *data, unsigned size, unsigned flags)
+{
+	(void)flags;
+	nat_query *q = (nat_query *)self;
+	unsigned v = 0;
+	const int r = nat_query_get(q, &v);
+	if (r == 1)
+		return 1; // S_FALSE: not ready yet
+	if (r < 0)
+		return (long)0x88760868; // D3DERR_DEVICELOST
+	if (data && size >= 4)
+		*(unsigned *)data = v;
+	return 0;
+}
+static void query_vt_init(void)
+{
+	if (query_vt[0])
+		return;
+	for (int i = 0; i < 16; i++)
+		query_vt[i] = (void *)query_nop;
+	query_vt[1] = (void *)query_nop;
+	query_vt[2] = (void *)query_release; // +0x10
+	query_vt[6] = (void *)query_issue;   // +0x30
+	query_vt[7] = (void *)query_getdata; // +0x38
+}
+
 nat_query *nat_query_create(nat_device *d, int occlusion)
 {
 	D3D11_QUERY_DESC qd = {occlusion ? D3D11_QUERY_OCCLUSION : D3D11_QUERY_EVENT, 0};
 	nat_query *q = calloc(1, sizeof(*q));
+	query_vt_init();
+	q->vt = query_vt;
 	q->dev = d;
 	q->occlusion = occlusion;
 	if (FAILED(ID3D11Device_CreateQuery(d->dev, &qd, &q->q))) {

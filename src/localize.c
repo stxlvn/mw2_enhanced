@@ -588,7 +588,27 @@ static void *find_header(int type, const char *name)
 		if (clone)
 			return clone;
 	}
+	static signed char dblog = -1; // QA: MW2COOP_DBLOG=1 logs the first 700 asset lookups (type, name) before the call, and the result after (native DirectX bring-up: what the engine asks for, in what order)
+	static volatile LONG dbn;
+	if (dblog < 0)
+		dblog = getenv("MW2COOP_DBLOG") != NULL;
+	const LONG dbk = dblog ? InterlockedIncrement(&dbn) : 0;
+	if (dblog && dbk <= 700)
+		log_printf("dblog: %ld > type %d '%s'", (long)dbk, type, name ? name : "?");
+	if (dblog && dbk <= 3) { // who asks: the return addresses (exe rva)
+		void *bt[24];
+		const USHORT nb = CaptureStackBackTrace(0, 24, bt, NULL);
+		char line[400];
+		int ln = 0;
+		const uintptr_t base = (uintptr_t)GetModuleHandleA(NULL);
+		for (USHORT k = 0; k < nb && ln < (int)sizeof(line) - 20; k++)
+			if ((uintptr_t)bt[k] > base && (uintptr_t)bt[k] < base + 0x4900000)
+				ln += snprintf(line + ln, sizeof(line) - ln, " exe+%llx", (unsigned long long)((uintptr_t)bt[k] - base));
+		log_printf("dblog: %ld stack:%s", (long)dbk, line);
+	}
 	void *found = original(type, name);
+	if (dblog && dbk <= 700)
+		log_printf("dblog: %ld < %p", (long)dbk, found);
 	localize_retry_language(); // refresh an early fallback result from the asset-loading path, not the render thread
 	if (type == ASSET_TYPE_FONT)
 		fonts_seen(found, name, original);

@@ -80,6 +80,74 @@ int ngr_image_create(ngr *r, uint8_t *image, unsigned w, unsigned h, unsigned d,
 	return im != NULL;
 }
 
+// The game's creators called on their own (0x23950, 0x23a90, 0x23be0: the asset loader 0x23db0 and a function table call them without 0x492d0): the same as the image half of 0x492d0,
+// with the header kind they set themselves (3 = 2D, 4 = volume, 5 = cube). `levels` is the Direct3D 9 Levels argument (0 = a full chain).
+int ngr_creator_2d(ngr *r, uint8_t *image, unsigned w, unsigned h, unsigned levels, unsigned flags, int format)
+{
+	*(uint16_t *)AT(image, 0x18) = (uint16_t)w;
+	*(uint16_t *)AT(image, 0x1a) = (uint16_t)h;
+	*(uint16_t *)AT(image, 0x1c) = 1;
+	RD_U8(image, 8) = NGR_KIND_2D;
+	nat_image_desc desc = {0};
+	desc.kind = NAT_IMAGE_2D;
+	desc.d3d9_format = (unsigned)format;
+	desc.w = w;
+	desc.h = h;
+	desc.d = 1;
+	desc.levels = levels;
+	const int is_depth_fmt = format == 0x4b || format == 0x4d || format == 0x50 || (unsigned)format == 0x5a544e49u;
+	if ((flags >> 25) & 1)
+		desc.flags |= is_depth_fmt ? NAT_DEPTH : NAT_RENDER_TARGET;
+	else if (flags >> 15 & 0x200)
+		desc.flags |= NAT_DYNAMIC;
+	nat_image *im = nat_image_create(r->dev, &desc);
+	RD_PTR(image, 0) = im;
+	if (!im && r->error)
+		r->error("Create2DTexture", RD_PTR(image, 0x20), w, h, (unsigned)format);
+	return im != NULL;
+}
+
+int ngr_creator_volume(ngr *r, uint8_t *image, unsigned w, unsigned h, unsigned d, unsigned flags, int format)
+{
+	*(uint16_t *)AT(image, 0x18) = (uint16_t)w;
+	*(uint16_t *)AT(image, 0x1a) = (uint16_t)h;
+	*(uint16_t *)AT(image, 0x1c) = (uint16_t)d;
+	RD_U8(image, 8) = NGR_KIND_VOLUME;
+	nat_image_desc desc = {0};
+	desc.kind = NAT_IMAGE_VOLUME;
+	desc.d3d9_format = (unsigned)format;
+	desc.w = w;
+	desc.h = h;
+	desc.d = d;
+	desc.levels = 0;
+	if (!((flags >> 25) & 1) && (flags >> 15 & 0x200))
+		desc.flags |= NAT_DYNAMIC;
+	nat_image *im = nat_image_create(r->dev, &desc);
+	RD_PTR(image, 0) = im;
+	if (!im && r->error)
+		r->error("Create3DTexture", RD_PTR(image, 0x20), w, h, (unsigned)format);
+	return im != NULL;
+}
+
+int ngr_creator_cube(ngr *r, uint8_t *image, unsigned w, unsigned nomip, int format)
+{
+	*(uint16_t *)AT(image, 0x18) = (uint16_t)w;
+	*(uint16_t *)AT(image, 0x1a) = (uint16_t)w;
+	*(uint16_t *)AT(image, 0x1c) = 1;
+	RD_U8(image, 8) = NGR_KIND_CUBE;
+	nat_image_desc desc = {0};
+	desc.kind = NAT_IMAGE_CUBE;
+	desc.d3d9_format = (unsigned)format;
+	desc.w = desc.h = w;
+	desc.d = 1;
+	desc.levels = (!r->mip_cube || nomip) ? 1 : 0;
+	nat_image *im = nat_image_create(r->dev, &desc);
+	RD_PTR(image, 0) = im;
+	if (!im && r->error)
+		r->error("CreateCubeTexture", RD_PTR(image, 0x20), w, w, (unsigned)format);
+	return im != NULL;
+}
+
 void ngr_image_upload(ngr *r, uint8_t *image, int format, unsigned face, unsigned level, const void *data)
 {
 	nat_image *im = RD_PTR(image, 0);

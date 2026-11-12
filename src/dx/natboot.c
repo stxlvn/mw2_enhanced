@@ -111,7 +111,22 @@ static void w_26810(void) { InterlockedIncrement(&hits[32]); if (!N.created) ret
 static int w_492d0(uint8_t *image, unsigned w, unsigned h, unsigned d, unsigned flags, int fmt) { InterlockedIncrement(&hits[33]); if (!N.created) return 0; return ngr_image_create(&N.r, image, w & 0xffff, h & 0xffff, d & 0xffff, flags, fmt); }
 static void w_49170(uint8_t *image, unsigned fmt, unsigned face, int level, const void *data) { InterlockedIncrement(&hits[34]); if (!N.created) return; ngr_image_upload(&N.r, image, (int)fmt, face, (unsigned)level, data); }
 static void w_23920(uint8_t *image) { InterlockedIncrement(&hits[35]); ngr_image_release(image); *(uint64_t *)(image + 0x10) = 0; }
-static void w_8f60(uint8_t *src, uint8_t *obj) { InterlockedIncrement(&hits[36]); if (!N.created) return; ngr_create_shader(&N.r, src, obj); }
+static void w_8f60(uint8_t *src, uint8_t *obj)
+{
+	InterlockedIncrement(&hits[36]);
+	if (!N.created)
+		return;
+	ngr_create_shader(&N.r, src, obj);
+	static volatile LONG logged, failed, made;
+	if (*(void **)(obj + 8))
+		made++;
+	else
+		failed++;
+	if (((made + failed) % 500) == 0)
+		log_printf("native11: shaders: %ld created, %ld not (version or none)", (long)made, (long)failed);
+	if (!*(void **)(obj + 8) && InterlockedIncrement(&logged) <= 4)
+		log_printf("native11: shader not created: code %p, shaders-on dvar value %d, source version %u, dvar version %u", *(void **)src, (int)*(uint8_t *)(*(uint8_t **)(exe + 0x41161a0) + 0x10), (unsigned)*(uint16_t *)(src + 10), (unsigned)*(uint32_t *)(*(uint8_t **)(exe + 0x4116198) + 0x10));
+}
 static void w_258a0(uint8_t *set, int count) { InterlockedIncrement(&hits[37]); if (!N.created) return; ngr_make_decls(&N.r, set, set, count); }
 static void w_24f00(void *ring, unsigned size) { InterlockedIncrement(&hits[38]); if (!N.created) return; ngr_ring_init(&N.r, ring, size); }
 static void w_44d00(uint8_t *scene) { InterlockedIncrement(&hits[39]); if (!N.created) return; ngfr_44d00(&N.frame, scene); }
@@ -121,6 +136,34 @@ static int w_45010(void) { InterlockedIncrement(&hits[42]); return !ngfr_pending
 static int w_2f800(void) { InterlockedIncrement(&hits[43]); return ngfr_pending(&N.pace, *(void **)(*(uint8_t **)(exe + 0x410fd00) + 0x419c8)); }
 static void w_10de0(void) { InterlockedIncrement(&hits[44]); nbr_init(&N); }
 static void w_noop(void) {}
+// 0x2b7840 / 0x2b7980: the Bink film planes (lock: the decoder writes into CPU memory; unlock: the changed planes go to the images)
+static void w_2b7840(uint8_t *film) { if (N.created) ngr_film_lock(&N.r, film); }
+static void w_2b7980(void *dev, uint8_t *film, void *bink) { (void)dev; if (N.created) ngr_film_unlock(&N.r, film, bink); }
+// 0x4d100: the start-up occlusion query self-test: it clears, draws a 16 x 16 quad (DAT_140385ae0) between the query's Begin and End and returns the samples that passed (0x100 = 16 x 16 is also
+// what the game takes when the query gives no answer). Native queries work, so the answer is the expected one; the result only scales the later visibility tests.
+static unsigned w_4d100(void) { return N.created && *(void **)(exe + 0x45851d0) ? 0x100u : 0u; }
+// 0x23950 / 0x23a90 / 0x23be0: the image creators (also called by the asset loader 0x23db0 and through a function table, not only by 0x492d0)
+static void w_23950(uint8_t *image, unsigned w, unsigned h, unsigned levels, unsigned flags, int fmt) { if (N.created) ngr_creator_2d(&N.r, image, w & 0xffff, h & 0xffff, levels, flags, fmt); }
+static void w_23a90(uint8_t *image, unsigned w, unsigned h, unsigned d, unsigned p5, unsigned flags, int fmt) { (void)p5; if (N.created) ngr_creator_volume(&N.r, image, w & 0xffff, h & 0xffff, d & 0xffff, flags, fmt); }
+static void w_23be0(uint8_t *image, unsigned w, unsigned nomip, int fmt) { if (N.created) ngr_creator_cube(&N.r, image, w & 0xffff, nomip, fmt); }
+// 0x24d00 / 0x24df0: a static vertex / index buffer for the asset loader; *out receives the buffer object, the return value is the block to write (0 when shaders are off: the engine then
+// makes no buffers). The loader fills the block and calls Unlock through the object's vtable (nat11.c).
+static void *w_24d00(void **out, uint64_t size)
+{
+	if (!N.created || *(char *)(*(uint8_t **)(exe + 0x41161a0) + 0x10) == 0)
+		return NULL;
+	void *block = NULL;
+	*out = nat_buffer_create_static(N.dev, (unsigned)size, 0, &block);
+	return *out ? block : NULL;
+}
+static void *w_24df0(void **out, uint64_t size)
+{
+	if (!N.created || *(char *)(*(uint8_t **)(exe + 0x41161a0) + 0x10) == 0)
+		return NULL;
+	void *block = NULL;
+	*out = nat_buffer_create_static(N.dev, (unsigned)size, 1, &block);
+	return *out ? block : NULL;
+}
 static unsigned w_4f380(void *dev, unsigned slot, unsigned word, unsigned old) { InterlockedIncrement(&hits[45]); (void)dev; (void)slot; (void)old; return word; }
 static void w_39420(void) { InterlockedIncrement(&hits[46]); if (N.created) nbr_targets(&N); }
 static void w_45060(unsigned flags)
@@ -197,6 +240,16 @@ static DWORD WINAPI monitor(LPVOID arg)
 			}
 		if (line[0])
 			log_printf("native11: calls (totals):%s", line);
+		if (N.created && N.d) {
+			static unsigned o_draws, o_refused;
+			unsigned st, ly, sh, up, dr, rf;
+			nd_stats(N.d, &st, &ly, &sh, &up, &dr, &rf);
+			if (dr != o_draws || rf != o_refused) {
+				log_printf("native11: draws %u, refused %u, uploads %u, shaders %u, layouts %u, states %u; last refusal: %s", dr, rf, up, sh, ly, st, nd_last_error(N.d));
+				o_draws = dr;
+				o_refused = rf;
+			}
+		}
 	}
 	return 0;
 }
@@ -224,8 +277,33 @@ static DWORD WINAPI waiter(LPVOID arg)
 	return 0;
 }
 
+// QA (MW2COOP_WHITEPOLL=1): when does the engine register the default image $white (asset lookup 0xef500 without the default fallback)? Polled every 2 ms from the start.
+static DWORD WINAPI whitepoll_thread(LPVOID unused)
+{
+	(void)unused;
+	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
+	uint8_t *(*raw_find)(int, const char *) = (uint8_t *(*)(int, const char *))(base + 0xef500);
+	static const uint8_t head[] = {0x48, 0x89, 0x5c, 0x24, 0x08, 0x48, 0x89, 0x6c, 0x24, 0x10, 0x48, 0x89, 0x74, 0x24, 0x18, 0x48, 0x89, 0x7c, 0x24, 0x20};
+	while (IsBadReadPtr(base + 0x54a10, sizeof(head)) || memcmp(base + 0x54a10, head, sizeof(head)) != 0) // the exe is SteamStub packed: wait for its unpacked code
+		Sleep(1);
+	const DWORD t0 = GetTickCount();
+	log_printf("native11: whitepoll: the exe is unpacked, polling for $white");
+	for (;;) {
+		uint8_t *hit = raw_find(10, "$white"); // (a walk over the hash chains: harmless on the empty tables of an early engine)
+		if (hit) {
+			log_printf("native11: whitepoll: $white registered %lu ms after the poll started (header %p)", (unsigned long)(GetTickCount() - t0), (void *)hit);
+			return 0;
+		}
+		if (GetTickCount() - t0 > 60000)
+			return 0;
+		Sleep(2);
+	}
+}
+
 void natboot_install(void)
 {
+	if (getenv("MW2COOP_WHITEPOLL"))
+		CloseHandle(CreateThread(NULL, 0, whitepoll_thread, NULL, 0, NULL));
 	if (!getenv("MW2COOP_NATIVE11"))
 		return;
 	exe = (uint8_t *)GetModuleHandleA(NULL);
@@ -319,6 +397,14 @@ static void install_all(void)
 	install(0x9070, w_8f60);
 	install(0x258a0, w_258a0);
 	install(0x24f00, w_24f00);
+	install(0x2b7840, w_2b7840);
+	install(0x2b7980, w_2b7980);
+	install(0x4d100, w_4d100);
+	install(0x23950, w_23950);
+	install(0x23a90, w_23a90);
+	install(0x23be0, w_23be0);
+	install(0x24d00, w_24d00);
+	install(0x24df0, w_24df0);
 	install(0x44d00, w_44d00);
 	install(0x453c0, w_453c0);
 	install(0x10410, w_10410);
@@ -347,7 +433,12 @@ void *natboot_trap_device(void)
 {
 	return trap_object;
 }
+int natboot_active(void)
+{
+	return getenv("MW2COOP_NATIVE11") != NULL;
+}
 #else
 void natboot_install(void) {}
 void *natboot_trap_device(void) { return 0; }
+int natboot_active(void) { return 0; }
 #endif

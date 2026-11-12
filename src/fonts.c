@@ -31,6 +31,7 @@
 #include "fontgrid.h"
 #include "fonts.h"
 #include "localize.h"
+#include "dx/natboot.h"
 #include "log.h"
 #include "settings.h"
 
@@ -1088,6 +1089,8 @@ static void run_patch(void *(*find)(int, const char *), const uint8_t *atlas_mat
 
 static void patch_all(void *(*find)(int, const char *), const uint8_t *atlas_material)
 {
+	if (natboot_active()) // the atlas patch reads the renderer's Direct3D 9 texture objects: not adapted to the native renderer yet
+		return;
 	if (InterlockedCompareExchange(&patch_state, 1, 0) != 0)
 		return;
 	run_patch(find, atlas_material);
@@ -1149,6 +1152,8 @@ static volatile LONG waiting_atlas_logged;
 
 void fonts_retry(void *(*find)(int, const char *))
 {
+	if (natboot_active()) // the atlas patch is off with the native renderer (patch_all)
+		return;
 	// Called for ordinary non-font asset lookups too. These cached-state reads are on a
 	// potentially very hot path; reserve locked operations for the occasional retry claim.
 	if (!find || !settings_fonts() || __atomic_load_n(&patch_state, __ATOMIC_ACQUIRE) != 0)

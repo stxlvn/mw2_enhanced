@@ -96,7 +96,7 @@ void ngr_create_rings(ngr *r)
 	for (uint8_t *b = e + 0x4116590; b != e + 0x41165c0; b += 0x18) { // two vertex rings of 0x480000 bytes (struct = buffer address - 8)
 		*(int32_t *)AT(b, -8) = 0;
 		*(int32_t *)AT(b, -4) = 0x480000;
-		RD_PTR(b, 0) = nat_buffer_create(r->dev, 0x480000, 0, 1, NULL);
+		RD_PTR(b, 0) = nat_buffer_create_staged(r->dev, 0x480000, (const volatile int *)AT(b, -8));
 		RD_PTR(b, 8) = NULL;
 	}
 	index_ring(r, e + 0x4116568);

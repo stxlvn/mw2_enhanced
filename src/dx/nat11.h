@@ -108,6 +108,14 @@ typedef struct nat_buffer nat_buffer;
 // vertex (is_index 0) or index buffers; dynamic ones are written with nat_buffer_map (a ring: NAT_MAP_NOOVERWRITE appends, NAT_MAP_DISCARD restarts)
 nat_buffer *nat_buffer_create(nat_device *d, unsigned size, int is_index, int dynamic, const void *initial);
 void nat_buffer_destroy(nat_buffer *b);
+// A static buffer written by the engine after creating it (0x24d00 / 0x24df0): *block is the memory to write; the Direct3D 11 buffer is made at the engine's Unlock call (through the
+// Direct3D 9 style vtable every nat_buffer starts with: Lock +0x58, Unlock +0x60, Release +0x10)
+nat_buffer *nat_buffer_create_static(nat_device *d, unsigned size, int is_index, void **block);
+// A vertex buffer locked by the engine for a whole frame (Direct3D 9 Lock through the vtable) and written by its worker threads: *used is the engine's counter of the reserved bytes;
+// nat_buffer_sync copies the reserved part to the GPU before a draw reads it (nat_buffer_is_staged tells which buffers need it)
+nat_buffer *nat_buffer_create_staged(nat_device *d, unsigned size, const volatile int *used);
+int nat_buffer_is_staged(const nat_buffer *b);
+void nat_buffer_sync(nat_buffer *b);
 enum { NAT_MAP_DISCARD = 1, NAT_MAP_NOOVERWRITE = 2 };
 void *nat_buffer_map(nat_buffer *b, int mode);
 void nat_buffer_unmap(nat_buffer *b);
