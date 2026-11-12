@@ -48,6 +48,11 @@ extern float (*ng_weapon_k)(void);
 void ng_weapon_viewport(ng_state *s, float min_z);
 // the split screen's scope lens fix (src/native.c t_scissor): called with every scissor rectangle the engine sets (top / bottom may be changed); rt_full: the target is as big as the scene
 extern void (*ng_scissor_hook)(int *top, int *bottom, int left, int right, int rt_full);
+// FSR 3 on the native renderer (natfsr3.c): ng_vp_hook is told every viewport / depth range change of the engine (render pixels), ng_const_hook sees every write of the vertex constants c0.. before the
+// engine's copy is stored and may change them (the jitter in the world view-projection); both NULL unless FSR 3 is on
+extern void (*ng_vp_hook)(float x, float y, float w, float h, float minz, float maxz);
+extern int (*ng_draw_hook)(const float (*in)[4], float (*out)[4]); // before a draw uploads its vertex constants: `in` = the engine's file (read), `out` = a copy that is uploaded when the hook returns 1 (the jitter)
+void ng_vp_note(float x, float y, float w, float h, float minz, float maxz);
 // 0x54a10: selects pass `pass_index` of the current technique (updates state +0x138 / +0x140), applies the render-state words, the pixel shader and the pass's stable arguments (vertex side
 // and samplers; the pixel constants of the stable list are ng_apply_ps_stable's)
 void ng_select_pass(ng_state *s, const ng_ops *ops, void *input, void *state, unsigned pass_index);

@@ -196,8 +196,6 @@ void settings_load(void)
 		dlss_on = 0;
 	}
 #endif
-	if (fsr3_on)
-		d3d9on12_on = 1; // FSR 3 runs on the Direct3D 12 layer
 	upscale_on = GetPrivateProfileIntA("display", "upscale", 0, path) != 0;
 	upscale_w = (int)GetPrivateProfileIntA("display", "upscale_width", 0, path);
 	upscale_h = (int)GetPrivateProfileIntA("display", "upscale_height", 0, path);
@@ -249,7 +247,16 @@ void settings_load(void)
 	if (directx11_on || directx12_on) { // the native renderer: nothing creates a Direct3D 9 device, so every feature that is built on one is off
 		if (d3d9ex_on || d3d9on12_on || fsr3_on || dlss_on || upscale_on)
 			log_printf("settings: [display] directx%d=1: d3d9ex / d3d9on12 / fsr3 / dlss are ignored (they work on a Direct3D 9 device)", directx12_on ? 12 : 11);
-		d3d9ex_on = d3d9on12_on = fsr3_on = dlss_on = 0; // (upscale = FSR 1 is done by the native renderer itself)
+		d3d9ex_on = d3d9on12_on = dlss_on = 0; // (upscale = FSR 1 is done by the native renderer itself; fsr3 = FSR 3 only by the native Direct3D 12 renderer)
+		if (!directx12_on)
+			fsr3_on = 0;
+	}
+	// FSR 3 and DLSS need Direct3D 12: the native Direct3D 12 renderer, or the Direct3D 9 on 12 layer (d3d9on12=1, the options page's "DirectX 12"). They are off on DirectX 11 and lower (plain DirectX 9, 9Ex,
+	// native DirectX 11); FSR 1 ([display] upscale) works everywhere.
+	if ((fsr3_on || dlss_on) && !directx12_on && !d3d9on12_on) {
+		log_printf("settings: [display] fsr3 / dlss are ignored: they need DirectX 12 (directx12=1 or d3d9on12=1); FSR 1 ([display] upscale=1) works on every DirectX");
+		fsr3_on = 0;
+		dlss_on = 0;
 	}
 	borderless_on = GetPrivateProfileIntA("display", "borderless", 1, path) != 0;
 	hudtextscale = (int)GetPrivateProfileIntA("display", "hudtextscale", 50, path);

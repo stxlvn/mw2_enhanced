@@ -89,24 +89,29 @@ static void apply_scissor(ngf *f, void *state)
 
 void ngf_set_viewport(ngf *f, void *state, const int *vp4)
 {
+	ng_vp_note((float)vp4[0], (float)vp4[1], (float)vp4[2], (float)vp4[3], RD_F32(state, 0x148), RD_F32(state, 0x14c)); // (the engine's cache may skip the rest: the hooks still want to know the viewport it draws with)
 	if (vp4[0] == RD_I32(state, 0xb88) && vp4[1] == RD_I32(state, 0xb8c) && vp4[2] == RD_I32(state, 0xb90) && vp4[3] == RD_I32(state, 0xb94))
 		return;
 	memcpy(AT(state, 0xb88), vp4, 16);
 	nd_set_viewport(f->d, (float)vp4[0], (float)vp4[1], (float)vp4[2], (float)vp4[3], RD_F32(state, 0x148), RD_F32(state, 0x14c));
+	ng_vp_note((float)vp4[0], (float)vp4[1], (float)vp4[2], (float)vp4[3], RD_F32(state, 0x148), RD_F32(state, 0x14c));
 	ng_weapon_viewport(f->g, RD_F32(state, 0x148));
 	apply_scissor(f, state);
 }
 
 void ngf_depth_range(ngf *f, void *state, int hack)
 {
-	if (hack == RD_I32(state, 0x144))
+	if (hack == RD_I32(state, 0x144)) {
+		ng_vp_note((float)RD_I32(state, 0xb88), (float)RD_I32(state, 0xb8c), (float)RD_I32(state, 0xb90), (float)RD_I32(state, 0xb94), RD_F32(state, 0x148), RD_F32(state, 0x14c));
 		return;
+	}
 	RD_I32(state, 0x144) = hack;
 	const float full_min = RD_F32(f->exe, G_DEPTH_MIN), full_max = RD_F32(f->exe, G_DEPTH_MAX);
 	const float mn = hack ? 0.0f : full_min, mx = hack ? full_min : full_max;
 	RD_F32(state, 0x148) = mn;
 	RD_F32(state, 0x14c) = mx;
 	nd_set_viewport(f->d, (float)RD_I32(state, 0xb88), (float)RD_I32(state, 0xb8c), (float)RD_I32(state, 0xb90), (float)RD_I32(state, 0xb94), mn, mx);
+	ng_vp_note((float)RD_I32(state, 0xb88), (float)RD_I32(state, 0xb8c), (float)RD_I32(state, 0xb90), (float)RD_I32(state, 0xb94), mn, mx);
 	ng_weapon_viewport(f->g, mn);
 	apply_scissor(f, state);
 }
@@ -144,6 +149,7 @@ void ngf_target_switch(ngf *f, void *input, void *state, int n)
 		RD_F32(state, 0x14c) = 1.0f;
 		// Direct3D 9 resets the device's viewport and scissor rectangle to the new target's size when a target is set (the engine relies on it: its blur and downsample passes never set the viewport)
 		nd_set_viewport(f->d, 0.0f, 0.0f, (float)RD_I32(entry, 0x18), (float)RD_I32(entry, 0x1c), 0.0f, 1.0f);
+		ng_vp_note(0.0f, 0.0f, (float)RD_I32(entry, 0x18), (float)RD_I32(entry, 0x1c), 0.0f, 1.0f);
 		ng_weapon_viewport(f->g, 0.0f);
 		nd_set_scissor_rect(f->d, 0, 0, RD_I32(entry, 0x18), RD_I32(entry, 0x1c));
 	}

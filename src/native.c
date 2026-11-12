@@ -2414,7 +2414,7 @@ void native_hud_install(void);
 void native_hud_install(void)
 {
 	static int done;
-	if (done || !base || !natboot_active() || !settings_upscale())
+	if (done || !base || !natboot_active() || !(settings_upscale() || settings_fsr3()))
 		return;
 	done = 1;
 	if (scene2d_original)

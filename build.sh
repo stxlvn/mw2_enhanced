@@ -27,7 +27,7 @@ mkdir -p build
 B12=build/b12
 mkdir -p $B12
 rm -f $B12/*.o
-B12SRC="src/dx/nat12.c src/dx/natdraw12.c src/dx/natdrawfn.c src/dx/natdrawfn2.c src/dx/natres.c src/dx/natres2.c src/dx/natres3.c src/dx/natstart.c src/dx/natframe.c src/dx/natframe2.c src/dx/natbring.c src/dx/natboot.c"
+B12SRC="src/dx/nat12.c src/dx/natfsr3.c src/dx/natdraw12.c src/dx/natdrawfn.c src/dx/natdrawfn2.c src/dx/natres.c src/dx/natres2.c src/dx/natres3.c src/dx/natstart.c src/dx/natframe.c src/dx/natframe2.c src/dx/natbring.c src/dx/natboot.c"
 for f in $B12SRC; do
 	"$CC" -O2 -g -Wall -Wextra -Wno-missing-field-initializers -DNAT_BACKEND_12 -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -c -o $B12/$(basename $f .c).o $f
 done

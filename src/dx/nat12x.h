@@ -27,6 +27,12 @@ void *nat12_upload_alloc(nat_device *d, unsigned size, D3D12_GPU_VIRTUAL_ADDRESS
 // shader-visible descriptor rings of the frame (count descriptors, contiguous): NULL when full. The heaps are set on the list by nat12_set_heaps.
 int nat12_srv_alloc(nat_device *d, unsigned count, D3D12_CPU_DESCRIPTOR_HANDLE *cpu, D3D12_GPU_DESCRIPTOR_HANDLE *gpu);
 void nat12_set_heaps(nat_device *d);
+// something else (FidelityFX) recorded on the list and set its own heaps / root signatures: the draw layer must bind its own again
+void nat12_invalidate_state(nat_device *d);
+// FSR 3 (natfsr3.c): wanted by the settings; the upscale of a frame into `out_img` (1 = done); the end of the frame
+int natfsr3_wanted(void);
+int natfsr3_upscale(nat_device *d, nat_image *color_img, nat_image *depth_img, nat_image *out_img);
+void natfsr3_frame_end(void);
 
 // images: the scene's own, CPU descriptors (copy them into the shader-visible ring), resource state tracking (only render targets and depth images are transitioned: other textures stay in COMMON
 // and are promoted implicitly by the first read)

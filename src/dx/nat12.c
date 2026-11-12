@@ -251,6 +251,12 @@ static void begin_list(nat_device *d)
 	d->gsrv_off = 0;
 }
 
+void nat12_invalidate_state(nat_device *d)
+{
+	d->heaps_set = 0;
+	d->list_gen++;
+}
+
 void nat12_set_heaps(nat_device *d)
 {
 	if (d->heaps_set)
@@ -1236,6 +1242,10 @@ static int up_stage(nat_device *d)
 	for (int i = 0; i < d->p.up_sharp; i++)
 		sharp *= 0.99309249543703590153f; // 2 ^ (-1/100)
 	const float k0[4] = {sharp, 1.0f / fout_w, 1.0f / fout_h, 0.0f};
+	if (natfsr3_wanted() && natfsr3_upscale(d, src, d->depth, d->up_img[1])) { // FSR 3 (natfsr3.c) with the game's depth and the camera
+		d->up_done = 1;
+		return 1;
+	}
 	const DXGI_FORMAT ifmt = DXGI_FORMAT_B8G8R8A8_UNORM;
 	if (!pass12(d, 0, src, con, 4, d->up_img[0], NULL, 0, ifmt, ow, oh) || !pass12(d, 1, d->up_img[0], k0, 1, d->up_img[1], NULL, 0, ifmt, ow, oh))
 		return 0;
@@ -1284,6 +1294,33 @@ int nat_present(nat_device *d)
 {
 	const UINT bi = IDXGISwapChain3_GetCurrentBackBufferIndex(d->swap);
 	ID3D12Resource *back = d->back[bi];
+	if (d->up_on && d->up_done && getenv("MW2COOP_DUMPBACK")) { // QA: MW2COOP_DUMPBACK=<n>: the upscaled picture of the n-th present, with its 2D, as mw2coop/native11/back.bmp
+		static int n_present;
+		if (++n_present == atoi(getenv("MW2COOP_DUMPBACK")) && d->up_img[1]) {
+			void *data = NULL;
+			unsigned pitch = 0, rows = 0;
+			if (nat_image_download(d->up_img[1], 0, &data, &pitch, &rows)) {
+				FILE *f = fopen("mw2coop/native11/back.bmp", "wb");
+				if (f) {
+					const unsigned w = BW(d), h = BH(d);
+					uint8_t hdr[54] = {'B', 'M'};
+					const uint32_t size = 54 + w * h * 4, off = 54, dib = 40, planes_bpp = 1 | 32u << 16;
+					memcpy(hdr + 2, &size, 4);
+					memcpy(hdr + 10, &off, 4);
+					memcpy(hdr + 14, &dib, 4);
+					memcpy(hdr + 18, &w, 4);
+					const int32_t nh = -(int32_t)h;
+					memcpy(hdr + 22, &nh, 4);
+					memcpy(hdr + 26, &planes_bpp, 4);
+					fwrite(hdr, 1, 54, f);
+					for (unsigned y = 0; y < h && y < rows; y++)
+						fwrite((uint8_t *)data + (size_t)y * pitch, 4, w, f);
+					fclose(f);
+				}
+				free(data);
+			}
+		}
+	}
 	if ((d->hdr_on || d->up_on) && final_passes(d, back, bi)) {
 		// (the scene went through the final passes)
 	} else if (BW(d) != d->p.width || BH(d) != d->p.height) {
@@ -1301,6 +1338,8 @@ int nat_present(nat_device *d)
 	}
 	submit(d, 0);
 	d->up_done = 0;
+	if (natfsr3_wanted())
+		natfsr3_frame_end();
 	HRESULT hr = IDXGISwapChain3_Present(d->swap, d->p.vsync ? 1 : 0, ns_present_flags(d->tearing, d->p.vsync, d->fullscreen_set));
 	if (d->waitable) // the next frame starts when the swap chain can take it (lower input latency)
 		WaitForSingleObjectEx(d->waitable, 100, TRUE);

@@ -180,6 +180,7 @@ struct nd {
 	nat_image *rt, *ds;
 	float vp[6];
 	int scissor_on;
+	int vs_was_mod; // the last draw uploaded a jittered matrix
 	RECT scissor;
 	unsigned stencil_ref, stencil_rmask, stencil_wmask;
 	nat_buffer *vb[4];
@@ -756,15 +757,22 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 		ps_dirty |= g->ps_dirty[i] != 0;
 	}
 	const unsigned vs_need = nat12_shader_nconst(vs) * 16, ps_need = ps ? nat12_shader_nconst(ps) * 16 : 16;
-	if (vs_dirty || !d->cb_vs_va || vs_need > d->cb_vs_n) {
+	float vsj[256][4];
+	int vs_mod = 0;
+	if (ng_draw_hook) { // FSR 3: the world matrix of this draw is remembered and uploaded with its jitter
+		memcpy(vsj, g->vs_c, sizeof(vsj));
+		vs_mod = ng_draw_hook(g->vs_c, vsj);
+	}
+	if (vs_dirty || !d->cb_vs_va || vs_need > d->cb_vs_n || vs_mod || d->vs_was_mod) {
 		void *p = alloc_const(d, vs_need, &d->cb_vs_va);
 		if (p)
-			memcpy(p, g->vs_c, vs_need < sizeof(g->vs_c) ? vs_need : sizeof(g->vs_c));
+			memcpy(p, vs_mod ? (const void *)vsj : (const void *)g->vs_c, vs_need < sizeof(g->vs_c) ? vs_need : sizeof(g->vs_c));
 		d->cb_vs_n = vs_need;
 		memset(g->vs_dirty, 0, sizeof(g->vs_dirty));
 		ID3D12GraphicsCommandList_SetGraphicsRootConstantBufferView(d->list, RS_VS_B0, d->cb_vs_va);
 		d->n_uploads++;
 	}
+	d->vs_was_mod = vs_mod;
 	if (ps_dirty || !d->cb_ps_va || ps_need > d->cb_ps_n) {
 		void *p = alloc_const(d, ps_need, &d->cb_ps_va);
 		if (p)

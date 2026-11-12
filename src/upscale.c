@@ -198,7 +198,7 @@ int upscale_enabled(void)
 // the native renderers (nat11.c / nat12.c): the game renders in_w x in_h, the swap chain (and the window) is out_w x out_h; 0 when nothing is upscaled
 int upscale_native_sizes(int game_w, int game_h, int *out_width, int *out_height)
 {
-	if (!upscale_enabled() || !settings_upscale())
+	if (!upscale_enabled() || !(settings_upscale() || settings_fsr3()))
 		return 0;
 	const int w = settings_upscale_width(), h = settings_upscale_height();
 	if (game_w == w && game_h == h) {

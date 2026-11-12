@@ -190,6 +190,7 @@ struct nd {
 	nat_image *rt, *ds;
 	float vp[6];
 	int scissor_on;
+	int vs_was_mod; // the last draw uploaded a jittered matrix
 	RECT scissor;
 	unsigned stencil_ref, stencil_rmask, stencil_wmask;
 	nat_buffer *vb[4];
@@ -678,11 +679,18 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 		vs_dirty |= g->vs_dirty[i] != 0;
 		ps_dirty |= g->ps_dirty[i] != 0;
 	}
-	if (vs_dirty || !d->consts_init) {
-		put_cb(d, d->cb_vs, g->vs_c, sizeof(g->vs_c));
+	float vsj[256][4];
+	int vs_mod = 0;
+	if (ng_draw_hook) { // FSR 3: the world matrix of this draw is remembered and uploaded with its jitter
+		memcpy(vsj, g->vs_c, sizeof(vsj));
+		vs_mod = ng_draw_hook(g->vs_c, vsj);
+	}
+	if (vs_dirty || !d->consts_init || vs_mod || d->vs_was_mod) {
+		put_cb(d, d->cb_vs, vs_mod ? (const void *)vsj : (const void *)g->vs_c, sizeof(g->vs_c));
 		memset(g->vs_dirty, 0, sizeof(g->vs_dirty));
 		d->n_uploads++;
 	}
+	d->vs_was_mod = vs_mod;
 	if (ps_dirty || !d->consts_init) {
 		put_cb(d, d->cb_ps, g->ps_c, sizeof(g->ps_c));
 		memset(g->ps_dirty, 0, sizeof(g->ps_dirty));
