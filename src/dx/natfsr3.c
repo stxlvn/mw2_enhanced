@@ -98,6 +98,81 @@ static const char mv_cs[] =
 	"  mv[id.xy] = r * Q.x;\n"
 	"}\n";
 
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ DLSS ([display] dlss=1)
+// NVIDIA's DLSS Super Resolution through mw2coop_dlss.dll (src/dlss: the mod's bridge, built apart from NVIDIA's SDK): the same inputs as FSR 3's (color, depth mapped to 0..1, motion vectors in
+// render pixels without jitter, the jitter) and the same output; everything before and after it is shared with FSR 3. The output is sharpened by RCAS (nat12.c) as src/fsr3.c does.
+typedef void (*dl_log_t)(const char *);
+static struct {
+	HMODULE dll;
+	int (*init)(void *, const wchar_t *, const wchar_t *, dl_log_t);
+	int (*create)(void *, unsigned, unsigned, unsigned, unsigned, unsigned);
+	int (*eval)(void *, void *, void *, void *, void *, float, float, int, float);
+	unsigned (*last)(void);
+	void (*set_preset)(unsigned);
+	int feature;
+} DL;
+
+static void dl_log(const char *m)
+{
+	log_printf("dlss: %s", m);
+}
+
+static int dlss_setup(void)
+{
+	const char *dir = settings_dlss_dir();
+	char path[MAX_PATH];
+	snprintf(path, sizeof(path), "%s\\mw2coop_dlss.dll", dir);
+	SetDllDirectoryA(dir);
+	DL.dll = LoadLibraryA(path);
+	SetDllDirectoryA(NULL);
+	if (!DL.dll) {
+		log_printf("dlss: %s could not be loaded (error %lu): set [display] dlss_dir to the folder with mw2coop_dlss.dll and NVIDIA's nvngx_dlss.dll (src/dlss/README.md)", path, GetLastError());
+		return 0;
+	}
+	DL.init = (int (*)(void *, const wchar_t *, const wchar_t *, dl_log_t))(void *)GetProcAddress(DL.dll, "dlss_bridge_init");
+	DL.create = (int (*)(void *, unsigned, unsigned, unsigned, unsigned, unsigned))(void *)GetProcAddress(DL.dll, "dlss_bridge_create");
+	DL.eval = (int (*)(void *, void *, void *, void *, void *, float, float, int, float))(void *)GetProcAddress(DL.dll, "dlss_bridge_evaluate");
+	DL.last = (unsigned (*)(void))(void *)GetProcAddress(DL.dll, "dlss_bridge_last_result");
+	DL.set_preset = (void (*)(unsigned))(void *)GetProcAddress(DL.dll, "dlss_bridge_set_preset");
+	if (!DL.init || !DL.create || !DL.eval) {
+		log_printf("dlss: %s lacks the bridge functions", path);
+		return 0;
+	}
+	wchar_t wdir[MAX_PATH] = L"", wdata[MAX_PATH] = L"";
+	MultiByteToWideChar(CP_ACP, 0, dir, -1, wdir, MAX_PATH);
+	GetTempPathW(MAX_PATH, wdata);
+	if (!DL.init(S.dev, wdir, wdata, dl_log)) {
+		log_printf("dlss: NVIDIA's NGX could not be started or DLSS is not available on this GPU or driver (a GeForce RTX card and a current driver are needed); see the lines above");
+		return 0;
+	}
+	log_printf("dlss: NGX is up (%s)", path);
+	return 1;
+}
+
+static int dlss_dispatch(ID3D12GraphicsCommandList *l, ID3D12Resource *color, float jx, float jy, int reset, float dt_ms)
+{
+	static int bad;
+	if (!DL.feature) {
+		const char *want = settings_dlss_preset();
+		const char c = want && want[0] ? (char)(want[0] & ~0x20) : 0;
+		const unsigned preset = c >= 'J' && c <= 'M' ? (unsigned)(c - 'A' + 1) : 0;
+		if (DL.set_preset)
+			DL.set_preset(preset);
+		if (!DL.create(l, S.iw, S.ih, S.w, S.h, 0)) {
+			if (bad++ < 5)
+				log_printf("dlss: the feature could not be created (NGX result 0x%08x)", DL.last ? DL.last() : 0u);
+			return 0;
+		}
+		DL.feature = 1;
+	}
+	if (!DL.eval(l, color, S.depth, S.motion, S.out, jx, jy, reset, dt_ms)) {
+		if (bad++ < 5)
+			log_printf("dlss: evaluation failed (NGX result 0x%08x)", DL.last ? DL.last() : 0u);
+		return 0;
+	}
+	return 1;
+}
+
 static void message(uint32_t type, const wchar_t *text)
 {
 	log_printf("natfsr3: ffx %s: %ls", type == FFX_API_MESSAGE_TYPE_ERROR ? "error" : "warning", text);
@@ -331,7 +406,15 @@ static float halton(unsigned index, unsigned base)
 static void next_jitter(void)
 {
 	g_jit_x = g_jit_y = 0.0f;
-	if (!S.ok || !S.query || S.phase_count <= 0)
+	if (!S.ok || S.phase_count <= 0)
+		return;
+	if (settings_dlss()) { // the Halton (2, 3) sequence, offsets in -0.5..0.5 render pixels, as FSR's
+		const unsigned idx = S.frame % (unsigned)S.phase_count + 1;
+		g_jit_x = halton(idx, 2) - 0.5f;
+		g_jit_y = halton(idx, 3) - 0.5f;
+		return;
+	}
+	if (!S.query)
 		return;
 	float x = 0.0f, y = 0.0f;
 	struct ffxQueryDescUpscaleGetJitterOffset q;
@@ -345,7 +428,6 @@ static void next_jitter(void)
 		g_jit_x = x;
 		g_jit_y = y;
 	}
-	(void)halton;
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ the engine's matrix upload
@@ -414,6 +496,11 @@ static int setup(nat_device *d, UINT iw, UINT ih, UINT w, UINT h)
 	S.ih = ih;
 	S.w = w;
 	S.h = h;
+	if (settings_dlss()) { // NVIDIA's DLSS instead of AMD's FSR 3: no AMD DLL, no FSR context; the passes are shared
+		if (!dlss_setup())
+			return 0;
+		goto objects;
+	}
 	char path[MAX_PATH];
 	const char *dir = settings_fsr3_dir();
 	snprintf(path, sizeof(path), "%s\\amd_fidelityfx_loader_dx12.dll", dir);
@@ -450,6 +537,7 @@ static int setup(nat_device *d, UINT iw, UINT ih, UINT w, UINT h)
 	log_printf("natfsr3: ffxCreateContext (%ux%u to %ux%u) -> %u (0 = OK)", iw, ih, w, h, (unsigned)rc);
 	if (rc != FFX_API_RETURN_OK)
 		return 0;
+objects:
 	S.out = make_simple(w, h, DXGI_FORMAT_B8G8R8A8_UNORM, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 	S.depth = make_simple(iw, ih, DXGI_FORMAT_R32_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
 	S.motion = make_simple(iw, ih, DXGI_FORMAT_R16G16_FLOAT, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
@@ -466,7 +554,10 @@ static int setup(nat_device *d, UINT iw, UINT ih, UINT w, UINT h)
 		return 0;
 	QueryPerformanceFrequency(&S.freq);
 	S.ok = 1;
-	if (S.query) {
+	if (settings_dlss()) { // DLSS asks for 8 * (output / render)^2 jitter phases (AMD's formula for FSR too)
+		const float sc = (float)w / (float)iw;
+		S.phase_count = (int)ceilf(8.0f * sc * sc);
+	} else if (S.query) {
 		int32_t count = 0;
 		struct ffxQueryDescUpscaleGetJitterPhaseCount qp;
 		memset(&qp, 0, sizeof(qp));
@@ -632,7 +723,12 @@ static int motion_pass(nat_device *d)
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ the frame
 int natfsr3_wanted(void)
 {
-	return settings_fsr3() && !settings_dlss() && settings_fsr3_dir() && settings_fsr3_dir()[0];
+	return settings_fsr3() && (settings_dlss() ? settings_dlss_dir() && settings_dlss_dir()[0] : settings_fsr3_dir() && settings_fsr3_dir()[0]);
+}
+
+int natfsr3_is_dlss(void)
+{
+	return settings_dlss() != 0;
 }
 
 // the upscale of the frame into `out_img` (the image of the output size the 2D passes draw into); 1 when it holds the upscaled picture
@@ -718,10 +814,14 @@ int natfsr3_upscale(nat_device *d, nat_image *color_img, nat_image *depth_img, n
 	}
 	dd.viewSpaceToMetersFactor = 0.0254f; // the game's units are inches
 	dd.flags = FFX_UPSCALE_FLAG_NON_LINEAR_COLOR_SRGB;
-	const ffxReturnCode_t rc = S.dispatch(&S.ctx, &dd.header);
+	ffxReturnCode_t rc;
+	if (settings_dlss())
+		rc = dlss_dispatch(l, nat12_image_res(color_img), g_jit_x, g_jit_y, dd.reset ? 1 : 0, dt_ms) ? FFX_API_RETURN_OK : FFX_API_RETURN_ERROR;
+	else
+		rc = S.dispatch(&S.ctx, &dd.header);
 	static int dlog;
 	if (dlog++ < 3 || rc != FFX_API_RETURN_OK)
-		log_printf("natfsr3: ffxDispatch -> %u (0 = OK), frame time %.1f ms, vectors %d, jitter %.3f,%.3f", (unsigned)rc, dt_ms, mv_done, g_jit_x, g_jit_y);
+		log_printf("natfsr3: %s -> %u (0 = OK), frame time %.1f ms, vectors %d, jitter %.3f,%.3f", settings_dlss() ? "DLSS evaluate" : "ffxDispatch", (unsigned)rc, dt_ms, mv_done, g_jit_x, g_jit_y);
 	{ // a status line now and then: how many frames had vectors, resets
 		static unsigned n_frames, n_mv, n_reset;
 		n_frames++;

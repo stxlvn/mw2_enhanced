@@ -19,6 +19,7 @@ typedef struct {
 	int cull;                 // D3DCULL: 1 none, 2 clockwise, 3 counter-clockwise
 	int fill;                 // D3DFILL: 2 wireframe, 3 solid
 	int srgb_write;
+	int a2c; // not decoded: set by the draw layer when an alpha tested draw into a multisampled target uses alpha to coverage instead of the discard
 	// word 1
 	int z_write, z_enable;
 	int z_func;               // D3DCMP

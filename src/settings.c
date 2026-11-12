@@ -44,6 +44,7 @@ static int directx11_on = 0;
 static int directx12_on = 0;
 static int lowlatency_on = 0;
 static int aniso_level = 0;
+static int atoc_on = 1, msaa_force = 0;
 static int hdr_on = 0, hdr_white = 200, hdr_peak = 600;
 static int borderless_on = 1;
 static int netguard_on = 1;
@@ -237,6 +238,10 @@ void settings_load(void)
 		hdr_white = 200;
 	if (hdr_peak < hdr_white || hdr_peak > 4000)
 		hdr_peak = hdr_white > 600 ? hdr_white : 600;
+	atoc_on = GetPrivateProfileIntA("display", "atoc", 1, path) != 0;
+	msaa_force = (int)GetPrivateProfileIntA("display", "msaa", 0, path);
+	if (msaa_force != 2 && msaa_force != 4 && msaa_force != 8)
+		msaa_force = msaa_force == 1 ? 1 : 0;
 	aniso_level = (int)GetPrivateProfileIntA("display", "aniso", 0, path);
 	if (aniso_level < 2)
 		aniso_level = 0;
@@ -245,11 +250,13 @@ void settings_load(void)
 	if (directx12_on)
 		directx11_on = 0; // one native renderer at a time (12 wins)
 	if (directx11_on || directx12_on) { // the native renderer: nothing creates a Direct3D 9 device, so every feature that is built on one is off
-		if (d3d9ex_on || d3d9on12_on || fsr3_on || dlss_on || upscale_on)
-			log_printf("settings: [display] directx%d=1: d3d9ex / d3d9on12 / fsr3 / dlss are ignored (they work on a Direct3D 9 device)", directx12_on ? 12 : 11);
-		d3d9ex_on = d3d9on12_on = dlss_on = 0; // (upscale = FSR 1 is done by the native renderer itself; fsr3 = FSR 3 only by the native Direct3D 12 renderer)
+		if (d3d9ex_on || d3d9on12_on)
+			log_printf("settings: [display] directx%d=1: d3d9ex / d3d9on12 are ignored (they work on a Direct3D 9 device)", directx12_on ? 12 : 11);
+		if (directx11_on && !directx12_on && (fsr3_on || dlss_on))
+			log_printf("settings: [display] directx11=1: fsr3 / dlss are ignored (they need DirectX 12); FSR 1 (upscale=1) works");
+		d3d9ex_on = d3d9on12_on = 0; // (upscale = FSR 1 is done by the native renderer itself; fsr3 / dlss only by the native Direct3D 12 renderer)
 		if (!directx12_on)
-			fsr3_on = 0;
+			fsr3_on = dlss_on = 0;
 	}
 	// FSR 3 and DLSS need Direct3D 12: the native Direct3D 12 renderer, or the Direct3D 9 on 12 layer (d3d9on12=1, the options page's "DirectX 12"). They are off on DirectX 11 and lower (plain DirectX 9, 9Ex,
 	// native DirectX 11); FSR 1 ([display] upscale) works everywhere.
@@ -438,6 +445,16 @@ int settings_lowlatency(void)
 int settings_aniso(void)
 {
 	return aniso_level;
+}
+
+int settings_atoc(void)
+{
+	return atoc_on;
+}
+
+int settings_msaa(void)
+{
+	return msaa_force;
 }
 
 int settings_hdr(int *white, int *peak)

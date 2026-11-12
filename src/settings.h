@@ -41,6 +41,10 @@ int settings_directx12(void);
 int settings_lowlatency(void);
 // settings.ini [display] aniso (default 0 = the game's own setting): 2, 4, 8 or 16 forces anisotropic filtering on the textures the game filters with mipmaps (native DirectX 11 / 12)
 int settings_aniso(void);
+// settings.ini [display] atoc (default 1): the native renderers draw alpha tested things (foliage, fences) into a multisampled target with alpha to coverage; msaa (default 0 = the game's own
+// anti-aliasing setting): 1 = off, 2 / 4 / 8 = that many samples on the native renderers (lowered to what the adapter supports)
+int settings_atoc(void);
+int settings_msaa(void);
 // settings.ini [display] hdr (default 0), hdr_white (paper white in nits, default 200), hdr_peak (the highlights' peak in nits, default 600): the native renderers present to an HDR (scRGB) swap chain
 // when Windows has HDR on for the monitor the window is on. Returns hdr; white / peak may be NULL.
 int settings_hdr(int *white, int *peak);

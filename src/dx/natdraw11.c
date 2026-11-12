@@ -130,6 +130,7 @@ void nd_decl_destroy(nd_decl *d)
 
 int nd_layer_mode;
 float nd_hud_scale[2];
+int nd_atoc = 1;
 int nd_aniso_override; // [display] aniso: 0 = the game's own, 2..16 = forced for mipmapped textures
 int nd_trace; // QA (MW2COOP_TRACEFRAME): while set, every draw / clear / stretch is logged with its target, textures and first constants
 
@@ -471,12 +472,13 @@ static D3D11_BLEND alpha_factor(int b)
 
 static ID3D11BlendState *blend_state(nd *d, const state11_t *s)
 {
-	uint32_t key[8] = {(uint32_t)s->blend_enable, (uint32_t)s->src, (uint32_t)s->dst, (uint32_t)s->op, (uint32_t)s->src_a, (uint32_t)s->dst_a, (uint32_t)s->op_a, (uint32_t)s->write_mask};
+	uint32_t key[8] = {(uint32_t)s->blend_enable | (uint32_t)(s->a2c != 0) << 8, (uint32_t)s->src, (uint32_t)s->dst, (uint32_t)s->op, (uint32_t)s->src_a, (uint32_t)s->dst_a, (uint32_t)s->op_a, (uint32_t)s->write_mask};
 	int found;
 	ID3D11BlendState *b = kc_get(&d->blend, key, &found);
 	if (found)
 		return b;
 	D3D11_BLEND_DESC bd = {0};
+	bd.AlphaToCoverageEnable = s->a2c != 0;
 	bd.RenderTarget[0].BlendEnable = s->blend_enable != 0;
 	bd.RenderTarget[0].SrcBlend = (D3D11_BLEND)s->src;
 	bd.RenderTarget[0].DestBlend = (D3D11_BLEND)s->dst;
@@ -655,6 +657,15 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 	state11_decode(g->word0, g->word1, &st);
 	if (nd_layer_mode && !nd_layer_reroute)
 		state11_layer_fix(&st);
+	st.a2c = 0;
+	if (nd_atoc && st.alpha_test_enable && !nd_layer_mode) { // alpha to coverage on a multisampled target
+		unsigned rw, rh, rs = 1;
+		if (d->rt)
+			nat_image_size(d->rt, &rw, &rh, &rs);
+		else
+			rs = nat_scene_samples(d->dev);
+		st.a2c = rs > 1;
+	}
 	ID3D11RenderTargetView *rtv;
 	ID3D11DepthStencilView *dsv;
 	get_views(d, st.srgb_write, &rtv, &dsv);
@@ -697,7 +708,7 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 		d->n_uploads++;
 	}
 	d->consts_init = 1;
-	const float at[4] = {(float)st.alpha_func, (float)st.alpha_ref, st.alpha_test_enable ? 1.0f : 0.0f, 0};
+	const float at[4] = {(float)st.alpha_func, (float)st.alpha_ref, st.alpha_test_enable && !st.a2c ? 1.0f : 0.0f, 0};
 	put_cb(d, d->cb_alpha, at, sizeof(at));
 	float bias = 0, slope = 0;
 	if (st.polygon_offset && d->ops.poly_offset)

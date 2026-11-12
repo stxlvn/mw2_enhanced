@@ -333,6 +333,13 @@ int nbr_start(nbr *n, uint8_t *p)
 	np.low_latency = settings_lowlatency();
 	np.hdr = settings_hdr(&np.hdr_white, &np.hdr_peak);
 	np.msaa = RD_I32(p, 0x28);
+	if (settings_msaa() > 0)
+		np.msaa = settings_msaa();
+	nd_atoc = settings_atoc();
+	if (settings_fsr3() && settings_directx12() && np.msaa > 1) { // FSR 3 / DLSS anti-alias the picture themselves
+		log_printf("native11: MSAA %d off: FSR 3 anti-aliases the picture", np.msaa);
+		np.msaa = 1;
+	}
 	{ // FSR 1 upscaling (settings.ini [display] upscale): the game renders at its own size, the swap chain and the window have the output size
 		int ow = 0, oh = 0;
 		if (upscale_native_sizes((int)np.width, (int)np.height, &ow, &oh)) {

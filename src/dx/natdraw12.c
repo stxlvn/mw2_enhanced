@@ -486,7 +486,7 @@ static ID3D12PipelineState *get_pso(nd *d, nat_shader *vs, nat_shader *ps, const
 	key[9] = (uint32_t)(s->front.func | s->front.pass << 4 | s->front.fail << 8 | s->front.zfail << 12);
 	key[10] = (uint32_t)(s->back.func | s->back.pass << 4 | s->back.fail << 8 | s->back.zfail << 12);
 	key[11] = d->stencil_rmask | d->stencil_wmask << 8;
-	key[12] = (uint32_t)s->cull | (uint32_t)s->fill << 4;
+	key[12] = (uint32_t)s->cull | (uint32_t)s->fill << 4 | (uint32_t)(s->a2c != 0) << 8;
 	memcpy(&key[13], &bias, 4);
 	memcpy(&key[14], &slope, 4);
 	key[15] = (uint32_t)rtvf;
@@ -520,6 +520,7 @@ static ID3D12PipelineState *get_pso(nd *d, nat_shader *vs, nat_shader *ps, const
 		pd.PS.pShaderBytecode = nat12_shader_blob(ps, &psz);
 		pd.PS.BytecodeLength = psz;
 	}
+	pd.BlendState.AlphaToCoverageEnable = s->a2c != 0;
 	D3D12_RENDER_TARGET_BLEND_DESC *rb = &pd.BlendState.RenderTarget[0];
 	rb->BlendEnable = s->blend_enable != 0;
 	rb->SrcBlend = (D3D12_BLEND)s->src;
@@ -677,6 +678,15 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 	state11_decode(g->word0, g->word1, &st);
 	if (nd_layer_mode && !nd_layer_reroute)
 		state11_layer_fix(&st);
+	st.a2c = 0;
+	if (nd_atoc && st.alpha_test_enable && !nd_layer_mode) { // alpha to coverage on a multisampled target
+		unsigned rw, rh, rs = 1;
+		if (d->rt)
+			nat_image_size(d->rt, &rw, &rh, &rs);
+		else
+			rs = nat_scene_samples(d->dev);
+		st.a2c = rs > 1;
+	}
 	nat_image *rt = rt_image(d), *ds = ds_image(d);
 	if ((!rt || !nat12_image_has_rtv(rt)) && (!ds || !nat12_image_has_dsv(ds))) {
 		snprintf(d->err, sizeof(d->err), "no render target");
@@ -789,7 +799,7 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 		ID3D12GraphicsCommandList_SetGraphicsRootConstantBufferView(d->list, RS_VS_B1, d->cb_ints_va);
 		ID3D12GraphicsCommandList_SetGraphicsRootConstantBufferView(d->list, RS_PS_B4, d->cb_ints_va);
 	}
-	const float at[4] = {(float)st.alpha_func, (float)st.alpha_ref, st.alpha_test_enable ? 1.0f : 0.0f, 0};
+	const float at[4] = {(float)st.alpha_func, (float)st.alpha_ref, st.alpha_test_enable && !st.a2c ? 1.0f : 0.0f, 0};
 	if (!d->cb_alpha_va || memcmp(at, d->alpha_last, sizeof(at))) {
 		void *p = alloc_const(d, 16, &d->cb_alpha_va);
 		if (p)

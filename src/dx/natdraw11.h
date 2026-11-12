@@ -65,6 +65,8 @@ int nd_overlay(nd *d, nat_image *src);
 extern int nd_layer_mode;
 // FSR 1 with a crisp HUD: while the 2D passes draw into the upscaled image, the engine's viewport and scissor (in render pixels) are multiplied by these (output / render size); 0 = off
 extern float nd_hud_scale[2];
+// MSAA: alpha tested draws into a multisampled target use alpha to coverage (soft edges on foliage, fences, hair) instead of a hard cut ([display] atoc, default 1)
+extern int nd_atoc;
 // while the layer mode is on, a depth tested draw (the 3D things the scene's last pass draws: effects, particles, glass, the red dot of a sight) goes to the scene's own targets, not to the 2D layer
 extern nat_image *nd_layer_scene_rt, *nd_layer_scene_ds;
 extern int nd_layer_reroute;

@@ -1242,9 +1242,16 @@ static int up_stage(nat_device *d)
 	for (int i = 0; i < d->p.up_sharp; i++)
 		sharp *= 0.99309249543703590153f; // 2 ^ (-1/100)
 	const float k0[4] = {sharp, 1.0f / fout_w, 1.0f / fout_h, 0.0f};
-	if (natfsr3_wanted() && natfsr3_upscale(d, src, d->depth, d->up_img[1])) { // FSR 3 (natfsr3.c) with the game's depth and the camera
-		d->up_done = 1;
-		return 1;
+	if (natfsr3_wanted()) { // FSR 3 / DLSS (natfsr3.c) with the game's depth and the camera; DLSS's output is sharpened (RCAS) into the picture the 2D passes draw into
+		if (natfsr3_is_dlss()) {
+			if (natfsr3_upscale(d, src, d->depth, d->up_img[0]) && pass12(d, 1, d->up_img[0], k0, 1, d->up_img[1], NULL, 0, DXGI_FORMAT_B8G8R8A8_UNORM, ow, oh)) {
+				d->up_done = 1;
+				return 1;
+			}
+		} else if (natfsr3_upscale(d, src, d->depth, d->up_img[1])) {
+			d->up_done = 1;
+			return 1;
+		}
 	}
 	const DXGI_FORMAT ifmt = DXGI_FORMAT_B8G8R8A8_UNORM;
 	if (!pass12(d, 0, src, con, 4, d->up_img[0], NULL, 0, ifmt, ow, oh) || !pass12(d, 1, d->up_img[0], k0, 1, d->up_img[1], NULL, 0, ifmt, ow, oh))
