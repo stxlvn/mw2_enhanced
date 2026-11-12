@@ -32,6 +32,9 @@ const char *settings_ini_path(void);
 // settings.ini [display] d3d9ex (default 0 until tested, then 1): the game's Direct3D 9 is the extended one (Direct3DCreate9Ex, src/d3dcap.c): a window that loses the focus (Alt+Tab) does not lose the device,
 // so the render thread does not stop and a co-op partner is not left waiting. Not in the iw4x-sp profile (it has its own r_useD3D9Ex).
 int settings_d3d9ex(void);
+// settings.ini [display] directx11 (default 0, experimental): the game's own Direct3D 9 back end is replaced by the mod's native Direct3D 11 one (src/dx/natboot.c); no Direct3D 9 device
+// exists then, so what needs one (the mod's console overlay, screenshots, FSR 1 / FSR 3 / DLSS, the split screen compositor) is off. MW2COOP_NATIVE11=1 does the same for a test.
+int settings_directx11(void);
 // settings.ini [network] guard (default 1): packets no co-op session sends (joinParty, rcon, a co-op command from a stranger, a map name with a command separator) are dropped before the game sees them (netguard.c); 0: the game sees everything.
 int settings_netguard(void);
 // settings.ini [display] d3d9on12 (default 0, experimental): the game's Direct3D 9 runs on Windows' Direct3D 12 (d3d9.dll Direct3DCreate9On12), the way to DX12 and, through D3D11On12, DX11 (d3dcap.c).

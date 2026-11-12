@@ -40,6 +40,7 @@ static int hudtextscale = 50;
 static int nametagscale = 70;
 static int keepads_on = 1;
 static int d3d9ex_on = 0;
+static int directx11_on = 0;
 static int borderless_on = 1;
 static int netguard_on = 1;
 static int d3d9on12_on = 0;
@@ -224,6 +225,12 @@ void settings_load(void)
 	hotguards_on = GetPrivateProfileIntA("native", "hotguards", 1, path) != 0;
 	keepads_on = GetPrivateProfileIntA("native", "keepads", 1, path) != 0;
 	d3d9ex_on = GetPrivateProfileIntA("display", "d3d9ex", 0, path) != 0;
+	directx11_on = GetPrivateProfileIntA("display", "directx11", 0, path) != 0 || getenv("MW2COOP_NATIVE11") != NULL;
+	if (directx11_on) { // the native renderer: nothing creates a Direct3D 9 device, so every feature that is built on one is off
+		if (d3d9ex_on || d3d9on12_on || fsr3_on || dlss_on || upscale_on)
+			log_printf("settings: [display] directx11=1: d3d9ex / d3d9on12 / upscale / fsr3 / dlss are ignored (they work on a Direct3D 9 device)");
+		d3d9ex_on = d3d9on12_on = fsr3_on = dlss_on = upscale_on = 0;
+	}
 	borderless_on = GetPrivateProfileIntA("display", "borderless", 1, path) != 0;
 	hudtextscale = (int)GetPrivateProfileIntA("display", "hudtextscale", 50, path);
 	if (hudtextscale < 20 || hudtextscale > 200)
@@ -384,6 +391,11 @@ const char *settings_dlss_preset(void)
 const char *settings_fsr3_dir(void)
 {
 	return fsr3_dir_buf;
+}
+
+int settings_directx11(void)
+{
+	return directx11_on;
 }
 
 int settings_d3d9on12(void)

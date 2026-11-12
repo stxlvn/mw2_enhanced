@@ -10,6 +10,7 @@
 
 #include "../hook.h"
 #include "../log.h"
+#include "../settings.h"
 #include "natbring.h"
 
 static volatile LONG hits[48];
@@ -448,7 +449,7 @@ void natboot_install(void)
 {
 	if (getenv("MW2COOP_WHITEPOLL"))
 		CloseHandle(CreateThread(NULL, 0, whitepoll_thread, NULL, 0, NULL));
-	if (!getenv("MW2COOP_NATIVE11"))
+	if (!settings_directx11()) // [display] directx11=1 or MW2COOP_NATIVE11=1
 		return;
 	exe = (uint8_t *)GetModuleHandleA(NULL);
 	CloseHandle(CreateThread(NULL, 0, waiter, NULL, 0, NULL));
@@ -581,7 +582,7 @@ void *natboot_trap_device(void)
 }
 int natboot_active(void)
 {
-	return getenv("MW2COOP_NATIVE11") != NULL;
+	return settings_directx11();
 }
 #else
 void natboot_install(void) {}
