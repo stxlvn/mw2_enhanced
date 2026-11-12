@@ -19,8 +19,8 @@ typedef struct {
 	nd *d;
 	uint8_t *exe;                                             // the game's image base (tables and globals by rva)
 	int (*fn_rand)(void);                                     // 0x2f715c: the engine's random number
-	void (*fn_1fa40)(const uint8_t *entry);                  // 0x1fa40: the game's own writer of one model-lighting block (reads the lock globals)
-	int (*fn_bink_rects)(void *bink);                         // BinkGetRects(bink, 0): the number of rectangles the decoder changed
+	void (*fn_1fa40)(const uint8_t *entry, uint8_t *dest);                // 0x1fa40: the game's own writer of one model-lighting block (reads the lock globals)
+	int (*fn_bink_rects)(void *bink, int flags);                       // BinkGetRects(bink, 0): the number of rectangles the decoder changed
 	void (*fn_qsort)(void *base, size_t num, size_t size, void *cmp); // 0x2f6ab0: the engine's qsort (the particle buffer set-up sorts with the comparator at rva 0x25280)
 } ngr;
 

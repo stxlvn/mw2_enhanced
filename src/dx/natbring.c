@@ -259,7 +259,7 @@ static void nbr_bee0(nbr *n);
 // QA: where the other threads are (an asset loader that stopped making progress): each thread is stopped for a moment and its instruction pointer and the code addresses on the top of
 // its stack are logged as module+offset (exe addresses as rva).
 #include <tlhelp32.h>
-static void nbr_dump_threads(uint8_t *exe)
+void nbr_dump_threads(uint8_t *exe)
 {
 	HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
 	if (snap == INVALID_HANDLE_VALUE)
@@ -353,13 +353,21 @@ int nbr_start(nbr *n, uint8_t *p)
 	n->gops.filter_table = (const uint32_t *)(e + 0x4585290);
 	n->gops.write_game_state = 1;
 	ng_init(&n->g);
-	memset(&n->f, 0, sizeof(n->f));
+	memset(n->f.tex_thunk, 0, sizeof(n->f.tex_thunk)); // (the function pointers of n->f were set when the hooks were installed: natboot.c; only the device-bound state is reset)
 	n->f.g = &n->g;
 	n->f.ops = &n->gops;
 	n->f.exe = e;
 	n->r.dev = n->dev;
 	n->r.mip_cube = caps->mip_cube;
 	n->r.fn_48bd0 = (void *)(e + 0x48bd0);
+	{ // the film planes (0x2b7980) upload only when the decoder says rectangles changed: BinkGetRects from the game's Bink DLL
+		HMODULE bink = GetModuleHandleA("bink2w64.dll");
+		FARPROC rects = bink ? GetProcAddress(bink, "BinkGetRects") : NULL;
+		if (!rects && bink)
+			rects = GetProcAddress(bink, "_BinkGetRects@8");
+		n->r.fn_bink_rects = (int (*)(void *, int))rects;
+		log_printf("native11: BinkGetRects %s", rects ? "found" : "NOT found (film planes are never uploaded)");
+	}
 	n->r.exe = e;
 	n->pace.dev = n->dev;
 	n->pace.exe = e;
@@ -368,7 +376,7 @@ int nbr_start(nbr *n, uint8_t *p)
 	n->r.d = n->d;
 	n->r.fn_rand = (int (*)(void))(e + 0x2f715c);
 	n->r.fn_qsort = (void (*)(void *, size_t, size_t, void *))(e + 0x2f6ab0);
-	n->r.fn_1fa40 = (void (*)(const uint8_t *))(e + 0x1fa40);
+	n->r.fn_1fa40 = (void (*)(const uint8_t *, uint8_t *))(e + 0x1fa40);
 	n->created = 1;
 	log_printf("native11: native device created on %s (%u MB)", caps->adapter, caps->vram_mb);
 	// The original start (0x10550) requests the common zones right after the device and the display mode exist (0xf3f0: DB_LoadXAssets of the gfx zones, which hold $white and the other

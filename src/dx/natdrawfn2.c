@@ -125,8 +125,7 @@ void ngf_draw_3ec20(ngf *f, void *ctx, void *cmd)
 	ng_apply_object(f->g, f->ops, input, state);
 	ng_apply_prim(f->g, f->ops, input, state);
 	if (mode == 9) {
-		uintptr_t cursor[2] = {(uintptr_t)RD_PTR(cmd, 0), (uintptr_t)RD_PTR(cmd, 8)};
-		ngf_draw_5fe50(f, cursor, ctx);
+		ngf_draw_5fe50(f, (uintptr_t *)cmd, ctx); // the engine's own cursor variable: the draw advances it (a copy would leave the caller's loop spinning on the same command)
 	} else if (f->fn_60120) {
 		f->fn_60120(cmd, ctx, mode);
 	}

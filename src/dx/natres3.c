@@ -56,14 +56,16 @@ void ngr_model_lighting(ngr *r, uint8_t *volume_image, const uint8_t *entries, u
 	RD_I32(e, G_PITCH_FIX) = (int32_t)slice - 3 * (int32_t)row;
 	for (unsigned i = 0; i < count; i++) {
 		const uint8_t *en = entries + (size_t)i * 0x34;
+		// the block's start: RowPitch * (the y of the block, a multiple of 4 rows) + 16 bytes per x unit (4 texels), as 0x2a0a0 computes it (rdx before its call to 0x1fa40); the 4 slices of the block
+		// are the offset table's job
 		const unsigned code = RD_U16(en, 0), x = code & 0x3f, zq = ((unsigned)(code >> 4)) & 0xffffffcu;
-		uint8_t *at = light_shadow + (size_t)slice * zq + (size_t)x * 0x10;
+		uint8_t *at = light_shadow + (size_t)row * zq + (size_t)x * 0x10;
 		if (RD_U8(en, 3) == 0) {
 			const uint32_t color = RD_U32(en, 4);
 			for (int k = 0; k < 64; k++)
 				*(uint32_t *)(at + offs[k]) = color;
 		} else if (r->fn_1fa40) {
-			r->fn_1fa40(en);
+			r->fn_1fa40(en, at);
 		}
 	}
 	nat_image_upload(vol, 0, 0, light_shadow, row, slice);
@@ -122,7 +124,7 @@ void ngr_film_unlock(ngr *r, uint8_t *film, void *bink)
 		for (int pl = 0; pl < 4; pl++)
 			RD_PTR(film, 0x80 + (size_t)i * 0x60 + (size_t)pl * 0x18) = NULL;
 	const int cur = RD_I32(film, 0x74);
-	if (cur < 0 || cur >= frames || !r->fn_bink_rects || r->fn_bink_rects(bink) <= 0)
+	if (cur < 0 || cur >= frames || !r->fn_bink_rects || r->fn_bink_rects(bink, 0) <= 0)
 		return;
 	// the decoded frame goes to the real planes (Y, Cr, Cb and the alpha plane when there is one): the whole plane, the dirty rectangles are not tracked
 	for (int pl = 0; pl < 4; pl++) {

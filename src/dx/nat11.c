@@ -543,6 +543,8 @@ struct nat_buffer {
 	uint8_t *cpu; // a static buffer being written (Lock .. Unlock): the block, uploaded and freed at Unlock
 	uint8_t *stage;        // a staged buffer: the memory the engine writes through Lock for the whole frame (its worker threads fill it), copied to the GPU buffer by nat_buffer_sync
 	unsigned synced;       // the bytes of the stage already copied
+	int mapped;            // a dynamic buffer locked through the vtable (Map until Unlock)
+	int discarded;         // a dynamic buffer that has had its first DISCARD (a no-overwrite map is only valid after one)
 	const volatile int *used; // the engine's own count of the bytes it has reserved in the stage (the ring struct's first field)
 };
 
@@ -678,7 +680,19 @@ static long buffer_lock(void *self, unsigned off, unsigned size, void **out, uns
 		*out = b->stage + off;
 		return 0;
 	}
-	if (b->dynamic || off > b->size)
+	if (b->dynamic) { // a dynamic buffer locked by the engine's front end (the frame's vertex buffer): Map until the engine's Unlock; D3DLOCK_NOOVERWRITE = 0x1000
+		D3D11_MAPPED_SUBRESOURCE m;
+		if (off > b->size || b->mapped)
+			return -1;
+		const int no_overwrite = (flags & 0x1000) && b->discarded;
+		if (FAILED(ID3D11DeviceContext_Map(b->dev->ctx, (ID3D11Resource *)b->buf, 0, no_overwrite ? D3D11_MAP_WRITE_NO_OVERWRITE : D3D11_MAP_WRITE_DISCARD, 0, &m)))
+			return -1;
+		b->mapped = 1;
+		b->discarded = 1;
+		*out = (uint8_t *)m.pData + off;
+		return 0;
+	}
+	if (off > b->size)
 		return -1;
 	if (!b->cpu) // a second Lock of a made buffer: a fresh block (the first contents are not read back)
 		b->cpu = calloc(1, b->size ? b->size : 1);
@@ -691,7 +705,14 @@ static long buffer_lock(void *self, unsigned off, unsigned size, void **out, uns
 static long buffer_unlock(void *self)
 {
 	nat_buffer *b = (nat_buffer *)self;
-	if (!b->cpu || b->dynamic)
+	if (b->dynamic) {
+		if (b->mapped) {
+			ID3D11DeviceContext_Unmap(b->dev->ctx, (ID3D11Resource *)b->buf, 0);
+			b->mapped = 0;
+		}
+		return 0;
+	}
+	if (!b->cpu)
 		return 0;
 	D3D11_BUFFER_DESC bd = {0};
 	bd.ByteWidth = b->size;
@@ -711,8 +732,9 @@ static long buffer_unlock(void *self)
 void *nat_buffer_map(nat_buffer *b, int mode)
 {
 	D3D11_MAPPED_SUBRESOURCE m;
-	if (!b->dynamic || FAILED(ID3D11DeviceContext_Map(b->dev->ctx, (ID3D11Resource *)b->buf, 0, mode == NAT_MAP_NOOVERWRITE ? D3D11_MAP_WRITE_NO_OVERWRITE : D3D11_MAP_WRITE_DISCARD, 0, &m)))
+	if (!b->dynamic || FAILED(ID3D11DeviceContext_Map(b->dev->ctx, (ID3D11Resource *)b->buf, 0, (mode == NAT_MAP_NOOVERWRITE && b->discarded) ? D3D11_MAP_WRITE_NO_OVERWRITE : D3D11_MAP_WRITE_DISCARD, 0, &m)))
 		return NULL;
+	b->discarded = 1;
 	return m.pData;
 }
 

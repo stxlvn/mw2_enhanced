@@ -10,6 +10,9 @@
 #include "natres.h"
 #include "natstart.h"
 
+// diagnostics: logs every other thread's instruction pointer and the return addresses found on its stack
+void nbr_dump_threads(uint8_t *exe);
+
 typedef struct {
 	int (*dvar_int)(const char *name);                                                           // 0x26c010
 	int (*dvar_bool)(const char *name);                                                          // 0x26bf90

@@ -100,7 +100,30 @@ static void w_5cc10(void *ctx, uintptr_t *cur) { InterlockedIncrement(&hits[21])
 static void w_5f220(void *ctx, uintptr_t *cur) { InterlockedIncrement(&hits[22]); if (!N.created) return; ngf_draw_5f220(&N.f, ctx, cur); }
 static void w_5fe50(uintptr_t *cur, void *ctx) { InterlockedIncrement(&hits[23]); if (!N.created) return; ngf_draw_5fe50(&N.f, cur, ctx); }
 static void w_63850(void *item, void *ctx) { InterlockedIncrement(&hits[24]); if (!N.created) return; ngf_draw_63850(&N.f, item, ctx); }
-static void w_3ec20(void *ctx, void *cmd) { InterlockedIncrement(&hits[25]); if (!N.created) return; ngf_draw_3ec20(&N.f, ctx, cmd); }
+static void log_backtrace(const char *what)
+{
+	void *fr[32];
+	const USHORT n = RtlCaptureStackBackTrace(0, 32, fr, NULL);
+	char line[600];
+	int k = snprintf(line, sizeof(line), "native11: %s, callers:", what);
+	for (USHORT i = 0; i < n && k < (int)sizeof(line) - 24; i++) {
+		const uintptr_t v = (uintptr_t)fr[i];
+		if (v > (uintptr_t)exe && v < (uintptr_t)exe + 0x4900000)
+			k += snprintf(line + k, sizeof(line) - k, " exe+%llx", (unsigned long long)(v - (uintptr_t)exe));
+		else
+			k += snprintf(line + k, sizeof(line) - k, " ?%llx", (unsigned long long)(v & 0xfffff));
+	}
+	log_printf("%s", line);
+}
+static void w_3ec20(void *ctx, void *cmd)
+{
+	const LONG h = InterlockedIncrement(&hits[25]);
+	if (!N.created)
+		return;
+	if (h == 4000000 || h == 4000001)
+		log_backtrace("w_3ec20 spinning");
+	ngf_draw_3ec20(&N.f, ctx, cmd);
+}
 static void w_5da10(void *ctx, uintptr_t *cur) { InterlockedIncrement(&hits[26]); if (!N.created) return; ngf_draw_5da10(&N.f, ctx, cur); }
 static void w_5dde0(void *ctx, int *cmd) { InterlockedIncrement(&hits[27]); if (!N.created) return; ngf_draw_5dde0(&N.f, ctx, cmd); }
 static void w_63f50(uintptr_t *cur, unsigned packed, void *ctx) { InterlockedIncrement(&hits[28]); if (!N.created) return; ngf_draw_63f50(&N.f, cur, packed, ctx); }
@@ -240,6 +263,12 @@ static DWORD WINAPI monitor(LPVOID arg)
 			}
 		if (line[0])
 			log_printf("native11: calls (totals):%s", line);
+		{ // a draw function spinning (a loop that never ends): dump the threads once, after the second such interval
+			static LONG o_spin, spins;
+			if (hits[25] - o_spin > 3000000 && ++spins == 2)
+				nbr_dump_threads(exe);
+			o_spin = hits[25];
+		}
 		if (N.created && N.d) {
 			static unsigned o_draws, o_refused;
 			unsigned st, ly, sh, up, dr, rf;

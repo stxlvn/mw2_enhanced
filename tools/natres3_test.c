@@ -26,19 +26,17 @@ static int fails;
 
 static unsigned writer_calls;
 static uint8_t *g_exe;
-static void fake_writer(const uint8_t *entry)
+static void fake_writer(const uint8_t *entry, uint8_t *dest)
 {
-	// the game's writer uses the lock globals: pBits + SlicePitch * z + x * 16 + offsets[k]
+	// the game's writer (0x1fa40) gets the block's start in rdx: pBits + RowPitch * zq + x * 16, and adds the offset table's values
 	writer_calls++;
-	const unsigned code = *(const uint16_t *)entry, x = code & 0x3f, zq = (code >> 4) & 0xffffffcu;
-	uint8_t *bits = *(uint8_t **)(g_exe + 0x488a378);
-	const int slice = *(int *)(g_exe + 0x488a374);
+	(void)entry;
 	const int *offs = (const int *)(g_exe + 0x489a400);
 	for (int k = 0; k < 64; k++)
-		*(uint32_t *)(bits + (size_t)slice * zq + (size_t)x * 0x10 + offs[k]) = 0xff112233u;
+		*(uint32_t *)(dest + offs[k]) = 0xff112233u;
 }
 static int rects_reported = 1;
-static int fake_rects(void *bink)
+static int fake_rects(void *bink, int flags)
 {
 	(void)bink;
 	return rects_reported;
@@ -67,9 +65,9 @@ int main(void)
 	r.fn_1fa40 = fake_writer;
 	r.fn_bink_rects = fake_rects;
 
-	// model lighting: a volume of 16 x 4 x 8 texels (the game's is 256 wide); entry 0 fills the block at x = 4 (code & 63 = 1), z = 0 with one colour, entry 1 uses the writer at x = 8, z = 4
+	// model lighting: a volume of 16 x 8 x 4 texels (the game's is 256 wide); entry 0 fills the block at x = 4 (code & 63 = 1), y = 0 with one colour, entry 1 uses the writer at x = 8, y = 4 (a block is 4 x 4 x 4 texels, its y comes from the code, its 4 slices from the offset table)
 	static uint8_t vol_image[0x40];
-	CHECK(ngr_image_create(&r, vol_image, 16, 4, 8, 0x20000, 0x15), "volume");
+	CHECK(ngr_image_create(&r, vol_image, 16, 8, 4, 0x20000, 0x15), "volume");
 	uint8_t entries[2 * 0x34] = {0};
 	W16(entries, 0, 1);
 	entries[3] = 0;
@@ -83,8 +81,8 @@ int main(void)
 		ID3D11DeviceContext *ctx = nat_d3d_context(dev);
 		D3D11_TEXTURE3D_DESC td = {0};
 		td.Width = 16;
-		td.Height = 4;
-		td.Depth = 8;
+		td.Height = 8;
+		td.Depth = 4;
 		td.MipLevels = 1;
 		td.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS;
 		td.Usage = D3D11_USAGE_STAGING;
@@ -97,7 +95,7 @@ int main(void)
 		const uint8_t *bits = m.pData;
 		#define TEXEL(x, y, z) (*(const uint32_t *)(bits + (size_t)(z) * m.DepthPitch + (size_t)(y) * m.RowPitch + (size_t)(x) * 4))
 		CHECK(TEXEL(4, 0, 0) == 0xff0a0b0cu && TEXEL(7, 3, 3) == 0xff0a0b0cu && TEXEL(3, 0, 0) == 0 && TEXEL(8, 0, 0) == 0, "colour block 4x4x4 at x = 4: %08x", TEXEL(4, 0, 0));
-		CHECK(TEXEL(8, 0, 4) == 0xff112233u && TEXEL(11, 3, 7) == 0xff112233u && TEXEL(8, 0, 3) == 0, "writer block at x = 8, z = 4: %08x", TEXEL(8, 0, 4));
+		CHECK(TEXEL(8, 4, 0) == 0xff112233u && TEXEL(11, 7, 3) == 0xff112233u && TEXEL(8, 3, 0) == 0, "writer block at x = 8, y = 4: %08x", TEXEL(8, 4, 0));
 		ID3D11DeviceContext_Unmap(ctx, (ID3D11Resource *)st, 0);
 		ID3D11Texture3D_Release(st);
 	}
