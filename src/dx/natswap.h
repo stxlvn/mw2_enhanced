@@ -36,6 +36,29 @@ static HANDLE ns_waitable(IUnknown *swap, unsigned frames)
 	return h;
 }
 
+// QA: MW2COOP_DUMPBACK=<n>[,<n>...]: the picture of the n-th present is saved as mw2coop/native11/back-<n>.bmp; 1 when present number n is one of them
+#include <stdio.h>
+#include <stdlib.h>
+static int ns_dump_wanted(unsigned n)
+{
+	static char list[200];
+	static int read;
+	if (!read) {
+		const char *e = getenv("MW2COOP_DUMPBACK");
+		snprintf(list, sizeof(list), "%s", e ? e : "");
+		read = 1;
+	}
+	for (const char *p = list; *p;) {
+		if ((unsigned)strtoul(p, NULL, 10) == n)
+			return 1;
+		while (*p && *p != ',')
+			p++;
+		if (*p == ',')
+			p++;
+	}
+	return 0;
+}
+
 // Present's flags: with tearing only when the swap chain was made for it, the sync interval is 0 and the window is not in exclusive full screen
 static UINT ns_present_flags(int tearing_chain, int vsync, int fullscreen_set)
 {

@@ -563,7 +563,7 @@ void nat_scene_resolve(nat_device *d)
 }
 
 // QA: MW2COOP_DUMPBACK=<n>: the back buffer (B8G8R8A8) of the n-th present is written to mw2coop\native11\back.bmp (what the upscaling passes made)
-static void dump_back(nat_device *d)
+static void dump_back(nat_device *d, unsigned n)
 {
 	D3D11_TEXTURE2D_DESC td;
 	ID3D11Texture2D_GetDesc(d->backbuffer, &td);
@@ -579,7 +579,9 @@ static void dump_back(nat_device *d)
 	ID3D11DeviceContext_CopyResource(d->ctx, (ID3D11Resource *)st, (ID3D11Resource *)d->backbuffer);
 	D3D11_MAPPED_SUBRESOURCE m;
 	if (SUCCEEDED(ID3D11DeviceContext_Map(d->ctx, (ID3D11Resource *)st, 0, D3D11_MAP_READ, 0, &m))) {
-		FILE *f = fopen("mw2coop/native11/back.bmp", "wb");
+		char dpath[64];
+		snprintf(dpath, sizeof(dpath), "mw2coop/native11/back-%u.bmp", n);
+		FILE *f = fopen(dpath, "wb");
 		if (f) {
 			const unsigned w = td.Width, h = td.Height;
 			uint8_t hdr[54] = {'B', 'M'};
@@ -604,10 +606,9 @@ static void dump_back(nat_device *d)
 int nat_present(nat_device *d)
 {
 	if ((d->hdr_on || d->up_on) && final_passes(d)) {
-		static int n_present;
-		const char *want = getenv("MW2COOP_DUMPBACK");
-		if (want && ++n_present == atoi(want))
-			dump_back(d);
+		static unsigned n_present;
+		if (getenv("MW2COOP_DUMPBACK") && ns_dump_wanted(++n_present))
+			dump_back(d, n_present);
 	}
 	else if (BW(d) != d->p.width || BH(d) != d->p.height)
 		; // (upscaling failed: there is nothing to copy 1:1)

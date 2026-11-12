@@ -1301,13 +1301,15 @@ int nat_present(nat_device *d)
 {
 	const UINT bi = IDXGISwapChain3_GetCurrentBackBufferIndex(d->swap);
 	ID3D12Resource *back = d->back[bi];
-	if (d->up_on && d->up_done && getenv("MW2COOP_DUMPBACK")) { // QA: MW2COOP_DUMPBACK=<n>: the upscaled picture of the n-th present, with its 2D, as mw2coop/native11/back.bmp
-		static int n_present;
-		if (++n_present == atoi(getenv("MW2COOP_DUMPBACK")) && d->up_img[1]) {
+	if (d->up_on && d->up_done && getenv("MW2COOP_DUMPBACK")) { // QA: MW2COOP_DUMPBACK=<n>[,<n>..]: the upscaled picture of those presents, with its 2D, as mw2coop/native11/back-<n>.bmp
+		static unsigned n_present;
+		if (ns_dump_wanted(++n_present) && d->up_img[1]) {
 			void *data = NULL;
 			unsigned pitch = 0, rows = 0;
 			if (nat_image_download(d->up_img[1], 0, &data, &pitch, &rows)) {
-				FILE *f = fopen("mw2coop/native11/back.bmp", "wb");
+				char dpath[64];
+				snprintf(dpath, sizeof(dpath), "mw2coop/native11/back-%u.bmp", n_present);
+				FILE *f = fopen(dpath, "wb");
 				if (f) {
 					const unsigned w = BW(d), h = BH(d);
 					uint8_t hdr[54] = {'B', 'M'};
