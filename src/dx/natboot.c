@@ -378,6 +378,56 @@ static void natboot_comp_frame(void)
 	natframe_skip_present = native_nat_pair_present() && half == 0 && both;
 }
 
+// ---- FSR 1 with a crisp HUD on the native renderers: the 3D picture is upscaled when the engine starts its 2D passes, which then draw at the output resolution (natboot.c hud_begin)
+static nat_image *hud_prev_rt, *hud_prev_ds;
+static int hud_active;
+static int hud_begin_impl(void)
+{
+	if (!N.created || hud_active)
+		return 0;
+	nat_image *u = nat_upscale_now(N.dev);
+	if (!u)
+		return 0;
+	unsigned iw, ih, ow, oh, s;
+	nat_get_size(N.dev, &iw, &ih);
+	nat_image_size(u, &ow, &oh, &s);
+	nd_get_targets(N.d, &hud_prev_rt, &hud_prev_ds);
+	nd_set_targets(N.d, u, ND_NO_DEPTH);
+	nd_hud_scale[0] = (float)ow / (float)iw;
+	nd_hud_scale[1] = (float)oh / (float)ih;
+	hud_active = 1;
+	return 1;
+}
+static void hud_end_impl(void)
+{
+	if (!hud_active)
+		return;
+	nd_hud_scale[0] = nd_hud_scale[1] = 0;
+	nd_set_targets(N.d, hud_prev_rt, hud_prev_ds);
+	hud_active = 0;
+}
+int natboot_hud_begin(void)
+{
+#ifndef NAT_BACKEND_12
+	if (settings_directx12()) {
+		extern int b12_natboot_hud_begin(void);
+		return b12_natboot_hud_begin();
+	}
+#endif
+	return hud_begin_impl();
+}
+void natboot_hud_end(void)
+{
+#ifndef NAT_BACKEND_12
+	if (settings_directx12()) {
+		extern void b12_natboot_hud_end(void);
+		b12_natboot_hud_end();
+		return;
+	}
+#endif
+	hud_end_impl();
+}
+
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ textures for the mod's own code
 // src/modtex.c: the logo, the gamepad pictures and the font atlas are textures the mod makes or reads on the game's device; with the native renderer they are images of this back end (the same field
 // of the game's image struct holds either). One function per operation, each handed to the copy of this file that belongs to the active back end.

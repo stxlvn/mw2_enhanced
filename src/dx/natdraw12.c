@@ -796,17 +796,19 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 	}
 	// Direct3D 9 has its pixel centres on whole numbers, Direct3D 10+ at half: the game's 2D quads carry the usual -0.5 (the full-screen quad is -0.5 .. size - 0.5), which Direct3D 11 / 12 would not cover
 	// in the last row and column (a line of the previous picture at the bottom and right edges). The viewport is moved half a pixel to give the Direct3D 9 coverage and texel alignment back.
-	D3D12_VIEWPORT vp = {d->vp[0] + 0.5f, d->vp[1] + 0.5f, d->vp[2], d->vp[3], d->vp[4], d->vp[5]};
+	const float hx = nd_hud_scale[0] > 0 ? nd_hud_scale[0] : 1.0f, hy = nd_hud_scale[1] > 0 ? nd_hud_scale[1] : 1.0f;
+	D3D12_VIEWPORT vp = {d->vp[0] * hx + 0.5f, d->vp[1] * hy + 0.5f, d->vp[2] * hx, d->vp[3] * hy, d->vp[4], d->vp[5]};
 	ID3D12GraphicsCommandList_RSSetViewports(d->list, 1, &vp);
 	unsigned tw, th, ts;
 	nat_image *size_img = rt ? rt : ds;
 	nat_image_size(size_img, &tw, &th, &ts);
 	D3D12_RECT sc = {0, 0, (LONG)tw, (LONG)th};
 	if (d->scissor_on) {
-		sc.left = d->scissor.left < 0 ? 0 : d->scissor.left;
-		sc.top = d->scissor.top < 0 ? 0 : d->scissor.top;
-		sc.right = d->scissor.right > (LONG)tw ? (LONG)tw : d->scissor.right;
-		sc.bottom = d->scissor.bottom > (LONG)th ? (LONG)th : d->scissor.bottom;
+		const LONG l = (LONG)(d->scissor.left * hx + 0.5f), t = (LONG)(d->scissor.top * hy + 0.5f), r = (LONG)(d->scissor.right * hx + 0.5f), b = (LONG)(d->scissor.bottom * hy + 0.5f);
+		sc.left = l < 0 ? 0 : l;
+		sc.top = t < 0 ? 0 : t;
+		sc.right = r > (LONG)tw ? (LONG)tw : r;
+		sc.bottom = b > (LONG)th ? (LONG)th : b;
 	}
 	ID3D12GraphicsCommandList_RSSetScissorRects(d->list, 1, &sc);
 	ID3D12GraphicsCommandList_OMSetStencilRef(d->list, d->stencil_ref);

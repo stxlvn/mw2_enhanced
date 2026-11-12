@@ -63,6 +63,8 @@ int nd_overlay(nd *d, nat_image *src);
 // the split screen compositor (natboot.c): the current targets, an alpha blended copy with premultiplied colour (ONE, INV_SRC_ALPHA) of a window of src into dst, and the layer mode (one variable,
 // natdraw12.c reads it too): while nonzero every draw's blend state gets the 2D layer's alpha rule (state11_layer_fix)
 extern int nd_layer_mode;
+// FSR 1 with a crisp HUD: while the 2D passes draw into the upscaled image, the engine's viewport and scissor (in render pixels) are multiplied by these (output / render size); 0 = off
+extern float nd_hud_scale[2];
 // while the layer mode is on, a depth tested draw (the 3D things the scene's last pass draws: effects, particles, glass, the red dot of a sight) goes to the scene's own targets, not to the 2D layer
 extern nat_image *nd_layer_scene_rt, *nd_layer_scene_ds;
 extern int nd_layer_reroute;

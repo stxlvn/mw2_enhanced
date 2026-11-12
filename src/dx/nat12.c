@@ -147,7 +147,8 @@ struct nat_device {
 		ID3D12PipelineState *pso;
 	} pso[8];
 	int npso;
-	nat_shader *pass_vs, *pass_ps[3];
+	nat_shader *pass_vs, *pass_ps[4];
+	int up_done; // this frame's upscale was done by nat_upscale_now (up_img[1] is the picture the 2D passes draw into)
 	nat_image *up_img[2]; // the passes' intermediate pictures (output size)
 	UINT back_rtv[NAT12_FRAMES]; // render target view slots of the back buffers (HDR pass)
 	// commands
@@ -726,6 +727,7 @@ static void release_scene(nat_device *d)
 	nat_image_destroy(d->up_img[0]);
 	nat_image_destroy(d->up_img[1]);
 	d->up_img[0] = d->up_img[1] = NULL;
+	d->up_done = 0;
 	for (UINT i = 0; i < NAT12_FRAMES; i++)
 		REL(d->back[i]);
 }
@@ -1068,6 +1070,7 @@ static void hdr_setup(nat_device *d)
 
 int nat_hdr_active(const nat_device *d) { return d->hdr_on; }
 
+static const char COPY_PS[] = "Texture2D t : register(t0); float4 main(float4 p : SV_Position) : SV_Target { return t.Load(int3(p.xy, 0)); }";
 static const char HDR_VS[] = "void main(uint id : SV_VertexID, out float4 p : SV_Position) { float2 uv = float2((id << 1) & 2, id & 2); p = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1); }";
 static const char HDR_PS[] =
 	"Texture2D t : register(t0);\n"
@@ -1117,8 +1120,8 @@ static ID3D12PipelineState *pass_pso(nat_device *d, int kind, DXGI_FORMAT fmt)
 	if (!d->pass_vs)
 		d->pass_vs = nat_shader_from_hlsl(d, HDR_VS, 1, err, sizeof(err));
 	if (!d->pass_ps[kind]) {
-		char *text = kind == 2 ? NULL : nu_shader(kind);
-		d->pass_ps[kind] = nat_shader_from_hlsl(d, kind == 2 ? HDR_PS : text, 0, err, sizeof(err));
+		char *text = kind >= 2 ? NULL : nu_shader(kind);
+		d->pass_ps[kind] = nat_shader_from_hlsl(d, kind == 2 ? HDR_PS : kind == 3 ? COPY_PS : text, 0, err, sizeof(err));
 		free(text);
 	}
 	if (!d->pass_vs || !d->pass_ps[kind]) {
@@ -1198,12 +1201,15 @@ static int pass12(nat_device *d, int kind, nat_image *src, const float *k, unsig
 	ID3D12GraphicsCommandList_IASetPrimitiveTopology(l, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	ID3D12GraphicsCommandList_OMSetRenderTargets(l, 1, &rtv, FALSE, NULL);
 	ID3D12GraphicsCommandList_DrawInstanced(l, 3, 1, 0, 0);
+	d->list_gen++; // (the draw layer caches the root signature and tables it bound: a pass in the middle of a frame must make it bind them again)
 	return 1;
 }
 
-// the scene through the final passes into the back buffer: (EASU -> RCAS) when upscaled, (HDR conversion) when HDR; 0 when it cannot (the caller copies as usual)
-static int final_passes(nat_device *d, ID3D12Resource *back, UINT bi)
+// the upscale: the scene (resolved when multisampled) -> EASU -> up_img[0] -> RCAS -> up_img[1] (output size); 0 when it cannot be done
+static int up_stage(nat_device *d)
 {
+	if (!d->up_on)
+		return 0;
 	nat_image *src = d->scene;
 	if (d->samples > 1) {
 		if (!d->resolved)
@@ -1212,44 +1218,63 @@ static int final_passes(nat_device *d, ID3D12Resource *back, UINT bi)
 		src = d->resolved;
 	}
 	const unsigned ow = BW(d), oh = BH(d);
+	for (int i = 0; i < 2; i++)
+		if (!d->up_img[i]) {
+			nat_image_desc ud = {NAT_IMAGE_2D, ow, oh, 1, 1, 21, NAT_RENDER_TARGET, 0};
+			d->up_img[i] = nat_image_create(d, &ud);
+			if (!d->up_img[i])
+				return 0;
+		}
+	const float fin_w = (float)d->p.width, fin_h = (float)d->p.height, fout_w = (float)ow, fout_h = (float)oh;
+	const float con[16] = {
+		fin_w / fout_w, fin_h / fout_h, 0.5f * fin_w / fout_w - 0.5f, 0.5f * fin_h / fout_h - 0.5f,
+		1.0f / fin_w, 1.0f / fin_h, 1.0f / fin_w, -1.0f / fin_h,
+		-1.0f / fin_w, 2.0f / fin_h, 1.0f / fin_w, 2.0f / fin_h,
+		0.0f, 4.0f / fin_h, 0.0f, 0.0f,
+	};
+	float sharp = 1.0f;
+	for (int i = 0; i < d->p.up_sharp; i++)
+		sharp *= 0.99309249543703590153f; // 2 ^ (-1/100)
+	const float k0[4] = {sharp, 1.0f / fout_w, 1.0f / fout_h, 0.0f};
+	const DXGI_FORMAT ifmt = DXGI_FORMAT_B8G8R8A8_UNORM;
+	if (!pass12(d, 0, src, con, 4, d->up_img[0], NULL, 0, ifmt, ow, oh) || !pass12(d, 1, d->up_img[0], k0, 1, d->up_img[1], NULL, 0, ifmt, ow, oh))
+		return 0;
+	d->up_done = 1;
+	return 1;
+}
+
+nat_image *nat_upscale_now(nat_device *d)
+{
+	if (d->up_done)
+		return d->up_img[1];
+	return up_stage(d) ? d->up_img[1] : NULL;
+}
+
+// the upscaled picture (with its 2D) and / or the HDR conversion into the back buffer; 0 when it cannot (the caller copies as usual)
+static int final_passes(nat_device *d, ID3D12Resource *back, UINT bi)
+{
+	nat_image *src = d->scene;
+	const unsigned ow = BW(d), oh = BH(d);
 	const DXGI_FORMAT bfmt = d->hdr_on ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM;
 	if (d->up_on) {
-		for (int i = 0; i < 2; i++)
-			if (!d->up_img[i] && (i == 0 || d->hdr_on)) {
-				nat_image_desc ud = {NAT_IMAGE_2D, ow, oh, 1, 1, 21, NAT_RENDER_TARGET, 0};
-				d->up_img[i] = nat_image_create(d, &ud);
-				if (!d->up_img[i])
-					return 0;
-			}
+		if (!d->up_done && !up_stage(d))
+			return 0;
+		src = d->up_img[1];
+	} else if (d->samples > 1) {
+		if (!d->resolved)
+			return 0;
+		nat_scene_resolve(d);
+		src = d->resolved;
 	}
 	barrier_res(d, back, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-	int ok = 1;
-	if (d->up_on) {
-		const float fin_w = (float)d->p.width, fin_h = (float)d->p.height, fout_w = (float)ow, fout_h = (float)oh;
-		const float con[16] = {
-			fin_w / fout_w, fin_h / fout_h, 0.5f * fin_w / fout_w - 0.5f, 0.5f * fin_h / fout_h - 0.5f,
-			1.0f / fin_w, 1.0f / fin_h, 1.0f / fin_w, -1.0f / fin_h,
-			-1.0f / fin_w, 2.0f / fin_h, 1.0f / fin_w, 2.0f / fin_h,
-			0.0f, 4.0f / fin_h, 0.0f, 0.0f,
-		};
-		float sharp = 1.0f;
-		for (int i = 0; i < d->p.up_sharp; i++)
-			sharp *= 0.99309249543703590153f; // 2 ^ (-1/100)
-		const float k0[4] = {sharp, 1.0f / fout_w, 1.0f / fout_h, 0.0f};
-		const DXGI_FORMAT ifmt = DXGI_FORMAT_B8G8R8A8_UNORM;
-		ok = pass12(d, 0, src, con, 4, d->up_img[0], NULL, 0, ifmt, ow, oh);
-		if (ok && d->hdr_on) {
-			ok = pass12(d, 1, d->up_img[0], k0, 1, d->up_img[1], NULL, 0, ifmt, ow, oh);
-			src = d->up_img[1];
-		} else if (ok) {
-			ok = pass12(d, 1, d->up_img[0], k0, 1, NULL, back, bi, bfmt, ow, oh);
-			src = NULL;
-		}
-	}
-	if (ok && src && d->hdr_on) {
+	int ok;
+	if (d->hdr_on) {
 		const float white = (float)(d->p.hdr_white > 0 ? d->p.hdr_white : 200), peak = (float)(d->p.hdr_peak > 0 ? d->p.hdr_peak : 600);
 		const float k[4] = {white / 80.0f, peak > white ? peak / white : 1.0f, 0, 0};
 		ok = pass12(d, 2, src, k, 1, NULL, back, bi, bfmt, ow, oh);
+	} else {
+		const float none[4] = {0, 0, 0, 0};
+		ok = pass12(d, 3, src, none, 1, NULL, back, bi, bfmt, ow, oh);
 	}
 	barrier_res(d, back, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
 	return ok;
@@ -1275,6 +1300,7 @@ int nat_present(nat_device *d)
 		barrier_res(d, back, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
 	}
 	submit(d, 0);
+	d->up_done = 0;
 	HRESULT hr = IDXGISwapChain3_Present(d->swap, d->p.vsync ? 1 : 0, ns_present_flags(d->tearing, d->p.vsync, d->fullscreen_set));
 	if (d->waitable) // the next frame starts when the swap chain can take it (lower input latency)
 		WaitForSingleObjectEx(d->waitable, 100, TRUE);

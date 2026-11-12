@@ -2250,6 +2250,12 @@ static void scene2d_hook(void *vp)
 			log_printf("native: frames whose half was not found: %ld of %ld", (long)lost, (long)seen);
 		}
 	}
+	{ extern int nd_trace; if (nd_trace) log_printf("trace: ==== scene2d begin"); }
+	if (natboot_active() && !(mode == 10 && native_active && split_on) && natboot_hud_begin()) { // upscaled picture: the HUD is drawn at the output resolution
+		scene2d_original(vp);
+		natboot_hud_end();
+		return;
+	}
 	if (natboot_active()) { // the native renderers: the 2D pass goes into the half's layer (natboot.c)
 		if (mode == 10 && render_half >= 0 && natboot_comp_make()) {
 			natboot_layer_begin(render_half, 1);
@@ -2377,9 +2383,17 @@ int native_nat_pair_present(void)
 }
 
 // the native frame end (natframe2.c ngfr_453c0) calls the frame's 2D command list through this: the split screen's layer pass (final2d_hook) when the hook is in, the engine's function otherwise
+void native_hud_install(void);
 void native_final2d_entry(void *vp);
 void native_final2d_entry(void *vp)
 {
+	native_hud_install();
+	{ extern int nd_trace; if (nd_trace) log_printf("trace: ==== final2d begin"); }
+	if (!(mode == 10 && native_active && split_on) && natboot_hud_begin()) { // upscaled picture: the 2D list (fades, texts) is drawn at the output resolution
+		((void (*)(void *))(base + XR(0x5c010)))(vp);
+		natboot_hud_end();
+		return;
+	}
 	if (final2d_original)
 		final2d_hook(vp);
 	else
@@ -2393,6 +2407,22 @@ int native_nat_film_size(unsigned *w, unsigned *h)
 	*w = (unsigned)InterlockedCompareExchange(&bink_movie_width, 0, 0);
 	*h = (unsigned)InterlockedCompareExchange(&bink_movie_height, 0, 0);
 	return *w && *h;
+}
+
+// [display] upscale on the native renderers: the scene's 2D pass hook is needed outside the split screen too (the HUD is drawn after the upscale)
+void native_hud_install(void);
+void native_hud_install(void)
+{
+	static int done;
+	if (done || !base || !natboot_active() || !settings_upscale())
+		return;
+	done = 1;
+	if (scene2d_original)
+		return;
+	if (*(base + XR(0x5c5bf)) == 0xe8 && jhook_call(base + XR(0x5c5bf), (void *)scene2d_hook, (void **)&scene2d_original))
+		log_printf("native: the scene's 2D pass is hooked (the HUD is drawn after the upscale)");
+	else
+		log_printf("native: unexpected code at the scene's 2D pass: the HUD is upscaled with the picture");
 }
 
 static DWORD comp_not_before; // GetTickCount: the device hooks are not (re)installed before it (after a vid_restart the Steam overlay hooks the new device first)
@@ -8397,7 +8427,7 @@ static int hooks_apply(void)
 		log_printf("native: unexpected code at the cgame draw or begin frame, the split screen is off");
 		return 0;
 	}
-	if (*(base + XR(0x5c5bf)) != 0xe8 || !jhook_call(base + XR(0x5c5bf), (void *)scene2d_hook, (void **)&scene2d_original)) {
+	if (!scene2d_original && (*(base + XR(0x5c5bf)) != 0xe8 || !jhook_call(base + XR(0x5c5bf), (void *)scene2d_hook, (void **)&scene2d_original))) {
 		log_printf("native: unexpected code at the scene's 2D pass, mode 10 is off");
 		return 0;
 	}

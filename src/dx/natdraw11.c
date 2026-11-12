@@ -129,6 +129,7 @@ void nd_decl_destroy(nd_decl *d)
 }
 
 int nd_layer_mode;
+float nd_hud_scale[2];
 int nd_aniso_override; // [display] aniso: 0 = the game's own, 2..16 = forced for mipmapped textures
 int nd_trace; // QA (MW2COOP_TRACEFRAME): while set, every draw / clear / stretch is logged with its target, textures and first constants
 
@@ -697,9 +698,11 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 	ID3D11DeviceContext_OMSetRenderTargets(c, rtv ? 1 : 0, &rtv, dsv);
 	// Direct3D 9 has its pixel centres on whole numbers, Direct3D 10+ at half: the game's 2D quads carry the usual -0.5 (the full-screen quad is -0.5 .. size - 0.5), which Direct3D 11 / 12 would not cover
 	// in the last row and column (a line of the previous picture at the bottom and right edges). The viewport is moved half a pixel to give the Direct3D 9 coverage and texel alignment back.
-	D3D11_VIEWPORT vp = {d->vp[0] + 0.5f, d->vp[1] + 0.5f, d->vp[2], d->vp[3], d->vp[4], d->vp[5]};
+	const float hx = nd_hud_scale[0] > 0 ? nd_hud_scale[0] : 1.0f, hy = nd_hud_scale[1] > 0 ? nd_hud_scale[1] : 1.0f;
+	D3D11_VIEWPORT vp = {d->vp[0] * hx + 0.5f, d->vp[1] * hy + 0.5f, d->vp[2] * hx, d->vp[3] * hy, d->vp[4], d->vp[5]};
 	ID3D11DeviceContext_RSSetViewports(c, 1, &vp);
-	ID3D11DeviceContext_RSSetScissorRects(c, 1, &d->scissor);
+	RECT scr = {(LONG)(d->scissor.left * hx + 0.5f), (LONG)(d->scissor.top * hy + 0.5f), (LONG)(d->scissor.right * hx + 0.5f), (LONG)(d->scissor.bottom * hy + 0.5f)};
+	ID3D11DeviceContext_RSSetScissorRects(c, 1, hx != 1.0f || hy != 1.0f ? &scr : &d->scissor);
 	ID3D11DeviceContext_RSSetState(c, raster_state(d, &st, d->scissor_on, bias, slope));
 	ID3D11DeviceContext_OMSetBlendState(c, blend_state(d, &st), NULL, 0xffffffffu);
 	ID3D11DeviceContext_OMSetDepthStencilState(c, depth_state(d, &st), d->stencil_ref);

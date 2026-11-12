@@ -51,6 +51,8 @@ struct nat_device {
 		ID3D11RenderTargetView *rtv;
 		ID3D11ShaderResourceView *srv;
 	} up_a, up_b;
+	nat_image *up_out; // the upscaled picture (output size): the RCAS target, then the 2D passes' target
+	int up_done; // this frame's upscale was done by nat_upscale_now
 	ID3D11Buffer *hdr_cb;
 	ID3D11RasterizerState *hdr_rs;
 	ID3D11DepthStencilState *hdr_ds;
@@ -90,6 +92,11 @@ static void release_targets(nat_device *d)
 	REL(d->up_b.rtv);
 	REL(d->up_b.srv);
 	REL(d->up_b.tex);
+	if (d->up_out) {
+		nat_image_destroy(d->up_out);
+		d->up_out = NULL;
+	}
+	d->up_done = 0;
 }
 
 static nat_shader *shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, char *err, size_t err_size);
@@ -219,50 +226,72 @@ static int up_target(nat_device *d, struct up_img *u)
 	return u->rtv && u->srv;
 }
 
-// the present of an upscaled and / or HDR picture: scene -> (EASU -> RCAS) -> (HDR conversion) -> the back buffer; 0 when it could not be done
+// the upscale: the scene (resolved when multisampled) -> EASU -> RCAS into up_out (output size); 0 when it cannot be done
+static int up_stage(nat_device *d)
+{
+	char err[160];
+	if (!d->up_on)
+		return 0;
+	if (!d->easu_ps) {
+		char *e = nu_shader(0), *r = nu_shader(1);
+		d->easu_ps = shader_from_hlsl(d, e, 0, err, sizeof(err));
+		d->rcas_ps = shader_from_hlsl(d, r, 0, err, sizeof(err));
+		free(e);
+		free(r);
+		if (!d->easu_ps || !d->rcas_ps) {
+			if (nat_log_hook)
+				nat_log_hook("native11: FSR 1 shaders failed: %s", err);
+			d->up_on = 0;
+			return 0;
+		}
+	}
+	if (!d->up_out) {
+		nat_image_desc ud = {NAT_IMAGE_2D, BW(d), BH(d), 1, 1, 21, NAT_RENDER_TARGET, 0};
+		d->up_out = nat_image_create(d, &ud);
+	}
+	if (!up_target(d, &d->up_a) || !d->up_out)
+		return 0;
+	nat_scene_resolve(d);
+	const float fin_w = (float)d->p.width, fin_h = (float)d->p.height, fout_w = (float)BW(d), fout_h = (float)BH(d);
+	const float con[16] = {
+		fin_w / fout_w, fin_h / fout_h, 0.5f * fin_w / fout_w - 0.5f, 0.5f * fin_h / fout_h - 0.5f,
+		1.0f / fin_w, 1.0f / fin_h, 1.0f / fin_w, -1.0f / fin_h,
+		-1.0f / fin_w, 2.0f / fin_h, 1.0f / fin_w, 2.0f / fin_h,
+		0.0f, 4.0f / fin_h, 0.0f, 0.0f,
+	};
+	if (!pass11(d, d->easu_ps, d->scene_srv, con, 4, d->up_a.rtv, BW(d), BH(d)))
+		return 0;
+	float sharp = 1.0f;
+	for (int i = 0; i < d->p.up_sharp; i++)
+		sharp *= 0.99309249543703590153f; // 2 ^ (-1/100)
+	const float k0[4] = {sharp, 1.0f / fout_w, 1.0f / fout_h, 0.0f};
+	if (!pass11(d, d->rcas_ps, d->up_a.srv, k0, 1, (ID3D11RenderTargetView *)nat_image_rtv(d->up_out, 0), BW(d), BH(d)))
+		return 0;
+	d->up_done = 1;
+	return 1;
+}
+
+nat_image *nat_upscale_now(nat_device *d)
+{
+	if (!d->up_on || d->up_done)
+		return d->up_done ? d->up_out : NULL;
+	return up_stage(d) ? d->up_out : NULL;
+}
+
+// the present of an upscaled and / or HDR picture: scene -> (EASU -> RCAS: already done when the 2D passes drew into it) -> (HDR conversion) -> the back buffer; 0 when it could not be done
 static int final_passes(nat_device *d)
 {
 	char err[160];
 	if (!d->back_rtv)
 		return 0;
-	nat_scene_resolve(d);
-	ID3D11ShaderResourceView *src = d->scene_srv;
+	ID3D11ShaderResourceView *src;
 	if (d->up_on) {
-		if (!d->easu_ps) {
-			char *e = nu_shader(0), *r = nu_shader(1);
-			d->easu_ps = shader_from_hlsl(d, e, 0, err, sizeof(err));
-			d->rcas_ps = shader_from_hlsl(d, r, 0, err, sizeof(err));
-			free(e);
-			free(r);
-			if (!d->easu_ps || !d->rcas_ps) {
-				if (nat_log_hook)
-					nat_log_hook("native11: FSR 1 shaders failed: %s", err);
-				d->up_on = 0;
-				return 0;
-			}
-		}
-		if (!up_target(d, &d->up_a) || (d->hdr_on && !up_target(d, &d->up_b)))
+		if (!d->up_done && !up_stage(d))
 			return 0;
-		const float fin_w = (float)d->p.width, fin_h = (float)d->p.height, fout_w = (float)BW(d), fout_h = (float)BH(d);
-		const float con[16] = {
-			fin_w / fout_w, fin_h / fout_h, 0.5f * fin_w / fout_w - 0.5f, 0.5f * fin_h / fout_h - 0.5f,
-			1.0f / fin_w, 1.0f / fin_h, 1.0f / fin_w, -1.0f / fin_h,
-			-1.0f / fin_w, 2.0f / fin_h, 1.0f / fin_w, 2.0f / fin_h,
-			0.0f, 4.0f / fin_h, 0.0f, 0.0f,
-		};
-		if (!pass11(d, d->easu_ps, src, con, 4, d->up_a.rtv, BW(d), BH(d)))
-			return 0;
-		float sharp = 1.0f;
-		for (int i = 0; i < d->p.up_sharp; i++)
-			sharp *= 0.99309249543703590153f; // 2 ^ (-1/100)
-		const float k0[4] = {sharp, 1.0f / fout_w, 1.0f / fout_h, 0.0f};
-		if (d->hdr_on) {
-			if (!pass11(d, d->rcas_ps, d->up_a.srv, k0, 1, d->up_b.rtv, BW(d), BH(d)))
-				return 0;
-			src = d->up_b.srv;
-		} else {
-			return pass11(d, d->rcas_ps, d->up_a.srv, k0, 1, d->back_rtv, BW(d), BH(d));
-		}
+		src = (ID3D11ShaderResourceView *)nat_image_srv(d->up_out, 0);
+	} else {
+		nat_scene_resolve(d);
+		src = d->scene_srv;
 	}
 	if (d->hdr_on) {
 		if (!d->hdr_ps)
@@ -270,6 +299,10 @@ static int final_passes(nat_device *d)
 		const float white = (float)(d->p.hdr_white > 0 ? d->p.hdr_white : 200), peak = (float)(d->p.hdr_peak > 0 ? d->p.hdr_peak : 600);
 		const float k[4] = {white / 80.0f, peak > white ? peak / white : 1.0f, 0, 0};
 		return pass11(d, d->hdr_ps, src, k, 1, d->back_rtv, BW(d), BH(d));
+	}
+	if (d->up_on) { // the upscaled picture (with its 2D) is the frame
+		ID3D11DeviceContext_CopyResource(d->ctx, (ID3D11Resource *)d->backbuffer, (ID3D11Resource *)nat_image_resource(d->up_out));
+		return 1;
 	}
 	return 0;
 }
@@ -546,7 +579,7 @@ static void dump_back(nat_device *d)
 	ID3D11DeviceContext_CopyResource(d->ctx, (ID3D11Resource *)st, (ID3D11Resource *)d->backbuffer);
 	D3D11_MAPPED_SUBRESOURCE m;
 	if (SUCCEEDED(ID3D11DeviceContext_Map(d->ctx, (ID3D11Resource *)st, 0, D3D11_MAP_READ, 0, &m))) {
-		FILE *f = fopen("mw2coop\native11\back.bmp", "wb");
+		FILE *f = fopen("mw2coop/native11/back.bmp", "wb");
 		if (f) {
 			const unsigned w = td.Width, h = td.Height;
 			uint8_t hdr[54] = {'B', 'M'};
@@ -582,6 +615,7 @@ int nat_present(nat_device *d)
 		ID3D11DeviceContext_ResolveSubresource(d->ctx, (ID3D11Resource *)d->backbuffer, 0, (ID3D11Resource *)d->scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
 	else
 		ID3D11DeviceContext_CopyResource(d->ctx, (ID3D11Resource *)d->backbuffer, (ID3D11Resource *)d->scene);
+	d->up_done = 0;
 	HRESULT hr = IDXGISwapChain_Present(d->swap, d->p.vsync ? 1 : 0, ns_present_flags(d->tearing, d->p.vsync, d->fullscreen_set));
 	if (d->waitable) // the next frame starts when the swap chain can take it (at most the set number of frames are queued: lower input latency)
 		WaitForSingleObjectEx(d->waitable, 100, TRUE);

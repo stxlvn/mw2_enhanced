@@ -340,6 +340,10 @@ int nbr_start(nbr *n, uint8_t *p)
 			np.out_height = (unsigned)oh;
 			np.up_sharp = settings_upscale_sharpness();
 			upscale_device_made((HWND)np.hwnd);
+			{
+				extern void native_hud_install(void);
+				native_hud_install();
+			}
 		}
 	}
 	char err[160] = "";

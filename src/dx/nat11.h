@@ -76,6 +76,9 @@ void *nat_scene_rtv(nat_device *d);
 void *nat_scene_rtv_srgb(nat_device *d); // the same target seen as sRGB (the game's SRGBWRITEENABLE)
 void *nat_scene_dsv(nat_device *d);
 void *nat_scene_srv(nat_device *d); // the scene color as a texture (single sample: resolved first when multisampled)
+// FSR 1 with a crisp HUD ([display] upscale): the 3D picture is upscaled when the engine starts its 2D passes (nat_upscale_now: scene -> EASU -> RCAS into an image of the output size, returned),
+// the 2D passes then draw into that image at the output resolution, and the present shows it (it is not upscaled again). NULL when nothing is upscaled.
+nat_image *nat_upscale_now(nat_device *d);
 int nat_hdr_active(const nat_device *d); // the swap chain is HDR (scRGB)
 void nat_scene_resolve(nat_device *d); // makes nat_scene_srv() current (the game's StretchRect of the scene)
 
