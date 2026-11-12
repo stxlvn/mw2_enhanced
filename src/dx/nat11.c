@@ -1,0 +1,653 @@
+// The native Direct3D 11 device layer (see nat11.h). No Direct3D 9 header, no Direct3D 9 object. Windows only (64 and 32 bit).
+#include "nat11.h"
+
+#ifdef _WIN32
+#define COBJMACROS
+#define INITGUID
+#include <windows.h>
+#include <d3d11.h>
+#include <dxgi.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "sm3.h"
+
+#ifndef D3DCOMPILE_ENABLE_STRICTNESS
+#define D3DCOMPILE_ENABLE_STRICTNESS (1 << 11)
+#endif
+
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ the device
+struct nat_device {
+	ID3D11Device *dev;
+	ID3D11DeviceContext *ctx;
+	IDXGIFactory *factory;
+	IDXGISwapChain *swap;
+	HWND hwnd;
+	nat_params p;
+	nat_caps caps;
+	unsigned samples;
+	ID3D11Texture2D *scene, *resolved, *depth;
+	ID3D11RenderTargetView *scene_rtv;
+	ID3D11ShaderResourceView *scene_srv;
+	ID3D11DepthStencilView *depth_dsv;
+	ID3D11Texture2D *backbuffer;
+	int fullscreen_set;
+};
+
+static HMODULE h_compiler;
+static HRESULT(WINAPI *p_compile)(const void *, SIZE_T, const char *, const void *, void *, const char *, const char *, UINT, UINT, ID3DBlob **, ID3DBlob **);
+
+static void set_err(char *err, size_t n, const char *fmt, unsigned long a)
+{
+	if (err && n)
+		snprintf(err, n, fmt, a);
+}
+
+static void release_targets(nat_device *d)
+{
+#define REL(x) \
+	do { \
+		if (x) { \
+			IUnknown_Release((IUnknown *)(x)); \
+			(x) = NULL; \
+		} \
+	} while (0)
+	REL(d->scene_rtv);
+	REL(d->scene_srv);
+	REL(d->depth_dsv);
+	REL(d->scene);
+	REL(d->resolved);
+	REL(d->depth);
+	REL(d->backbuffer);
+}
+
+static int build_targets(nat_device *d, char *err, size_t err_size)
+{
+	HRESULT hr = IDXGISwapChain_GetBuffer(d->swap, 0, &IID_ID3D11Texture2D, (void **)&d->backbuffer);
+	if (FAILED(hr)) {
+		set_err(err, err_size, "swap chain buffer: %lx", (unsigned long)hr);
+		return 0;
+	}
+	D3D11_TEXTURE2D_DESC td = {0};
+	td.Width = d->p.width;
+	td.Height = d->p.height;
+	td.MipLevels = 1;
+	td.ArraySize = 1;
+	td.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS;
+	td.SampleDesc.Count = d->samples;
+	td.Usage = D3D11_USAGE_DEFAULT;
+	td.BindFlags = D3D11_BIND_RENDER_TARGET | (d->samples > 1 ? 0 : D3D11_BIND_SHADER_RESOURCE);
+	hr = ID3D11Device_CreateTexture2D(d->dev, &td, NULL, &d->scene);
+	if (FAILED(hr)) {
+		set_err(err, err_size, "scene target: %lx", (unsigned long)hr);
+		return 0;
+	}
+	D3D11_RENDER_TARGET_VIEW_DESC rd = {0};
+	rd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+	rd.ViewDimension = d->samples > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
+	ID3D11Device_CreateRenderTargetView(d->dev, (ID3D11Resource *)d->scene, &rd, &d->scene_rtv);
+	ID3D11Texture2D *srv_src = d->scene;
+	if (d->samples > 1) {
+		td.SampleDesc.Count = 1;
+		td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		hr = ID3D11Device_CreateTexture2D(d->dev, &td, NULL, &d->resolved);
+		if (FAILED(hr)) {
+			set_err(err, err_size, "resolve target: %lx", (unsigned long)hr);
+			return 0;
+		}
+		srv_src = d->resolved;
+	}
+	D3D11_SHADER_RESOURCE_VIEW_DESC sd = {0};
+	sd.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+	sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+	sd.Texture2D.MipLevels = 1;
+	ID3D11Device_CreateShaderResourceView(d->dev, (ID3D11Resource *)srv_src, &sd, &d->scene_srv);
+	D3D11_TEXTURE2D_DESC dd = {0};
+	dd.Width = d->p.width;
+	dd.Height = d->p.height;
+	dd.MipLevels = 1;
+	dd.ArraySize = 1;
+	dd.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+	dd.SampleDesc.Count = d->samples;
+	dd.Usage = D3D11_USAGE_DEFAULT;
+	dd.BindFlags = D3D11_BIND_DEPTH_STENCIL;
+	hr = ID3D11Device_CreateTexture2D(d->dev, &dd, NULL, &d->depth);
+	if (FAILED(hr)) {
+		set_err(err, err_size, "depth target: %lx", (unsigned long)hr);
+		return 0;
+	}
+	ID3D11Device_CreateDepthStencilView(d->dev, (ID3D11Resource *)d->depth, NULL, &d->depth_dsv);
+	return d->scene_rtv && d->scene_srv && d->depth_dsv;
+}
+
+static unsigned pick_samples(nat_device *d, int wanted)
+{
+	for (unsigned s = wanted >= 8 ? 8 : wanted >= 4 ? 4 : wanted >= 2 ? 2 : 1; s > 1; s >>= 1) {
+		UINT q = 0;
+		if (SUCCEEDED(ID3D11Device_CheckMultisampleQualityLevels(d->dev, DXGI_FORMAT_B8G8R8A8_UNORM, s, &q)) && q > 0)
+			return s;
+	}
+	return 1;
+}
+
+static void fill_caps(nat_device *d)
+{
+	nat_caps *c = &d->caps;
+	memset(c, 0, sizeof(*c));
+	c->dynamic_textures = 1;
+	c->aniso_min_mag = 1;
+	c->max_aniso = 16;
+	c->max_texture = D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION;
+	c->max_units = 16;
+	c->clip_planes = 6;
+	c->slope_scale_bias = 1;
+	c->mip_cube = 1;
+	c->hw_shadow_depth = 1;
+	c->msaa_max = (int)pick_samples(d, 8);
+	c->desktop_w = (unsigned)GetSystemMetrics(SM_CXSCREEN);
+	c->desktop_h = (unsigned)GetSystemMetrics(SM_CYSCREEN);
+	IDXGIAdapter *ad = NULL;
+	if (SUCCEEDED(IDXGIFactory_EnumAdapters(d->factory, 0, &ad)) && ad) {
+		DXGI_ADAPTER_DESC desc;
+		if (SUCCEEDED(IDXGIAdapter_GetDesc(ad, &desc)))
+			WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, c->adapter, sizeof(c->adapter), NULL, NULL);
+		IDXGIOutput *out = NULL;
+		if (SUCCEEDED(IDXGIAdapter_EnumOutputs(ad, 0, &out)) && out) {
+			DXGI_OUTPUT_DESC od;
+			if (SUCCEEDED(IDXGIOutput_GetDesc(out, &od))) {
+				c->desktop_w = (unsigned)(od.DesktopCoordinates.right - od.DesktopCoordinates.left);
+				c->desktop_h = (unsigned)(od.DesktopCoordinates.bottom - od.DesktopCoordinates.top);
+			}
+			IDXGIOutput_Release(out);
+		}
+		IDXGIAdapter_Release(ad);
+	}
+}
+
+static int load_compiler(void)
+{
+	if (p_compile)
+		return 1;
+	h_compiler = LoadLibraryA("d3dcompiler_47.dll");
+	if (h_compiler)
+		p_compile = (void *)GetProcAddress(h_compiler, "D3DCompile");
+	return p_compile != NULL;
+}
+
+int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size)
+{
+	*out = NULL;
+	nat_device *d = calloc(1, sizeof(*d));
+	d->p = *p;
+	d->hwnd = (HWND)p->hwnd;
+	if (!d->p.width || !d->p.height) {
+		set_err(err, err_size, "empty size %lu", 0);
+		free(d);
+		return 0;
+	}
+	const D3D_FEATURE_LEVEL lv[] = {D3D_FEATURE_LEVEL_11_0};
+	HRESULT hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT, lv, 1, D3D11_SDK_VERSION, &d->dev, NULL, &d->ctx);
+	if (FAILED(hr) && getenv("MW2COOP_NAT_WARP")) // tests on machines without a usable adapter
+		hr = D3D11CreateDevice(NULL, D3D_DRIVER_TYPE_WARP, NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT, lv, 1, D3D11_SDK_VERSION, &d->dev, NULL, &d->ctx);
+	if (FAILED(hr)) {
+		set_err(err, err_size, "D3D11CreateDevice: %lx", (unsigned long)hr);
+		free(d);
+		return 0;
+	}
+	// the game calls the device from its loader thread too (it asked for D3DCREATE_MULTITHREADED): the immediate context is serialised by the runtime
+	ID3D10Multithread *mt = NULL;
+	if (SUCCEEDED(ID3D11DeviceContext_QueryInterface(d->ctx, &IID_ID3D10Multithread, (void **)&mt)) && mt) {
+		ID3D10Multithread_SetMultithreadProtected(mt, TRUE);
+		ID3D10Multithread_Release(mt);
+	}
+	IDXGIDevice *dxdev = NULL;
+	IDXGIAdapter *ad = NULL;
+	if (FAILED(ID3D11Device_QueryInterface(d->dev, &IID_IDXGIDevice, (void **)&dxdev)) || FAILED(IDXGIDevice_GetAdapter(dxdev, &ad)) || FAILED(IDXGIAdapter_GetParent(ad, &IID_IDXGIFactory, (void **)&d->factory))) {
+		set_err(err, err_size, "DXGI factory %lu", 0);
+		if (ad)
+			IDXGIAdapter_Release(ad);
+		if (dxdev)
+			IDXGIDevice_Release(dxdev);
+		nat_destroy(d);
+		return 0;
+	}
+	IDXGIAdapter_Release(ad);
+	IDXGIDevice_Release(dxdev);
+	d->samples = pick_samples(d, p->msaa);
+	DXGI_SWAP_CHAIN_DESC sc = {0};
+	sc.BufferDesc.Width = d->p.width;
+	sc.BufferDesc.Height = d->p.height;
+	sc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+	sc.SampleDesc.Count = 1;
+	sc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+	sc.BufferCount = 1;
+	sc.OutputWindow = d->hwnd;
+	sc.Windowed = TRUE;
+	sc.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
+	sc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+	hr = IDXGIFactory_CreateSwapChain(d->factory, (IUnknown *)d->dev, &sc, &d->swap);
+	if (FAILED(hr)) {
+		set_err(err, err_size, "CreateSwapChain: %lx", (unsigned long)hr);
+		nat_destroy(d);
+		return 0;
+	}
+	IDXGIFactory_MakeWindowAssociation(d->factory, d->hwnd, DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER); // the game handles Alt+Enter itself
+	if (!build_targets(d, err, err_size)) {
+		nat_destroy(d);
+		return 0;
+	}
+	fill_caps(d);
+	if (d->p.fullscreen) {
+		DXGI_MODE_DESC m = sc.BufferDesc;
+		m.RefreshRate.Numerator = d->p.refresh;
+		m.RefreshRate.Denominator = d->p.refresh ? 1 : 0;
+		IDXGISwapChain_ResizeTarget(d->swap, &m);
+		if (SUCCEEDED(IDXGISwapChain_SetFullscreenState(d->swap, TRUE, NULL)))
+			d->fullscreen_set = 1;
+	}
+	*out = d;
+	return 1;
+}
+
+void nat_destroy(nat_device *d)
+{
+	if (!d)
+		return;
+	if (d->swap && d->fullscreen_set)
+		IDXGISwapChain_SetFullscreenState(d->swap, FALSE, NULL);
+	if (d->ctx)
+		ID3D11DeviceContext_ClearState(d->ctx);
+	release_targets(d);
+	REL(d->swap);
+	REL(d->factory);
+	REL(d->ctx);
+	REL(d->dev);
+	free(d);
+}
+
+const nat_caps *nat_get_caps(const nat_device *d)
+{
+	return &d->caps;
+}
+
+int nat_reset(nat_device *d, const nat_params *p, char *err, size_t err_size)
+{
+	ID3D11DeviceContext_ClearState(d->ctx);
+	release_targets(d);
+	d->p = *p;
+	d->samples = pick_samples(d, p->msaa);
+	if (d->fullscreen_set && !p->fullscreen) {
+		IDXGISwapChain_SetFullscreenState(d->swap, FALSE, NULL);
+		d->fullscreen_set = 0;
+	}
+	DXGI_MODE_DESC m = {0};
+	m.Width = p->width;
+	m.Height = p->height;
+	m.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+	IDXGISwapChain_ResizeTarget(d->swap, &m);
+	if (p->fullscreen && !d->fullscreen_set && SUCCEEDED(IDXGISwapChain_SetFullscreenState(d->swap, TRUE, NULL)))
+		d->fullscreen_set = 1;
+	HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, p->width, p->height, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH);
+	if (FAILED(hr)) {
+		set_err(err, err_size, "ResizeBuffers: %lx", (unsigned long)hr);
+		return 0;
+	}
+	return build_targets(d, err, err_size);
+}
+
+void nat_scene_resolve(nat_device *d)
+{
+	if (d->samples > 1)
+		ID3D11DeviceContext_ResolveSubresource(d->ctx, (ID3D11Resource *)d->resolved, 0, (ID3D11Resource *)d->scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
+}
+
+int nat_present(nat_device *d)
+{
+	if (d->samples > 1)
+		ID3D11DeviceContext_ResolveSubresource(d->ctx, (ID3D11Resource *)d->backbuffer, 0, (ID3D11Resource *)d->scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
+	else
+		ID3D11DeviceContext_CopyResource(d->ctx, (ID3D11Resource *)d->backbuffer, (ID3D11Resource *)d->scene);
+	HRESULT hr = IDXGISwapChain_Present(d->swap, d->p.vsync ? 1 : 0, 0);
+	if (hr == DXGI_STATUS_OCCLUDED)
+		return 1;
+	if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
+		return -1;
+	return FAILED(hr) ? -1 : 0;
+}
+
+void nat_get_size(const nat_device *d, unsigned *w, unsigned *h)
+{
+	*w = d->p.width;
+	*h = d->p.height;
+}
+void *nat_d3d_device(nat_device *d) { return d->dev; }
+void *nat_d3d_context(nat_device *d) { return d->ctx; }
+void *nat_scene_rtv(nat_device *d) { return d->scene_rtv; }
+void *nat_scene_dsv(nat_device *d) { return d->depth_dsv; }
+void *nat_scene_srv(nat_device *d) { return d->scene_srv; }
+
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ images
+typedef struct {
+	DXGI_FORMAT dxgi, srv, srgb;
+	int expand; // 1: L8, 2: A8L8, widened to 8888
+	int block; // bytes per 4x4 block, 0 = not compressed
+	int bpp;
+	int depth;
+} fmt_t;
+
+static int fmt_info(unsigned f, fmt_t *o)
+{
+	memset(o, 0, sizeof(*o));
+	switch (f) {
+	case 21: o->dxgi = DXGI_FORMAT_B8G8R8A8_TYPELESS; o->srv = DXGI_FORMAT_B8G8R8A8_UNORM; o->srgb = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB; o->bpp = 4; return 1;
+	case 22: o->dxgi = DXGI_FORMAT_B8G8R8X8_TYPELESS; o->srv = DXGI_FORMAT_B8G8R8X8_UNORM; o->srgb = DXGI_FORMAT_B8G8R8X8_UNORM_SRGB; o->bpp = 4; return 1;
+	case 0x31545844: o->dxgi = DXGI_FORMAT_BC1_TYPELESS; o->srv = DXGI_FORMAT_BC1_UNORM; o->srgb = DXGI_FORMAT_BC1_UNORM_SRGB; o->block = 8; return 1;
+	case 0x33545844: o->dxgi = DXGI_FORMAT_BC2_TYPELESS; o->srv = DXGI_FORMAT_BC2_UNORM; o->srgb = DXGI_FORMAT_BC2_UNORM_SRGB; o->block = 16; return 1;
+	case 0x35545844: o->dxgi = DXGI_FORMAT_BC3_TYPELESS; o->srv = DXGI_FORMAT_BC3_UNORM; o->srgb = DXGI_FORMAT_BC3_UNORM_SRGB; o->block = 16; return 1;
+	case 28: o->dxgi = o->srv = DXGI_FORMAT_A8_UNORM; o->bpp = 1; return 1;
+	case 50: o->dxgi = DXGI_FORMAT_B8G8R8A8_TYPELESS; o->srv = DXGI_FORMAT_B8G8R8A8_UNORM; o->expand = 1; o->bpp = 1; return 1;
+	case 51: o->dxgi = DXGI_FORMAT_B8G8R8A8_TYPELESS; o->srv = DXGI_FORMAT_B8G8R8A8_UNORM; o->expand = 2; o->bpp = 2; return 1;
+	case 113: o->dxgi = o->srv = DXGI_FORMAT_R16G16B16A16_FLOAT; o->bpp = 8; return 1;
+	case 116: o->dxgi = o->srv = DXGI_FORMAT_R32G32B32A32_FLOAT; o->bpp = 16; return 1;
+	case 111: o->dxgi = o->srv = DXGI_FORMAT_R16_FLOAT; o->bpp = 2; return 1;
+	case 112: o->dxgi = o->srv = DXGI_FORMAT_R16G16_FLOAT; o->bpp = 4; return 1;
+	case 114: o->dxgi = o->srv = DXGI_FORMAT_R32_FLOAT; o->bpp = 4; return 1;
+	case 115: o->dxgi = o->srv = DXGI_FORMAT_R32G32_FLOAT; o->bpp = 8; return 1;
+	case 34: o->dxgi = o->srv = DXGI_FORMAT_R16G16_UNORM; o->bpp = 4; return 1;
+	case 36: o->dxgi = o->srv = DXGI_FORMAT_R16G16B16A16_UNORM; o->bpp = 8; return 1;
+	case 31: o->dxgi = o->srv = DXGI_FORMAT_R10G10B10A2_UNORM; o->bpp = 4; return 1;
+	case 0x5a544e49: case 75: case 77: o->dxgi = DXGI_FORMAT_R24G8_TYPELESS; o->srv = DXGI_FORMAT_R24_UNORM_X8_TYPELESS; o->bpp = 4; o->depth = 1; return 1; // INTZ, D24S8, D24X8
+	case 80: case 70: o->dxgi = DXGI_FORMAT_R16_TYPELESS; o->srv = DXGI_FORMAT_R16_UNORM; o->bpp = 2; o->depth = 1; return 1;
+	case 0x4c4c554e: o->dxgi = DXGI_FORMAT_B8G8R8A8_TYPELESS; o->srv = DXGI_FORMAT_B8G8R8A8_UNORM; o->bpp = 4; return 1; // "NULL": the depth-only render target trick, a plain target here
+	}
+	return 0;
+}
+
+struct nat_image {
+	nat_device *dev;
+	nat_image_desc desc;
+	fmt_t f;
+	ID3D11Resource *res;
+	ID3D11ShaderResourceView *srv, *srv_srgb;
+	ID3D11RenderTargetView *rtv, *rtv_srgb;
+	ID3D11DepthStencilView *dsv;
+	unsigned levels;
+};
+
+static unsigned mips_of(unsigned w, unsigned h, unsigned d)
+{
+	unsigned n = 1;
+	while (w > 1 || h > 1 || d > 1) {
+		w = w > 1 ? w >> 1 : 1;
+		h = h > 1 ? h >> 1 : 1;
+		d = d > 1 ? d >> 1 : 1;
+		n++;
+	}
+	return n;
+}
+
+nat_image *nat_image_create(nat_device *d, const nat_image_desc *desc)
+{
+	fmt_t f;
+	if (!fmt_info(desc->d3d9_format, &f))
+		return NULL;
+	nat_image *im = calloc(1, sizeof(*im));
+	im->dev = d;
+	im->desc = *desc;
+	im->f = f;
+	const int rt = (desc->flags & NAT_RENDER_TARGET) != 0, ds = (desc->flags & NAT_DEPTH) != 0 && desc->kind == NAT_IMAGE_2D;
+	im->levels = desc->levels ? desc->levels : mips_of(desc->w, desc->h, desc->kind == NAT_IMAGE_VOLUME ? desc->d : 1);
+	const unsigned samples = rt || ds ? (unsigned)(desc->msaa > 1 ? desc->msaa : 1) : 1;
+	HRESULT hr;
+	if (desc->kind == NAT_IMAGE_VOLUME) {
+		D3D11_TEXTURE3D_DESC vd = {0};
+		vd.Width = desc->w;
+		vd.Height = desc->h;
+		vd.Depth = desc->d ? desc->d : 1;
+		vd.MipLevels = im->levels;
+		vd.Format = f.dxgi;
+		vd.Usage = D3D11_USAGE_DEFAULT;
+		vd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		hr = ID3D11Device_CreateTexture3D(d->dev, &vd, NULL, (ID3D11Texture3D **)&im->res);
+	} else {
+		D3D11_TEXTURE2D_DESC td = {0};
+		td.Width = desc->w;
+		td.Height = desc->h;
+		td.MipLevels = im->levels;
+		td.ArraySize = desc->kind == NAT_IMAGE_CUBE ? 6 : 1;
+		td.Format = f.dxgi;
+		td.SampleDesc.Count = samples;
+		td.Usage = D3D11_USAGE_DEFAULT;
+		td.BindFlags = samples > 1 ? 0 : D3D11_BIND_SHADER_RESOURCE;
+		if (desc->kind == NAT_IMAGE_CUBE)
+			td.MiscFlags = D3D11_RESOURCE_MISC_TEXTURECUBE;
+		if (rt)
+			td.BindFlags |= D3D11_BIND_RENDER_TARGET;
+		if (ds)
+			td.BindFlags |= D3D11_BIND_DEPTH_STENCIL;
+		hr = ID3D11Device_CreateTexture2D(d->dev, &td, NULL, (ID3D11Texture2D **)&im->res);
+	}
+	if (FAILED(hr)) {
+		free(im);
+		return NULL;
+	}
+	if (samples == 1) {
+		D3D11_SHADER_RESOURCE_VIEW_DESC sd = {0};
+		sd.Format = f.srv;
+		if (desc->kind == NAT_IMAGE_CUBE) {
+			sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURECUBE;
+			sd.TextureCube.MipLevels = im->levels;
+		} else if (desc->kind == NAT_IMAGE_VOLUME) {
+			sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D;
+			sd.Texture3D.MipLevels = im->levels;
+		} else {
+			sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+			sd.Texture2D.MipLevels = im->levels;
+		}
+		ID3D11Device_CreateShaderResourceView(d->dev, im->res, &sd, &im->srv);
+		if (f.srgb) {
+			sd.Format = f.srgb;
+			ID3D11Device_CreateShaderResourceView(d->dev, im->res, &sd, &im->srv_srgb);
+		}
+	}
+	if (rt) {
+		D3D11_RENDER_TARGET_VIEW_DESC rd = {0};
+		rd.ViewDimension = samples > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
+		rd.Format = f.srv;
+		ID3D11Device_CreateRenderTargetView(d->dev, im->res, &rd, &im->rtv);
+		if (f.srgb) {
+			rd.Format = f.srgb;
+			ID3D11Device_CreateRenderTargetView(d->dev, im->res, &rd, &im->rtv_srgb);
+		}
+	}
+	if (ds) {
+		D3D11_DEPTH_STENCIL_VIEW_DESC dd = {0};
+		dd.ViewDimension = samples > 1 ? D3D11_DSV_DIMENSION_TEXTURE2DMS : D3D11_DSV_DIMENSION_TEXTURE2D;
+		dd.Format = f.dxgi == DXGI_FORMAT_R16_TYPELESS ? DXGI_FORMAT_D16_UNORM : DXGI_FORMAT_D24_UNORM_S8_UINT;
+		ID3D11Device_CreateDepthStencilView(d->dev, im->res, &dd, &im->dsv);
+	}
+	return im;
+}
+
+void nat_image_destroy(nat_image *i)
+{
+	if (!i)
+		return;
+	REL(i->srv);
+	REL(i->srv_srgb);
+	REL(i->rtv);
+	REL(i->rtv_srgb);
+	REL(i->dsv);
+	REL(i->res);
+	free(i);
+}
+
+int nat_image_upload(nat_image *i, unsigned face, unsigned level, const void *data, unsigned row_pitch, unsigned slice_pitch)
+{
+	if (!i || level >= i->levels || (i->desc.kind == NAT_IMAGE_CUBE && face > 5))
+		return 0;
+	const unsigned w = i->desc.w >> level ? i->desc.w >> level : 1, h = i->desc.h >> level ? i->desc.h >> level : 1;
+	unsigned dl = i->desc.kind == NAT_IMAGE_VOLUME ? (i->desc.d >> level ? i->desc.d >> level : 1) : 1;
+	const UINT sub = (UINT)(i->desc.kind == NAT_IMAGE_CUBE ? face * i->levels + level : level);
+	ID3D11DeviceContext *ctx = i->dev->ctx;
+	if (i->f.expand) {
+		uint32_t *tmp = malloc((size_t)w * h * dl * 4);
+		const uint8_t *src = data;
+		const unsigned unit = i->f.expand == 1 ? 1 : 2;
+		for (unsigned z = 0; z < dl; z++)
+			for (unsigned y = 0; y < h; y++)
+				for (unsigned x = 0; x < w; x++) {
+					const uint8_t *s = src + (size_t)z * slice_pitch + (size_t)y * row_pitch + (size_t)x * unit;
+					const uint32_t lum = s[0], a = unit == 1 ? 255 : s[1];
+					tmp[((size_t)z * h + y) * w + x] = a << 24 | lum << 16 | lum << 8 | lum;
+				}
+		ID3D11DeviceContext_UpdateSubresource(ctx, i->res, sub, NULL, tmp, w * 4, w * h * 4);
+		free(tmp);
+		return 1;
+	}
+	ID3D11DeviceContext_UpdateSubresource(ctx, i->res, sub, NULL, data, row_pitch, slice_pitch);
+	return 1;
+}
+
+void *nat_image_srv(nat_image *i, int srgb) { return srgb && i->srv_srgb ? i->srv_srgb : i->srv; }
+void *nat_image_rtv(nat_image *i, int srgb) { return srgb && i->rtv_srgb ? i->rtv_srgb : i->rtv; }
+void *nat_image_dsv(nat_image *i) { return i->dsv; }
+unsigned nat_image_levels(const nat_image *i) { return i->levels; }
+
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ buffers
+struct nat_buffer {
+	nat_device *dev;
+	ID3D11Buffer *buf;
+	int dynamic;
+};
+
+nat_buffer *nat_buffer_create(nat_device *d, unsigned size, int is_index, int dynamic, const void *initial)
+{
+	D3D11_BUFFER_DESC bd = {0};
+	bd.ByteWidth = size;
+	bd.BindFlags = is_index ? D3D11_BIND_INDEX_BUFFER : D3D11_BIND_VERTEX_BUFFER;
+	if (dynamic) {
+		bd.Usage = D3D11_USAGE_DYNAMIC;
+		bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+	} else {
+		bd.Usage = D3D11_USAGE_DEFAULT;
+	}
+	D3D11_SUBRESOURCE_DATA sd = {initial, 0, 0};
+	nat_buffer *b = calloc(1, sizeof(*b));
+	b->dev = d;
+	b->dynamic = dynamic;
+	if (FAILED(ID3D11Device_CreateBuffer(d->dev, &bd, initial ? &sd : NULL, &b->buf))) {
+		free(b);
+		return NULL;
+	}
+	return b;
+}
+
+void nat_buffer_destroy(nat_buffer *b)
+{
+	if (!b)
+		return;
+	REL(b->buf);
+	free(b);
+}
+
+void *nat_buffer_map(nat_buffer *b, int mode)
+{
+	D3D11_MAPPED_SUBRESOURCE m;
+	if (!b->dynamic || FAILED(ID3D11DeviceContext_Map(b->dev->ctx, (ID3D11Resource *)b->buf, 0, mode == NAT_MAP_NOOVERWRITE ? D3D11_MAP_WRITE_NO_OVERWRITE : D3D11_MAP_WRITE_DISCARD, 0, &m)))
+		return NULL;
+	return m.pData;
+}
+
+void nat_buffer_unmap(nat_buffer *b)
+{
+	ID3D11DeviceContext_Unmap(b->dev->ctx, (ID3D11Resource *)b->buf, 0);
+}
+
+void *nat_buffer_resource(nat_buffer *b) { return b->buf; }
+
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ shaders
+struct nat_shader {
+	void *obj;
+	ID3DBlob *blob;
+	int is_vs;
+};
+
+static nat_shader *shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, char *err, size_t err_size)
+{
+	if (!load_compiler()) {
+		set_err(err, err_size, "d3dcompiler_47.dll %lu", 0);
+		return NULL;
+	}
+	ID3DBlob *code = NULL, *msgs = NULL;
+	HRESULT hr = p_compile(hlsl, strlen(hlsl), "nat", NULL, NULL, "main", is_vs ? "vs_5_0" : "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | (1 << 14), 0, &code, &msgs);
+	if (FAILED(hr) || !code) {
+		if (err && err_size)
+			snprintf(err, err_size, "compile: %lx %s", (unsigned long)hr, msgs ? (const char *)ID3D10Blob_GetBufferPointer(msgs) : "");
+		if (msgs)
+			ID3D10Blob_Release(msgs);
+		return NULL;
+	}
+	nat_shader *s = calloc(1, sizeof(*s));
+	s->is_vs = is_vs;
+	s->blob = code;
+	hr = is_vs ? ID3D11Device_CreateVertexShader(d->dev, ID3D10Blob_GetBufferPointer(code), ID3D10Blob_GetBufferSize(code), NULL, (ID3D11VertexShader **)&s->obj)
+			   : ID3D11Device_CreatePixelShader(d->dev, ID3D10Blob_GetBufferPointer(code), ID3D10Blob_GetBufferSize(code), NULL, (ID3D11PixelShader **)&s->obj);
+	if (FAILED(hr)) {
+		set_err(err, err_size, "create shader: %lx", (unsigned long)hr);
+		ID3D10Blob_Release(code);
+		free(s);
+		return NULL;
+	}
+	return s;
+}
+
+nat_shader *nat_shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, char *err, size_t err_size)
+{
+	return shader_from_hlsl(d, hlsl, is_vs, err, err_size);
+}
+
+nat_shader *nat_shader_from_sm3(nat_device *d, const uint32_t *code, size_t dwords, int alpha_test, const void *int_inputs, int nint_inputs, char *err, size_t err_size)
+{
+	char *hlsl = NULL, why[160] = "";
+	int is_vs = 0;
+	if (!sm3_translate_vs(code, dwords, alpha_test ? SM3_ALPHA_TEST : 0, (const sm3_int_input *)int_inputs, nint_inputs, &hlsl, &is_vs, why, sizeof(why))) {
+		if (err && err_size)
+			snprintf(err, err_size, "translate: %s", why);
+		return NULL;
+	}
+	nat_shader *s = shader_from_hlsl(d, hlsl, is_vs, err, err_size);
+	free(hlsl);
+	return s;
+}
+
+void nat_shader_destroy(nat_shader *s)
+{
+	if (!s)
+		return;
+	REL(s->obj);
+	if (s->blob)
+		ID3D10Blob_Release(s->blob);
+	free(s);
+}
+
+void *nat_shader_object(nat_shader *s) { return s->obj; }
+void *nat_shader_blob(nat_shader *s, size_t *size)
+{
+	if (size)
+		*size = ID3D10Blob_GetBufferSize(s->blob);
+	return ID3D10Blob_GetBufferPointer(s->blob);
+}
+int nat_shader_is_vs(const nat_shader *s) { return s->is_vs; }
+
+#else
+int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size)
+{
+	(void)p;
+	(void)err;
+	(void)err_size;
+	*out = NULL;
+	return 0;
+}
+#endif
