@@ -2386,6 +2386,15 @@ void native_final2d_entry(void *vp)
 		((void (*)(void *))(base + XR(0x5c010)))(vp);
 }
 
+// the native renderers' movie letterboxing (src/dx/natfilm.h): the size of the Bink movie being played
+int native_nat_film_size(unsigned *w, unsigned *h);
+int native_nat_film_size(unsigned *w, unsigned *h)
+{
+	*w = (unsigned)InterlockedCompareExchange(&bink_movie_width, 0, 0);
+	*h = (unsigned)InterlockedCompareExchange(&bink_movie_height, 0, 0);
+	return *w && *h;
+}
+
 static DWORD comp_not_before; // GetTickCount: the device hooks are not (re)installed before it (after a vid_restart the Steam overlay hooks the new device first)
 // tan(fov / 2) of the field of view the game draws the world with when nothing zooms: cg_fov times cg_fovScale (the first-person weapon's own field of view is set against it)
 static float weaponfov_base_tan(void)

@@ -1,5 +1,6 @@
 // The flush half of the new back end on Direct3D 12 (the same API as natdraw11.c, see natdraw11.h): pipeline state objects made from the pass state words, one root signature, descriptor tables
 // and constants from the device's per-frame rings, the draw. Needs nat12.c (nat12x.h).
+#include "natfilm.h"
 #include "natdraw11.h"
 
 #ifdef _WIN32
@@ -834,6 +835,29 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 
 int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, unsigned prim_count)
 {
+	{ // a Bink movie's draw on a screen of another shape: letterboxed / pillarboxed (natfilm.h)
+		unsigned mw, mh;
+		if (native_nat_film_size(&mw, &mh) && mw && mh) {
+			int luma = 0, chroma = 0;
+			for (int i = 0; i < 16; i++) {
+				nat_image *im = g->tex[i] ? d->ops.image(g->tex[i]) : NULL;
+				if (!im)
+					continue;
+				unsigned w, h, s;
+				nat_image_size(im, &w, &h, &s);
+				luma |= w == mw && h == mh;
+				chroma |= w == mw / 2 && h == mh / 2;
+			}
+			float fit[4] = {d->vp[0], d->vp[1], d->vp[2], d->vp[3]};
+			if (luma && chroma && nf_fit(fit, mw, mh)) {
+				float save[4] = {d->vp[0], d->vp[1], d->vp[2], d->vp[3]};
+				memcpy(d->vp, fit, sizeof(fit));
+				const int r = nd_draw_indexed_impl(d, g, base_vertex, start_index, prim_count);
+				memcpy(d->vp, save, sizeof(save));
+				return r;
+			}
+		}
+	}
 	if (nd_layer_mode) {
 		state11_t st;
 		state11_decode(g->word0, g->word1, &st);
