@@ -156,6 +156,12 @@ struct nd {
 	ID3D11Buffer *vb_cur[4];
 	int vp_dirty;
 	int consts_init;
+	nat_shader *blit_vs, *blit_ps;
+	ID3D11Buffer *blit_cb;
+	ID3D11SamplerState *blit_smp[2];
+	ID3D11BlendState *blit_blend;
+	ID3D11RasterizerState *blit_rs;
+	ID3D11DepthStencilState *blit_ds;
 };
 
 static ID3D11Buffer *make_cb(nd *d, unsigned size)
@@ -605,6 +611,113 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 	ID3D11DeviceContext_IASetIndexBuffer(c, nat_buffer_resource(d->ib), d->ib32 ? DXGI_FORMAT_R32_UINT : DXGI_FORMAT_R16_UINT, 0);
 	ID3D11DeviceContext_DrawIndexed(c, prim_count * 3, start_index, base_vertex);
 	d->n_draws++;
+	return 1;
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ StretchRect
+static const char *BLIT_VS = "cbuffer R : register(b0) { float4 src; float4 dst; }; float4 main(uint id : SV_VertexID, out float2 uv : TEXCOORD0) : SV_Position { float2 c = float2((id << 1) & 2, id & 2); uv = c; "
+							 "return float4(c * float2(2, -2) + float2(-1, 1), 0, 1); }";
+static const char *BLIT_PS = "Texture2D t : register(t0); SamplerState s : register(s0); cbuffer R : register(b0) { float4 src; float4 dst; }; "
+							 "float4 main(float4 p : SV_Position, float2 uv : TEXCOORD0) : SV_Target { return t.Sample(s, src.xy + uv * src.zw); }";
+
+static DXGI_FORMAT unorm_of(DXGI_FORMAT f)
+{
+	return f == DXGI_FORMAT_B8G8R8A8_TYPELESS ? DXGI_FORMAT_B8G8R8A8_UNORM : f == DXGI_FORMAT_B8G8R8X8_TYPELESS ? DXGI_FORMAT_B8G8R8X8_UNORM : f;
+}
+
+int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const nd_rect *dr, int linear)
+{
+	unsigned sw, sh, ss, dw, dh, ds;
+	ID3D11Resource *sres, *dres;
+	DXGI_FORMAT sfmt, dfmt;
+	if (src) {
+		nat_image_size(src, &sw, &sh, &ss);
+		sres = nat_image_resource(src);
+		sfmt = (DXGI_FORMAT)nat_image_dxgi_format(src);
+	} else {
+		nat_get_size(d->dev, &sw, &sh);
+		ss = nat_scene_samples(d->dev);
+		sres = nat_scene_resource(d->dev);
+		sfmt = DXGI_FORMAT_B8G8R8A8_TYPELESS;
+	}
+	if (dst) {
+		nat_image_size(dst, &dw, &dh, &ds);
+		dres = nat_image_resource(dst);
+		dfmt = (DXGI_FORMAT)nat_image_dxgi_format(dst);
+	} else {
+		nat_get_size(d->dev, &dw, &dh);
+		ds = nat_scene_samples(d->dev);
+		dres = nat_scene_resource(d->dev);
+		dfmt = DXGI_FORMAT_B8G8R8A8_TYPELESS;
+	}
+	const nd_rect fs = {0, 0, (int)sw, (int)sh}, fd = {0, 0, (int)dw, (int)dh};
+	if (!sr)
+		sr = &fs;
+	if (!dr)
+		dr = &fd;
+	const int same_rect = sr->right - sr->left == dr->right - dr->left && sr->bottom - sr->top == dr->bottom - dr->top;
+	const int whole = sr->left == 0 && sr->top == 0 && sr->right == (int)sw && sr->bottom == (int)sh && dr->left == 0 && dr->top == 0 && dr->right == (int)dw && dr->bottom == (int)dh;
+	if (same_rect && sfmt == dfmt) {
+		if (ss > 1 && ds == 1 && whole) {
+			ID3D11DeviceContext_ResolveSubresource(d->ctx, dres, 0, sres, 0, unorm_of(sfmt));
+			return 1;
+		}
+		if (ss == ds) {
+			D3D11_BOX box = {(UINT)sr->left, (UINT)sr->top, 0, (UINT)sr->right, (UINT)sr->bottom, 1};
+			ID3D11DeviceContext_CopySubresourceRegion(d->ctx, dres, 0, (UINT)dr->left, (UINT)dr->top, 0, sres, 0, whole ? NULL : &box);
+			return 1;
+		}
+	}
+	// a scaling (or format-converting) draw: the source image needs a view, the destination a render target view
+	ID3D11ShaderResourceView *srv = src ? nat_image_srv(src, 0) : nat_scene_srv(d->dev);
+	ID3D11RenderTargetView *rtv = dst ? nat_image_rtv(dst, 0) : nat_scene_rtv(d->dev);
+	if (ss > 1 || !srv || !rtv)
+		return 0;
+	if (!d->blit_vs) {
+		d->blit_vs = nat_shader_from_hlsl(d->dev, BLIT_VS, 1, d->err, sizeof(d->err));
+		d->blit_ps = nat_shader_from_hlsl(d->dev, BLIT_PS, 0, d->err, sizeof(d->err));
+		d->blit_cb = make_cb(d, 32);
+		for (int k = 0; k < 2; k++) {
+			D3D11_SAMPLER_DESC sd = {0};
+			sd.Filter = k ? D3D11_FILTER_MIN_MAG_MIP_LINEAR : D3D11_FILTER_MIN_MAG_MIP_POINT;
+			sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+			sd.MaxLOD = D3D11_FLOAT32_MAX;
+			ID3D11Device_CreateSamplerState(d->d3d, &sd, &d->blit_smp[k]);
+		}
+		D3D11_BLEND_DESC bd = {0};
+		bd.RenderTarget[0].RenderTargetWriteMask = 15;
+		ID3D11Device_CreateBlendState(d->d3d, &bd, &d->blit_blend);
+		D3D11_RASTERIZER_DESC rd = {0};
+		rd.FillMode = D3D11_FILL_SOLID;
+		rd.CullMode = D3D11_CULL_NONE;
+		rd.DepthClipEnable = TRUE;
+		ID3D11Device_CreateRasterizerState(d->d3d, &rd, &d->blit_rs);
+		D3D11_DEPTH_STENCIL_DESC dd = {0};
+		ID3D11Device_CreateDepthStencilState(d->d3d, &dd, &d->blit_ds);
+	}
+	if (!d->blit_vs || !d->blit_ps)
+		return 0;
+	// the full-screen triangle covers the destination viewport; the source window is mapped by offset and scale in uv space
+	const float c[8] = {(float)sr->left / (float)sw, (float)sr->top / (float)sh, (float)(sr->right - sr->left) / (float)sw, (float)(sr->bottom - sr->top) / (float)sh, 0, 0, 0, 0};
+	put_cb(d, d->blit_cb, c, sizeof(c));
+	ID3D11DeviceContext *x = d->ctx;
+	ID3D11DeviceContext_OMSetRenderTargets(x, 1, &rtv, NULL);
+	D3D11_VIEWPORT vp = {(float)dr->left, (float)dr->top, (float)(dr->right - dr->left), (float)(dr->bottom - dr->top), 0, 1};
+	ID3D11DeviceContext_RSSetViewports(x, 1, &vp);
+	ID3D11DeviceContext_RSSetState(x, d->blit_rs);
+	ID3D11DeviceContext_OMSetBlendState(x, d->blit_blend, NULL, 0xffffffffu);
+	ID3D11DeviceContext_OMSetDepthStencilState(x, d->blit_ds, 0);
+	ID3D11DeviceContext_IASetInputLayout(x, NULL);
+	ID3D11DeviceContext_IASetPrimitiveTopology(x, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	ID3D11DeviceContext_VSSetShader(x, nat_shader_object(d->blit_vs), NULL, 0);
+	ID3D11DeviceContext_PSSetShader(x, nat_shader_object(d->blit_ps), NULL, 0);
+	ID3D11DeviceContext_VSSetConstantBuffers(x, 0, 1, &d->blit_cb);
+	ID3D11DeviceContext_PSSetConstantBuffers(x, 0, 1, &d->blit_cb);
+	ID3D11DeviceContext_PSSetShaderResources(x, 0, 1, &srv);
+	ID3D11DeviceContext_PSSetSamplers(x, 0, 1, &d->blit_smp[linear ? 1 : 0]);
+	ID3D11DeviceContext_Draw(x, 3, 0);
+	ID3D11ShaderResourceView *none = NULL;
+	ID3D11DeviceContext_PSSetShaderResources(x, 0, 1, &none);
 	return 1;
 }
 

@@ -52,6 +52,11 @@ void nd_clear(nd *d, unsigned flags /* 1 color, 2 depth, 4 stencil (Direct3D 9's
 // Applies the shadow in `g` (constants dirty since the last call are uploaded and their dirty bits cleared) and draws `prim_count` triangles from the bound indices. Returns 0 when the draw cannot be made
 // (no shader, no layout, no target): the reason is in nd_last_error.
 int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, unsigned prim_count);
+// StretchRect: copies (or resolves, or scales with a full-screen draw) `src` into `dst`; NULL = the scene target. Rectangles are in pixels, NULL = the whole image. linear selects the filter of a scaling draw.
+typedef struct {
+	int left, top, right, bottom;
+} nd_rect;
+int nd_stretch(nd *d, nat_image *src, const nd_rect *src_rect, nat_image *dst, const nd_rect *dst_rect, int linear);
 const char *nd_last_error(const nd *d);
 // statistics: state objects and layouts created, shader variants compiled, constant uploads, draws, draws refused
 void nd_stats(const nd *d, unsigned *states, unsigned *layouts, unsigned *shaders, unsigned *uploads, unsigned *draws, unsigned *refused);

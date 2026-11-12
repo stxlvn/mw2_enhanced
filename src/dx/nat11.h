@@ -83,7 +83,11 @@ int nat_image_upload(nat_image *i, unsigned face, unsigned level, const void *da
 void *nat_image_srv(nat_image *i, int srgb);
 void *nat_image_rtv(nat_image *i, int srgb);
 void *nat_image_dsv(nat_image *i);
-void *nat_image_resource(nat_image *i); // the ID3D11Resource (readbacks, copies)
+void *nat_image_resource(nat_image *i);
+void nat_image_size(const nat_image *i, unsigned *w, unsigned *h, unsigned *samples);
+unsigned nat_image_dxgi_format(const nat_image *i); // the DXGI_FORMAT of the resource (typeless where the game needs two views)
+void *nat_scene_resource(nat_device *d);
+unsigned nat_scene_samples(const nat_device *d); // the ID3D11Resource (readbacks, copies)
 unsigned nat_image_levels(const nat_image *i);
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ buffers

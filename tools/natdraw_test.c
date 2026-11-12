@@ -157,6 +157,29 @@ int main(void)
 		ID3D11Resource_Release(res);
 		nat_image_destroy(rt);
 	}
+	// StretchRect: scene -> same-size target (a copy), scene -> half-size target (a scaling draw), and the other way round
+	{
+		nd_set_targets(d, NULL, ND_NO_DEPTH);
+		g.ps = ps_tex;
+		g.tex[0] = im;
+		g.word0 = 1u << 27 | 1u << 28 | 1u << 14 | 1u << 11;
+		nd_clear(d, 1, black, 1.0f, 0);
+		nd_draw_indexed(d, &g, 0, 0, 2); // the 2x2 texture over the scene again
+		nat_image_desc cd = {NAT_IMAGE_2D, 64, 64, 1, 1, 21, NAT_RENDER_TARGET, 0}, hd = {NAT_IMAGE_2D, 32, 32, 1, 1, 21, NAT_RENDER_TARGET, 0};
+		nat_image *copy = nat_image_create(dev, &cd), *half = nat_image_create(dev, &hd);
+		CHECK(nd_stretch(d, NULL, NULL, copy, NULL, 0), "copy refused");
+		ID3D11Resource *cres = nat_image_resource(copy);
+		CHECK(read_pixel(dev, cres, 10, 10, 64, 64) == 0xffff0000 && read_pixel(dev, cres, 50, 50, 64, 64) == 0xffffffff, "same-size copy");
+		CHECK(nd_stretch(d, NULL, NULL, half, NULL, 1), "scaling refused (%s)", nd_last_error(d));
+		ID3D11Resource *hres = nat_image_resource(half);
+		CHECK(read_pixel(dev, hres, 5, 5, 32, 32) == 0xffff0000 && read_pixel(dev, hres, 25, 25, 32, 32) == 0xffffffff, "half-size scaling draw: %08x %08x", read_pixel(dev, hres, 5, 5, 32, 32), read_pixel(dev, hres, 25, 25, 32, 32));
+		// a sub-rectangle: the lower-right quarter of the copy (white) stretched over the whole scene
+		const nd_rect q = {32, 32, 64, 64};
+		CHECK(nd_stretch(d, copy, &q, NULL, NULL, 0), "sub-rect refused");
+		CHECK(read_pixel(dev, scene, 3, 3, 64, 64) == 0xffffffff && read_pixel(dev, scene, 60, 60, 64, 64) == 0xffffffff, "sub-rectangle stretched over the scene");
+		nat_image_destroy(copy);
+		nat_image_destroy(half);
+	}
 	// no shader: refused with a reason
 	{
 		ng_state empty;

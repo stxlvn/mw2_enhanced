@@ -518,6 +518,15 @@ void *nat_image_srv(nat_image *i, int srgb) { return srgb && i->srv_srgb ? i->sr
 void *nat_image_rtv(nat_image *i, int srgb) { return srgb && i->rtv_srgb ? i->rtv_srgb : i->rtv; }
 void *nat_image_dsv(nat_image *i) { return i->dsv; }
 void *nat_image_resource(nat_image *i) { return i->res; }
+void nat_image_size(const nat_image *i, unsigned *w, unsigned *h, unsigned *samples)
+{
+	*w = i->desc.w;
+	*h = i->desc.h;
+	*samples = i->desc.msaa > 1 ? (unsigned)i->desc.msaa : 1;
+}
+unsigned nat_image_dxgi_format(const nat_image *i) { return (unsigned)i->f.dxgi; }
+void *nat_scene_resource(nat_device *d) { return d->scene; }
+unsigned nat_scene_samples(const nat_device *d) { return d->samples; }
 unsigned nat_image_levels(const nat_image *i) { return i->levels; }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ buffers
