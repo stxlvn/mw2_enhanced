@@ -520,6 +520,18 @@ static void w_45060(unsigned flags)
 			}
 		}
 	}
+	{ // QA: a level script sets the dvar mw2coop_qa_frame to a new name: the picture is saved as that name (as the Direct3D 9 compositor's present does)
+		static unsigned qa_n;
+		static char last[64];
+		extern int game_dvar_raw(const char *name, char *buf, int size);
+		if (++qa_n % 4 == 0) {
+			char name[64];
+			if (game_dvar_raw("mw2coop_qa_frame", name, sizeof(name)) && name[0] && strcmp(name, last)) {
+				lstrcpynA(last, name, sizeof(last));
+				lstrcpynA(shot_name, name, sizeof(shot_name));
+			}
+		}
+	}
 	if (shot_name[0]) { // !shot <name>
 		char name[96], path[MAX_PATH];
 		lstrcpynA(name, shot_name, sizeof(name));
