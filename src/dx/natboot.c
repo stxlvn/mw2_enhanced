@@ -399,6 +399,24 @@ static long s_set_indices(void *dev, void *ib)
 		nd_set_indices(N.d, (nat_buffer *)ib, 0);
 	return 0;
 }
+// texture->GetSurfaceLevel(level, &surface): a native image is its own surface (with a reference, which the engine's Release gives back)
+static long s_get_surface_level(void *tex, unsigned level, void **out)
+{
+	(void)level;
+	if (out) {
+		*out = tex;
+		nat_image_addref((nat_image *)tex);
+	}
+	return 0;
+}
+// device->StretchRect(source surface, source rect, destination surface, destination rect, filter): a NULL surface is the scene target
+static long s_stretch_rect(void *dev, void *src, const RECT *sr, void *dst, const RECT *dr, unsigned filter)
+{
+	(void)dev;
+	if (N.created)
+		nd_stretch(N.d, (nat_image *)src, (const nd_rect *)sr, (nat_image *)dst, (const nd_rect *)dr, filter == 2);
+	return 0;
+}
 static long s_set_stream(void *dev, unsigned stream, void *vb, unsigned offset, unsigned stride)
 {
 	(void)dev;
@@ -412,8 +430,8 @@ static void patch_sites(void)
 	static const struct {
 		unsigned slot;
 		void *fn;
-	} map[] = {{57, s_set_render_state}, {65, s_set_texture}, {75, s_set_scissor_rect}, {82, s_draw_indexed}, {100, s_set_stream}, {104, s_set_indices}};
-	unsigned patched[8] = {0};
+	} map[] = {{57, s_set_render_state}, {65, s_set_texture}, {75, s_set_scissor_rect}, {82, s_draw_indexed}, {100, s_set_stream}, {104, s_set_indices}, {18, s_get_surface_level}, {34, s_stretch_rect}};
+	unsigned patched[10] = {0};
 	uint8_t *page = hook_page_near(exe);
 	if (!page)
 		return;
@@ -456,7 +474,7 @@ static void patch_sites(void)
 		}
 	}
 	FlushInstructionCache(GetCurrentProcess(), exe + 0x40000, 0x26000);
-	log_printf("native11: device call sites patched: SetRenderState %u, SetTexture %u, SetScissorRect %u, DrawIndexedPrimitive %u, SetStreamSource %u, SetIndices %u", patched[0], patched[1], patched[2], patched[3], patched[4], patched[5]);
+	log_printf("native11: device call sites patched: SetRenderState %u, SetTexture %u, SetScissorRect %u, DrawIndexedPrimitive %u, SetStreamSource %u, SetIndices %u, GetSurfaceLevel %u, StretchRect %u", patched[0], patched[1], patched[2], patched[3], patched[4], patched[5], patched[6], patched[7]);
 }
 
 static void install_all(void);
