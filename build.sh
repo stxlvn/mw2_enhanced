@@ -22,10 +22,21 @@ if [ "$1" = x86 ]; then
 	exit 0
 fi
 mkdir -p build
+# The native renderer is built twice: once on Direct3D 11 (the sources above) and once on Direct3D 12: the files that call the nat_* / nd_* API (and the two that implement it for Direct3D 12) are compiled again,
+# and every global symbol they define gets the prefix b12_ (llvm-objcopy), so that the two copies live in one DLL. natboot.c (Direct3D 11) hands over to b12_natboot_install when [display] directx12=1.
+B12=build/b12
+mkdir -p $B12
+rm -f $B12/*.o
+B12SRC="src/dx/nat12.c src/dx/natdraw12.c src/dx/natdrawfn.c src/dx/natdrawfn2.c src/dx/natres.c src/dx/natres2.c src/dx/natres3.c src/dx/natstart.c src/dx/natframe.c src/dx/natframe2.c src/dx/natbring.c src/dx/natboot.c"
+for f in $B12SRC; do
+	"$CC" -O2 -g -Wall -Wextra -Wno-missing-field-initializers -DNAT_BACKEND_12 -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -c -o $B12/$(basename $f .c).o $f
+done
+"$LLVM_MINGW/bin/llvm-nm" --defined-only -g $B12/*.o | awk 'NF == 3 && $3 !~ /^\./ { print $3 " b12_" $3 }' | sort -u > $B12/map.txt
+for o in $B12/*.o; do "$LLVM_MINGW/bin/llvm-objcopy" --redefine-syms=$B12/map.txt $o; done
 if [ "$1" = release ]; then
-	"$CC" -O2 -Wall -Wextra -shared -static -static-libgcc -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -s -o build/winmm.dll $SRC -lws2_32 -liphlpapi -lgdi32 -lshell32 -ld3d11 -ldxgi -luuid
+	"$CC" -O2 -Wall -Wextra -shared -static -static-libgcc -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -s -o build/winmm.dll $SRC $B12/*.o -lws2_32 -liphlpapi -lgdi32 -lshell32 -ld3d11 -ld3d12 -ldxgi -ldxguid -luuid
 else
-	"$CC" -O2 -g -Wall -Wextra -shared -static -static-libgcc -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -o build/winmm.dll $SRC -lws2_32 -liphlpapi -lgdi32 -lshell32 -ld3d11 -ldxgi -luuid \
+	"$CC" -O2 -g -Wall -Wextra -shared -static -static-libgcc -Isrc -Ithird_party/fidelityfx/api/include -Ithird_party/fidelityfx/upscalers/include -o build/winmm.dll $SRC $B12/*.o -lws2_32 -liphlpapi -lgdi32 -lshell32 -ld3d11 -ld3d12 -ldxgi -ldxguid -luuid \
 		-Wl,--pdb=build/winmm.pdb
 fi
 echo "built build/winmm.dll${1:+ ($1)}"

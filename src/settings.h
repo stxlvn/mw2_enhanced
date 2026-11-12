@@ -35,6 +35,8 @@ int settings_d3d9ex(void);
 // settings.ini [display] directx11 (default 0, experimental): the game's own Direct3D 9 back end is replaced by the mod's native Direct3D 11 one (src/dx/natboot.c); no Direct3D 9 device
 // exists then, so what needs one (the mod's console overlay, screenshots, FSR 1 / FSR 3 / DLSS, the split screen compositor) is off. MW2COOP_NATIVE11=1 does the same for a test.
 int settings_directx11(void);
+// settings.ini [display] directx12 (default 0, experimental): the same with the mod's native Direct3D 12 renderer (src/dx/nat12.c; MW2COOP_NATIVE12=1 for a test)
+int settings_directx12(void);
 // settings.ini [network] guard (default 1): packets no co-op session sends (joinParty, rcon, a co-op command from a stranger, a map name with a command separator) are dropped before the game sees them (netguard.c); 0: the game sees everything.
 int settings_netguard(void);
 // settings.ini [display] d3d9on12 (default 0, experimental): the game's Direct3D 9 runs on Windows' Direct3D 12 (d3d9.dll Direct3DCreate9On12), the way to DX12 and, through D3D11On12, DX11 (d3dcap.c).

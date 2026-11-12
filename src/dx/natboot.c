@@ -213,6 +213,13 @@ static void overlay_show(const uint32_t *bits, int w, int h, int repainted)
 static char shot_name[96];
 void natboot_shot(const char *name)
 {
+#ifndef NAT_BACKEND_12
+	if (settings_directx12()) {
+		extern void b12_natboot_shot(const char *);
+		b12_natboot_shot(name);
+		return;
+	}
+#endif
 	lstrcpynA(shot_name, name, sizeof(shot_name));
 }
 static void w_45060(unsigned flags)
@@ -522,7 +529,14 @@ void natboot_install(void)
 {
 	if (getenv("MW2COOP_WHITEPOLL"))
 		CloseHandle(CreateThread(NULL, 0, whitepoll_thread, NULL, 0, NULL));
-	if (!settings_directx11()) // [display] directx11=1 or MW2COOP_NATIVE11=1
+#ifndef NAT_BACKEND_12
+	if (settings_directx12()) { // the Direct3D 12 copy of this file (build.sh: b12_ prefix)
+		extern void b12_natboot_install(void);
+		b12_natboot_install();
+		return;
+	}
+#endif
+	if (!settings_directx11() && !settings_directx12()) // [display] directx11=1 / directx12=1 or MW2COOP_NATIVE11=1 / MW2COOP_NATIVE12=1
 		return;
 	exe = (uint8_t *)GetModuleHandleA(NULL);
 	CloseHandle(CreateThread(NULL, 0, waiter, NULL, 0, NULL));
@@ -655,7 +669,7 @@ void *natboot_trap_device(void)
 }
 int natboot_active(void)
 {
-	return settings_directx11();
+	return settings_directx11() || settings_directx12();
 }
 #else
 void natboot_install(void) {}

@@ -88,7 +88,7 @@ static const opt_t opts[] = {
 #endif
     {"mw2coop_opt_falldmg", "@MW2COOP_ENH_FALLDMG", K_YESNO, 0, 1, 0, "gameplay", "fall_damage", 1, LIVE_FALL, 0, "Enhanced: fall damage in a co-op session", GROUP_COOP},
 #ifdef _WIN64
-    {"mw2coop_opt_directx", "@MW2COOP_ENH_DIRECTX", K_DIRECTX, 0, 3, 0, "display", NULL, 1, LIVE_NONE, 1, "Enhanced: DirectX version, 0 = 9 (the game's own), 1 = 9Ex ([display] d3d9ex), 2 = 12 (Direct3D 9 on the Direct3D 12 layer, [display] d3d9on12; FSR 3 and DLSS need it), 3 = 11 (the mod's own Direct3D 11 renderer, experimental: [display] directx11; no console overlay, screenshots or upscalers yet) (next start)", GROUP_WINDOW},
+    {"mw2coop_opt_directx", "@MW2COOP_ENH_DIRECTX", K_DIRECTX, 0, 4, 0, "display", NULL, 1, LIVE_NONE, 1, "Enhanced: DirectX version, 0 = 9 (the game's own), 1 = 9Ex ([display] d3d9ex), 2 = 12 (Direct3D 9 on the Direct3D 12 layer, [display] d3d9on12; FSR 3 and DLSS need it), 3 = 11 (the mod's own Direct3D 11 renderer, experimental: [display] directx11; no console overlay, screenshots or upscalers yet) (next start)", GROUP_WINDOW},
 #endif
     {"mw2coop_opt_borderless", "@MW2COOP_ENH_BORDERLESS", K_YESNO, 0, 1, 1, "display", "borderless", 1, LIVE_NONE, 1, "Enhanced: full screen as a borderless window (next start)", GROUP_WINDOW},
     {"mw2coop_opt_darktitle", "@MW2COOP_ENH_DARKTITLE", K_YESNO, 0, 1, 1, "display", "darktitle", 1, LIVE_NONE, 1, "Enhanced: dark title bar (next start)", GROUP_WINDOW},
@@ -167,7 +167,7 @@ static void register_dvars(void)
 		if (t->kind == K_UPSCALER)
 			v = (float)upscaler_read(path);
 		else if (t->kind == K_DIRECTX)
-			v = settings_directx11() ? 3.0f : settings_d3d9on12() ? 2.0f : settings_d3d9ex() ? 1.0f : 0.0f; // in effect: FSR 3 and DLSS switch the layer on whatever the key says (settings.c)
+			v = settings_directx12() ? 4.0f : settings_directx11() ? 3.0f : settings_d3d9on12() ? 2.0f : settings_d3d9ex() ? 1.0f : 0.0f; // in effect: FSR 3 and DLSS switch the layer on whatever the key says (settings.c)
 		else if (t->section) { // the file's value, else the default
 			int iv = (int)GetPrivateProfileIntA(t->section, t->key, (int)t->def, path);
 			if ((float)iv >= t->lo && (float)iv <= t->hi)
@@ -259,8 +259,8 @@ static void follow_changes(void)
 		if (t->kind == K_UPSCALER)
 			upscaler_write(path, (int)v);
 		else if (t->kind == K_DIRECTX) { // two keys: 9Ex is d3d9ex, 12 is d3d9on12 (which makes the Ex device itself)
-			const int ok = WritePrivateProfileStringA("display", "d3d9ex", (int)v == 1 ? "1" : "0", path) & WritePrivateProfileStringA("display", "d3d9on12", (int)v == 2 ? "1" : "0", path) & WritePrivateProfileStringA("display", "directx11", (int)v == 3 ? "1" : "0", path);
-			log_printf("enhopts: settings.ini [display] d3d9ex=%d d3d9on12=%d directx11=%d (DirectX %s)%s", (int)v == 1, (int)v == 2, (int)v == 3, (int)v == 3 ? "11" : (int)v == 2 ? "12" : (int)v == 1 ? "9Ex" : "9", ok ? "" : ", NOT written");
+			const int ok = WritePrivateProfileStringA("display", "d3d9ex", (int)v == 1 ? "1" : "0", path) & WritePrivateProfileStringA("display", "d3d9on12", (int)v == 2 ? "1" : "0", path) & WritePrivateProfileStringA("display", "directx11", (int)v == 3 ? "1" : "0", path) & WritePrivateProfileStringA("display", "directx12", (int)v == 4 ? "1" : "0", path);
+			log_printf("enhopts: settings.ini [display] d3d9ex=%d d3d9on12=%d directx11=%d (DirectX %s)%s", (int)v == 1, (int)v == 2, (int)v == 3, (int)v == 4 ? "12 native" : (int)v == 3 ? "11 native" : (int)v == 2 ? "12 (9 on 12)" : (int)v == 1 ? "9Ex" : "9", ok ? "" : ", NOT written");
 		} else if (t->section) {
 			snprintf(text, sizeof(text), "%d", (int)v);
 			if (WritePrivateProfileStringA(t->section, t->key, text, path))
@@ -428,8 +428,8 @@ static void add_page(void)
 			} else {
 				if (t->kind == K_UPSCALER || t->kind == K_DIRECTX) {
 					static const char *const upscaler_names[4] = {"@MW2COOP_ENH_OFF", "FSR 1", "FSR 3", "DLSS"};
-					static const char *const directx_names[4] = {"DirectX 9", "DirectX 9Ex", "DirectX 12", "DirectX 11 (native)"};
-					control = t->kind == K_UPSCALER ? choice_item(menu, upscaler_names, UPSCALERS) : choice_item(menu, directx_names, 4);
+					static const char *const directx_names[5] = {"DirectX 9", "DirectX 9Ex", "DirectX 12 (9 on 12)", "DirectX 11 (native)", "DirectX 12 (native)"};
+					control = t->kind == K_UPSCALER ? choice_item(menu, upscaler_names, UPSCALERS) : choice_item(menu, directx_names, 5);
 					if (!control) {
 						log_printf("enhopts: no choice row to copy from the advanced video page: no %s row", t->kind == K_UPSCALER ? "Upscaler" : "DirectX");
 						continue;

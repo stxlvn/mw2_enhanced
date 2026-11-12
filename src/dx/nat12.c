@@ -837,15 +837,15 @@ int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size
 	ID3D12GraphicsCommandList_Close(d->list); // (begin_list resets it with the frame's allocator)
 	d->list_gen = 1;
 	if (!copy_queue_init(d) || !dheap_init(d->dev, &d->rtv, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 1024, 0) || !dheap_init(d->dev, &d->dsv, D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 256, 0) ||
-		!dheap_init(d->dev, &d->srv, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 32768, 0) || !dheap_init(d->dev, &d->smp, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 2048, 0) ||
+		!dheap_init(d->dev, &d->srv, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 65536, 0) || !dheap_init(d->dev, &d->smp, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 2048, 0) ||
 		!dheap_init(d->dev, &d->gsrv, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1000000 / NAT12_FRAMES * NAT12_FRAMES, 1) || !dheap_init(d->dev, &d->gsmp, D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 2048, 1)) {
 		set_err(err, err_size, "descriptor heaps %lu", 0);
 		nat_destroy(d);
 		return 0;
 	}
 	d->gsrv_seg_size = d->gsrv.cap / NAT12_FRAMES;
-	// the constants ring: 48 MB in three frame segments
-	d->ring_size = 48ull << 20;
+	// the constants ring: 96 MB in three frame segments
+	d->ring_size = 96ull << 20;
 	d->ring = make_buffer(d, d->ring_size, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
 	if (!d->ring) {
 		set_err(err, err_size, "constants ring %lu", 0);
@@ -883,6 +883,8 @@ int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size
 	}
 	fill_caps(d);
 	begin_list(d);
+	if (nat_log_hook)
+		nat_log_hook("native: Direct3D 12 device (%u samples, %u back buffers)", d->samples, (unsigned)NAT12_FRAMES);
 	if (d->p.fullscreen) {
 		DXGI_MODE_DESC m = {0};
 		m.Width = d->p.width;
