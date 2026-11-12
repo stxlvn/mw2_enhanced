@@ -287,6 +287,11 @@ void nd_set_targets(nd *d, nat_image *color, nat_image *depth)
 	d->rt = color;
 	d->ds = depth;
 }
+void nd_get_targets(nd *d, nat_image **color, nat_image **depth)
+{
+	*color = d->rt;
+	*depth = d->ds;
+}
 void nd_set_viewport(nd *d, float x, float y, float w, float h, float min_z, float max_z)
 {
 	d->vp[0] = x;
@@ -631,7 +636,7 @@ static void *alloc_const(nd *d, unsigned size, D3D12_GPU_VIRTUAL_ADDRESS *va)
 	return nat12_upload_alloc(d->dev, size, va);
 }
 
-int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, unsigned prim_count)
+static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned start_index, unsigned prim_count)
 {
 	d->err[0] = 0;
 	nd_shader *vsg = g->vs ? d->ops.shader(g->vs) : NULL, *psg = g->ps ? d->ops.shader(g->ps) : NULL;
@@ -659,6 +664,8 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 	}
 	state11_t st;
 	state11_decode(g->word0, g->word1, &st);
+	if (nd_layer_mode && !nd_layer_reroute)
+		state11_layer_fix(&st);
 	nat_image *rt = rt_image(d), *ds = ds_image(d);
 	if ((!rt || !nat12_image_has_rtv(rt)) && (!ds || !nat12_image_has_dsv(ds))) {
 		snprintf(d->err, sizeof(d->err), "no render target");
@@ -814,6 +821,26 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 	return 1;
 }
 
+int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, unsigned prim_count)
+{
+	if (nd_layer_mode) {
+		state11_t st;
+		state11_decode(g->word0, g->word1, &st);
+		if (st.z_enable) {
+			nat_image *rt = d->rt, *ds = d->ds;
+			d->rt = nd_layer_scene_rt;
+			d->ds = nd_layer_scene_ds;
+			nd_layer_reroute = 1;
+			const int r = nd_draw_indexed_impl(d, g, base_vertex, start_index, prim_count);
+			nd_layer_reroute = 0;
+			d->rt = rt;
+			d->ds = ds;
+			return r;
+		}
+	}
+	return nd_draw_indexed_impl(d, g, base_vertex, start_index, prim_count);
+}
+
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ StretchRect and the overlay
 static const char *BLIT_VS = "cbuffer R : register(b0) { float4 src; float4 dst; }; float4 main(uint id : SV_VertexID, out float2 uv : TEXCOORD0) : SV_Position { float2 c = float2((id << 1) & 2, id & 2); uv = c; "
 							 "return float4(c * float2(2, -2) + float2(-1, 1), 0, 1); }";
@@ -852,7 +879,7 @@ static ID3D12PipelineState *blit_pso(nd *d, DXGI_FORMAT rtvf, unsigned samples, 
 	D3D12_RENDER_TARGET_BLEND_DESC *rb = &pd.BlendState.RenderTarget[0];
 	rb->RenderTargetWriteMask = 15;
 	rb->LogicOp = D3D12_LOGIC_OP_NOOP;
-	rb->SrcBlend = alpha ? D3D12_BLEND_SRC_ALPHA : D3D12_BLEND_ONE;
+	rb->SrcBlend = alpha == 1 ? D3D12_BLEND_SRC_ALPHA : D3D12_BLEND_ONE; // (alpha 2: premultiplied colour)
 	rb->DestBlend = alpha ? D3D12_BLEND_INV_SRC_ALPHA : D3D12_BLEND_ZERO;
 	rb->BlendOp = D3D12_BLEND_OP_ADD;
 	rb->SrcBlendAlpha = D3D12_BLEND_ONE;
@@ -981,6 +1008,14 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 	ID3D12GraphicsCommandList_IASetPrimitiveTopology(d->list, D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	ID3D12GraphicsCommandList_DrawInstanced(d->list, 3, 1, 0, 0);
 	return 1;
+}
+
+int nd_overlay_premul(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const nd_rect *dr)
+{
+	d->blit_alpha = 2;
+	const int ok = nd_stretch(d, src, sr, dst, dr, 0);
+	d->blit_alpha = 0;
+	return ok;
 }
 
 int nd_overlay(nd *d, nat_image *src)

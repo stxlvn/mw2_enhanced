@@ -30,6 +30,10 @@ typedef struct {
 // word0 / word1: the two 32-bit words of a pass's state-bits pair (the game keeps the requested ones at state + 0xb54 / + 0xb58)
 void state11_decode(uint32_t word0, uint32_t word1, state11_t *out);
 
+// The split screen's 2D layers (src/native.c, mode 10) are drawn into a render target cleared to transparent and laid over the half's picture afterwards: the layer's alpha must hold the coverage.
+// "Over" blends accumulate it (alpha: one, one minus source alpha), additive glows and multiplies leave it alone (alpha: zero, one); a draw that blends nothing or writes no colour keeps its own.
+void state11_layer_fix(state11_t *s);
+
 // What Direct3D 9 state the game's own code leaves set after applying these words: only the states that the words decide (a state whose switch is off, such as the blend factors with
 // blending off, keeps its earlier value and is not listed). `mask` is the part of the value to compare. Returns the count (at most max).
 typedef struct {

@@ -127,6 +127,7 @@ void nd_decl_destroy(nd_decl *d)
 	free(d);
 }
 
+int nd_layer_mode;
 int nd_aniso_override; // [display] aniso: 0 = the game's own, 2..16 = forced for mipmapped textures
 int nd_trace; // QA (MW2COOP_TRACEFRAME): while set, every draw / clear / stretch is logged with its target, textures and first constants
 
@@ -201,7 +202,7 @@ struct nd {
 	nat_shader *blit_vs, *blit_ps;
 	ID3D11Buffer *blit_cb;
 	ID3D11SamplerState *blit_smp[2];
-	ID3D11BlendState *blit_blend, *blit_blend_alpha;
+	ID3D11BlendState *blit_blend, *blit_blend_alpha, *blit_blend_premul;
 	int blit_alpha; // nd_overlay: the blit blends by the source's alpha
 	ID3D11RasterizerState *blit_rs;
 	ID3D11DepthStencilState *blit_ds;
@@ -277,6 +278,11 @@ void nd_set_targets(nd *d, nat_image *color, nat_image *depth)
 {
 	d->rt = color;
 	d->ds = depth;
+}
+void nd_get_targets(nd *d, nat_image **color, nat_image **depth)
+{
+	*color = d->rt;
+	*depth = d->ds;
 }
 void nd_set_viewport(nd *d, float x, float y, float w, float h, float min_z, float max_z)
 {
@@ -587,7 +593,12 @@ static void trace_target(nd *d, char *out, size_t n)
 	}
 }
 
-int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, unsigned prim_count)
+static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned start_index, unsigned prim_count);
+
+int nd_layer_reroute;
+nat_image *nd_layer_scene_rt, *nd_layer_scene_ds;
+
+static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned start_index, unsigned prim_count)
 {
 	d->err[0] = 0;
 	if (nd_trace && nat_log_hook) {
@@ -630,6 +641,8 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 	}
 	state11_t st;
 	state11_decode(g->word0, g->word1, &st);
+	if (nd_layer_mode && !nd_layer_reroute)
+		state11_layer_fix(&st);
 	ID3D11RenderTargetView *rtv;
 	ID3D11DepthStencilView *dsv;
 	get_views(d, st.srgb_write, &rtv, &dsv);
@@ -701,6 +714,26 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 	return 1;
 }
 
+int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, unsigned prim_count)
+{
+	if (nd_layer_mode) {
+		state11_t st;
+		state11_decode(g->word0, g->word1, &st);
+		if (st.z_enable) {
+			nat_image *rt = d->rt, *ds = d->ds;
+			d->rt = nd_layer_scene_rt;
+			d->ds = nd_layer_scene_ds;
+			nd_layer_reroute = 1;
+			const int r = nd_draw_indexed_impl(d, g, base_vertex, start_index, prim_count);
+			nd_layer_reroute = 0;
+			d->rt = rt;
+			d->ds = ds;
+			return r;
+		}
+	}
+	return nd_draw_indexed_impl(d, g, base_vertex, start_index, prim_count);
+}
+
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ StretchRect
 static const char *BLIT_VS = "cbuffer R : register(b0) { float4 src; float4 dst; }; float4 main(uint id : SV_VertexID, out float2 uv : TEXCOORD0) : SV_Position { float2 c = float2((id << 1) & 2, id & 2); uv = c; "
 							 "return float4(c * float2(2, -2) + float2(-1, 1), 0, 1); }";
@@ -758,6 +791,10 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 		}
 	}
 	// a scaling (or format-converting) draw: the source image needs a view, the destination a render target view
+	if (!src && ss > 1) { // the scene itself, multisampled: its resolved copy is the source
+		nat_scene_resolve(d->dev);
+		ss = 1;
+	}
 	ID3D11ShaderResourceView *srv = src ? nat_image_srv(src, 0) : nat_scene_srv(d->dev);
 	ID3D11RenderTargetView *rtv = dst ? nat_image_rtv(dst, 0) : nat_scene_rtv(d->dev);
 	if (ss > 1 || !srv || !rtv)
@@ -784,6 +821,8 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 		bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
 		bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
 		ID3D11Device_CreateBlendState(d->d3d, &bd, &d->blit_blend_alpha);
+		bd.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE; // premultiplied colour
+		ID3D11Device_CreateBlendState(d->d3d, &bd, &d->blit_blend_premul);
 		D3D11_RASTERIZER_DESC rd = {0};
 		rd.FillMode = D3D11_FILL_SOLID;
 		rd.CullMode = D3D11_CULL_NONE;
@@ -802,7 +841,7 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 	D3D11_VIEWPORT vp = {(float)dr->left, (float)dr->top, (float)(dr->right - dr->left), (float)(dr->bottom - dr->top), 0, 1};
 	ID3D11DeviceContext_RSSetViewports(x, 1, &vp);
 	ID3D11DeviceContext_RSSetState(x, d->blit_rs);
-	ID3D11DeviceContext_OMSetBlendState(x, d->blit_alpha && d->blit_blend_alpha ? d->blit_blend_alpha : d->blit_blend, NULL, 0xffffffffu);
+	ID3D11DeviceContext_OMSetBlendState(x, d->blit_alpha == 2 && d->blit_blend_premul ? d->blit_blend_premul : d->blit_alpha && d->blit_blend_alpha ? d->blit_blend_alpha : d->blit_blend, NULL, 0xffffffffu);
 	ID3D11DeviceContext_OMSetDepthStencilState(x, d->blit_ds, 0);
 	ID3D11DeviceContext_IASetInputLayout(x, NULL);
 	ID3D11DeviceContext_IASetPrimitiveTopology(x, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -816,6 +855,14 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 	ID3D11ShaderResourceView *none = NULL;
 	ID3D11DeviceContext_PSSetShaderResources(x, 0, 1, &none);
 	return 1;
+}
+
+int nd_overlay_premul(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const nd_rect *dr)
+{
+	d->blit_alpha = 2;
+	const int ok = nd_stretch(d, src, sr, dst, dr, 0);
+	d->blit_alpha = 0;
+	return ok;
 }
 
 int nd_overlay(nd *d, nat_image *src)

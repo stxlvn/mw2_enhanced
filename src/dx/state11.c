@@ -3,6 +3,21 @@
 static const int DEPTH_FUNC[4] = {8, 2, 3, 4};            // always, less, equal, less or equal (table at rva 0x3708c0)
 static const int CULL[4] = {0, 1, 3, 2};                  // unused, none, back (counter-clockwise), front (table at rva 0x370980)
 
+void state11_layer_fix(state11_t *s)
+{
+	enum { D3DBLEND_ZERO = 1, D3DBLEND_ONE = 2, D3DBLEND_SRCALPHA = 5, D3DBLEND_INVSRCALPHA = 6, D3DBLENDOP_ADD = 1 };
+	if (!s->blend_enable || !(s->write_mask & 7))
+		return;
+	if (s->dst == D3DBLEND_INVSRCALPHA && (s->src == D3DBLEND_SRCALPHA || s->src == D3DBLEND_ONE)) {
+		s->src_a = D3DBLEND_ONE;
+		s->dst_a = D3DBLEND_INVSRCALPHA;
+	} else {
+		s->src_a = D3DBLEND_ZERO;
+		s->dst_a = D3DBLEND_ONE;
+	}
+	s->op_a = D3DBLENDOP_ADD;
+}
+
 void state11_decode(uint32_t w0, uint32_t w1, state11_t *o)
 {
 	o->src = (int)(w0 & 0xf);

@@ -55,10 +55,13 @@ nat_query *ngfr_issue_next(ngfr *r, void **slot)
 	return q;
 }
 
+int natframe_skip_present; // the split screen compositor (natboot.c): the first frame of a pair is composed but not shown
+
 int ngfr_present_and_issue(ngfr *r)
 {
 	uint8_t *e = r->exe;
-	const int rc = nat_present(r->dev);
+	const int rc = natframe_skip_present ? 0 : nat_present(r->dev);
+	natframe_skip_present = 0;
 	nat_query *q = ngfr_issue_next(r, (void **)AT(e, NGFR_LAST_EVENT));
 	((nat_query **)AT(e, NGFR_RING))[RD_U32(e, NGFR_ISSUED) & 7] = q;
 	RD_U32(e, NGFR_ISSUED)++;

@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "dx/natboot.h"
 #include "game.h"
 #include "hook.h"
 #include "log.h"
@@ -2249,6 +2250,18 @@ static void scene2d_hook(void *vp)
 			log_printf("native: frames whose half was not found: %ld of %ld", (long)lost, (long)seen);
 		}
 	}
+	if (natboot_active()) { // the native renderers: the 2D pass goes into the half's layer (natboot.c)
+		if (mode == 10 && render_half >= 0 && natboot_comp_make()) {
+			natboot_layer_begin(render_half, 1);
+			layer_pass = 1;
+			scene2d_original(vp);
+			layer_pass = 0;
+			natboot_layer_end();
+		} else {
+			scene2d_original(vp);
+		}
+		return;
+	}
 	if (mode != 10 || !dev || render_half < 0 || !lay_surf[0] || !lay_surf[1]) {
 		scene2d_original(vp);
 		return;
@@ -2277,6 +2290,18 @@ static void (*final2d_original)(void *);
 static void final2d_hook(void *vp)
 {
 	IDirect3DDevice9 *dev = the_device;
+	if (natboot_active()) {
+		if (mode == 10 && render_half >= 0 && natboot_comp_make()) {
+			natboot_layer_begin(render_half, 0);
+			layer_pass = 1;
+			final2d_original(vp);
+			layer_pass = 0;
+			natboot_layer_end();
+		} else {
+			final2d_original(vp);
+		}
+		return;
+	}
 	if (mode != 10 || !dev || render_half < 0 || !lay_surf[0] || !lay_surf[1]) {
 		final2d_original(vp);
 		return;
@@ -2292,6 +2317,28 @@ static void final2d_hook(void *vp)
 	IDirect3DDevice9_SetRenderTarget(dev, 0, old);
 	if (old)
 		IDirect3DSurface9_Release(old);
+}
+
+// the native renderers' frame end (natboot.c): is this frame one half of a split frame, and which; the first frame of a pair is composed but not shown
+int native_nat_split_frame(int *half);
+int native_nat_split_frame(int *half)
+{
+	if (mode != 10 || !native_active || !split_on)
+		return 0;
+	const int h = render_half;
+	render_half = -1;
+	if (h < 0)
+		return 0;
+	*half = h;
+	return 1;
+}
+int native_nat_pair_present(void);
+int native_nat_pair_present(void)
+{
+	static int pair = -1;
+	if (pair < 0)
+		pair = cfg("pairpresent", 1);
+	return pair;
 }
 
 static DWORD comp_not_before; // GetTickCount: the device hooks are not (re)installed before it (after a vid_restart the Steam overlay hooks the new device first)
