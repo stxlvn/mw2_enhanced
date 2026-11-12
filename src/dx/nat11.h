@@ -72,6 +72,7 @@ int nat_image_upload(nat_image *i, unsigned face, unsigned level, const void *da
 void *nat_image_srv(nat_image *i, int srgb);
 void *nat_image_rtv(nat_image *i, int srgb);
 void *nat_image_dsv(nat_image *i);
+void *nat_image_resource(nat_image *i); // the ID3D11Resource (readbacks, copies)
 unsigned nat_image_levels(const nat_image *i);
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ buffers

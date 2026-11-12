@@ -517,6 +517,7 @@ int nat_image_upload(nat_image *i, unsigned face, unsigned level, const void *da
 void *nat_image_srv(nat_image *i, int srgb) { return srgb && i->srv_srgb ? i->srv_srgb : i->srv; }
 void *nat_image_rtv(nat_image *i, int srgb) { return srgb && i->rtv_srgb ? i->rtv_srgb : i->rtv; }
 void *nat_image_dsv(nat_image *i) { return i->dsv; }
+void *nat_image_resource(nat_image *i) { return i->res; }
 unsigned nat_image_levels(const nat_image *i) { return i->levels; }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ buffers
