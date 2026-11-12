@@ -571,6 +571,7 @@ static void install_all(void)
 	N.frame.fn_29070 = (void (*)(void))(exe + 0x29070);
 	N.frame.fn_b6e0 = (void (*)(int))(exe + 0xb6e0);
 	N.frame.fn_5c010 = (void (*)(void *))(exe + 0x5c010);
+	N.frame.fn_484c0 = (void (*)(void *))(exe + 0x484c0); // the post-process composite (glow, depth of field, fog): the game's own code, its StretchRect / GetSurfaceLevel calls are bridged (patch_sites)
 	N.frame.fn_4e390 = (void (*)(void *, void *, int))(exe + 0x4e390);
 	N.frame.fn_4f070 = (void (*)(void *, void *, void *))(exe + 0x4f070);
 	N.frame.fn_4ec20 = (void (*)(void *))(exe + 0x4ec20);
