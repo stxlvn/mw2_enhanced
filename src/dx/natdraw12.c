@@ -138,6 +138,7 @@ struct nd_shader {
 nd_shader *nd_shader_create(nd *d, const uint32_t *code, size_t dwords)
 {
 	(void)d;
+	nat_shader_prewarm(code, dwords);
 	nd_shader *s = calloc(1, sizeof(*s));
 	obj_vts_init();
 	s->vt = shader_vt;

@@ -815,6 +815,9 @@ static nat_shader *shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, 
 	}
 	ID3DBlob *code = NULL, *msgs = NULL;
 	HRESULT hr = E_FAIL;
+	LARGE_INTEGER t0, t1, t2, tf;
+	QueryPerformanceCounter(&t0);
+	int from_cache = 0;
 	{ // compiled before (an earlier run): the code comes from the disk cache
 		size_t csize = 0;
 		void *cdata = nc_load(hlsl, is_vs, &csize);
@@ -825,6 +828,7 @@ static nat_shader *shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, 
 			if (p_blob && SUCCEEDED(p_blob(csize, &code)) && code) {
 				memcpy(ID3D10Blob_GetBufferPointer(code), cdata, csize);
 				hr = S_OK;
+				from_cache = 1;
 			}
 			free(cdata);
 		}
@@ -841,6 +845,7 @@ static nat_shader *shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, 
 			ID3D10Blob_Release(msgs);
 		return NULL;
 	}
+	QueryPerformanceCounter(&t1);
 	nat_shader *s = calloc(1, sizeof(*s));
 	s->is_vs = is_vs;
 	s->blob = code;
@@ -851,6 +856,11 @@ static nat_shader *shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, 
 		ID3D10Blob_Release(code);
 		free(s);
 		return NULL;
+	}
+	if (nat_log_hook && getenv("MW2COOP_FRAMETIME")) { // QA: where the time of a new shader goes (the compiler, or the driver in CreateVertexShader / CreatePixelShader)
+		QueryPerformanceCounter(&t2);
+		QueryPerformanceFrequency(&tf);
+		nat_log_hook("shader: %s %s: compile %.1f ms, create %.1f ms", is_vs ? "vs" : "ps", from_cache ? "cached" : "compiled", (double)(t1.QuadPart - t0.QuadPart) * 1000.0 / (double)tf.QuadPart, (double)(t2.QuadPart - t1.QuadPart) * 1000.0 / (double)tf.QuadPart);
 	}
 	return s;
 }
@@ -874,6 +884,32 @@ nat_shader *nat_shader_from_sm3(nat_device *d, const uint32_t *code, size_t dwor
 	free(hlsl);
 	return s;
 }
+
+// (the worker threads of natcache.h) the common variant of a shader, compiled into the disk cache when it is not there yet
+static void warm_one(const uint32_t *code, size_t dwords)
+{
+	char *hlsl = NULL, why[160] = "";
+	int is_vs = 0;
+	if (!sm3_translate_vs(code, dwords, SM3_ALPHA_TEST , NULL, 0, &hlsl, &is_vs, why, sizeof(why)))
+		return;
+	size_t n = 0;
+	void *have = nc_load(hlsl, is_vs, &n);
+	if (have) {
+		free(have);
+	} else if (load_compiler()) {
+		ID3DBlob *blob = NULL, *msgs = NULL;
+		if (SUCCEEDED(p_compile(hlsl, strlen(hlsl), "nat", NULL, NULL, "main", is_vs ? "vs_5_0" : "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | (1 << 14), 0, &blob, &msgs)) && blob) {
+			nc_store(hlsl, is_vs, ID3D10Blob_GetBufferPointer(blob), ID3D10Blob_GetBufferSize(blob));
+		}
+		if (blob)
+			ID3D10Blob_Release(blob);
+		if (msgs)
+			ID3D10Blob_Release(msgs);
+	}
+	free(hlsl);
+}
+
+void nat_shader_prewarm(const uint32_t *code, size_t dwords) { nc_enqueue(code, dwords, warm_one); }
 
 void nat_shader_destroy(nat_shader *s)
 {

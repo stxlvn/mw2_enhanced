@@ -63,3 +63,69 @@ static void nc_store(const char *hlsl, int is_vs, const void *data, size_t size)
 	if (!ok || !MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING))
 		DeleteFileA(tmp);
 }
+
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ background warm-up
+// The game's shaders are known when its assets load, long before the first draw that uses them. Each one is queued here and two low-priority worker threads translate and compile the variant
+// the game uses first (a vertex shader without integer inputs, a pixel shader without hardware shadow maps) into the disk cache, so the render thread finds the code ready (a first-ever run still
+// compiles what the workers have not reached yet, and the variants that are not the common one).
+typedef struct nc_job {
+	struct nc_job *next;
+	uint32_t *code;
+	size_t dwords;
+} nc_job;
+static nc_job *nc_head, *nc_tail;
+static CRITICAL_SECTION nc_lock;
+static HANDLE nc_event;
+static LONG nc_started;
+static void (*nc_work)(const uint32_t *code, size_t dwords);
+
+static DWORD WINAPI nc_thread(void *unused)
+{
+	(void)unused;
+	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+	for (;;) {
+		EnterCriticalSection(&nc_lock);
+		nc_job *j = nc_head;
+		if (j) {
+			nc_head = j->next;
+			if (!nc_head)
+				nc_tail = NULL;
+		}
+		LeaveCriticalSection(&nc_lock);
+		if (!j) {
+			WaitForSingleObject(nc_event, INFINITE);
+			continue;
+		}
+		nc_work(j->code, j->dwords);
+		free(j->code);
+		free(j);
+	}
+	return 0;
+}
+
+static void nc_enqueue(const uint32_t *code, size_t dwords, void (*work)(const uint32_t *, size_t))
+{
+	if (!code || !dwords || getenv("MW2COOP_NOPREWARM"))
+		return;
+	if (InterlockedCompareExchange(&nc_started, 1, 0) == 0) {
+		InitializeCriticalSection(&nc_lock);
+		nc_event = CreateEventA(NULL, FALSE, FALSE, NULL); // (auto reset: one worker wakes per signal)
+		nc_work = work;
+		for (int i = 0; i < 2; i++)
+			CloseHandle(CreateThread(NULL, 0, nc_thread, NULL, 0, NULL));
+	}
+	while (!nc_work || !nc_event) // (the first caller is still setting up)
+		Sleep(0);
+	nc_job *j = calloc(1, sizeof(*j));
+	j->code = malloc(dwords * 4);
+	memcpy(j->code, code, dwords * 4);
+	j->dwords = dwords;
+	EnterCriticalSection(&nc_lock);
+	if (nc_tail)
+		nc_tail->next = j;
+	else
+		nc_head = j;
+	nc_tail = j;
+	LeaveCriticalSection(&nc_lock);
+	SetEvent(nc_event);
+}

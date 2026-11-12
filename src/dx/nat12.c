@@ -1512,6 +1512,32 @@ nat_shader *nat_shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, cha
 	return s;
 }
 
+// (the worker threads of natcache.h) the common variant of a shader, compiled into the disk cache when it is not there yet
+static void warm_one(const uint32_t *code, size_t dwords)
+{
+	char *hlsl = NULL, why[160] = "";
+	int is_vs = 0;
+	if (!sm3_translate_vs(code, dwords, SM3_ALPHA_TEST | SM3_D3D12, NULL, 0, &hlsl, &is_vs, why, sizeof(why)))
+		return;
+	size_t n = 0;
+	void *have = nc_load(hlsl, is_vs, &n);
+	if (have) {
+		free(have);
+	} else if (load_compiler()) {
+		IUnknown *blob = NULL, *msgs = NULL;
+		if (SUCCEEDED(p_compile(hlsl, strlen(hlsl), "nat", NULL, NULL, "main", is_vs ? "vs_5_0" : "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS | (1 << 14), 0, &blob, &msgs)) && blob) {
+			nc_store(hlsl, is_vs, blob_ptr(blob), blob_size(blob));
+		}
+		if (blob)
+			IUnknown_Release(blob);
+		if (msgs)
+			IUnknown_Release(msgs);
+	}
+	free(hlsl);
+}
+
+void nat_shader_prewarm(const uint32_t *code, size_t dwords) { nc_enqueue(code, dwords, warm_one); }
+
 nat_shader *nat_shader_from_sm3(nat_device *d, const uint32_t *code, size_t dwords, int alpha_test, const void *int_inputs, int nint_inputs, char *err, size_t err_size)
 {
 	char *hlsl = NULL, why[160] = "";

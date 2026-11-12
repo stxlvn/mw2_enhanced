@@ -567,8 +567,18 @@ static long s_get_surface_level(void *tex, unsigned level, void **out)
 static long s_stretch_rect(void *dev, void *src, const RECT *sr, void *dst, const RECT *dr, unsigned filter)
 {
 	(void)dev;
-	if (N.created)
-		nd_stretch(N.d, (nat_image *)src, (const nd_rect *)sr, (nat_image *)dst, (const nd_rect *)dr, filter == 2);
+	if (N.created && !nd_stretch(N.d, (nat_image *)src, (const nd_rect *)sr, (nat_image *)dst, (const nd_rect *)dr, filter == 2)) {
+		static volatile LONG refused; // (the destination keeps what it had: the saved screen of an effect would be stale)
+		const LONG n = InterlockedIncrement(&refused);
+		if (n <= 12) {
+			unsigned sw = 0, sh = 0, ss = 0, dw = 0, dh = 0, ds = 0;
+			if (src)
+				nat_image_size((nat_image *)src, &sw, &sh, &ss);
+			if (dst)
+				nat_image_size((nat_image *)dst, &dw, &dh, &ds);
+			log_printf("native11: StretchRect refused (#%ld): src %p %ux%u x%u rect %s, dst %p %ux%u x%u rect %s, filter %u", (long)n, src, sw, sh, ss, sr ? "yes" : "no", dst, dw, dh, ds, dr ? "yes" : "no", filter);
+		}
+	}
 	return 0;
 }
 static long s_set_stream(void *dev, unsigned stream, void *vb, unsigned offset, unsigned stride)

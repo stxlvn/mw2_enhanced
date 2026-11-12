@@ -132,6 +132,8 @@ void *nat_buffer_resource(nat_buffer *b); // ID3D11Buffer
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ shaders
 typedef struct nat_shader nat_shader;
 // Direct3D 9 shader model 3 bytecode (the game's own); pixel shaders get the alpha test constant buffer (b2) when alpha_test is set. int_inputs: see sm3_int_input (vertex shaders).
+// queues the shader (SM3 code) for a background compile of its common variant into the disk cache
+void nat_shader_prewarm(const uint32_t *code, size_t dwords);
 nat_shader *nat_shader_from_sm3(nat_device *d, const uint32_t *code, size_t dwords, int alpha_test, const void *int_inputs, int nint_inputs, char *err, size_t err_size);
 nat_shader *nat_shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, char *err, size_t err_size);
 void nat_shader_destroy(nat_shader *s);
