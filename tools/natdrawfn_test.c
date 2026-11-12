@@ -53,13 +53,16 @@ static uint32_t read_pixel(nat_device *dev, ID3D11Resource *tex, unsigned x, uns
 	return v;
 }
 
+static nat_image *gim_im[4]; // the game images (first field = the native image)
+static nat_image *gim_rt[4];
+
 static const uint32_t VS3[] = {0xfffe0300, 0x0200001f, 0x80000000, 0x900f0000, 0x0200001f, 0x80000005, 0x900f0001, 0x0200001f, 0x80000000, 0xe00f0000, 0x0200001f, 0x80000005, 0xe00f0001,
 							   0x02000001, 0xe00f0000, 0x90e40000, 0x02000001, 0xe00f0001, 0x90e40001, 0x0000ffff};
 static const uint32_t PS_TEX[] = {0xffff0300, 0x0200001f, 0x80000005, 0x900f0000, 0x0200001f, 0x90000000, 0xa00f0800, 0x03000042, 0x800f0000, 0x90e40000, 0xa0e40800, 0x02000001, 0x800f0800, 0x80e40000, 0x0000ffff};
 
 static nd_shader *id_shader(void *p) { return p; }
 static nd_decl *id_decl(void *p) { return p; }
-static nat_image *id_image(void *p) { return p; }
+static nat_image *id_image(void *p) { return *(nat_image **)p; } // a game image: the native image is its first field
 static const nd_ops OPS = {id_shader, id_decl, id_image, NULL};
 
 int main(void)
@@ -87,7 +90,11 @@ int main(void)
 	ng_state g;
 	ng_init(&g);
 	ng_ops nops = {NULL, NULL, NULL, filter_table, 1};
-	ngf f = {d, &g, &nops, exe, NULL, NULL, NULL};
+	ngf f = {0};
+	f.d = d;
+	f.g = &g;
+	f.ops = &nops;
+	f.exe = exe;
 
 	// rings: vertex ring (a dynamic buffer of 1024 bytes), index ring 0 (a dynamic buffer of 64 indices)
 	static ngf_ring vring, iring;
@@ -109,6 +116,7 @@ int main(void)
 	// render targets: entry 0 = the scene, entry 1 = a render-target image
 	nat_image_desc rtd = {NAT_IMAGE_2D, 64, 64, 1, 1, 21, NAT_RENDER_TARGET, 0};
 	nat_image *rt = nat_image_create(dev, &rtd);
+	gim_rt[0] = rt;
 	static int rt_game_image[16]; // the game's image object whose first field is the texture; here the sampler binding uses the nat_image directly
 	(void)rt_game_image;
 	uint8_t *table = exe + 0x4359000;
@@ -116,7 +124,7 @@ int main(void)
 	W32(table, 0x1c, 64);
 	WP(table, 8, NULL);
 	WP(table, 0x10, ND_NO_DEPTH);
-	WP(table + 32, 0, rt);
+	WP(table + 32, 0, gim_rt);
 	WP(table + 32, 8, rt);
 	WP(table + 32, 0x10, ND_NO_DEPTH);
 	W32(table + 32, 0x18, 64);
@@ -126,18 +134,20 @@ int main(void)
 	nd_shader *vsg = nd_shader_create(d, VS3, sizeof(VS3) / 4), *psg = nd_shader_create(d, PS_TEX, sizeof(PS_TEX) / 4);
 	const nd_elem els[2] = {{0, 0, 2, 0, 0}, {0, 12, 1, 5, 0}};
 	nd_decl *decl = nd_decl_create(els, 2);
-	uint8_t *vs_obj = calloc(1, 0x20), *ps_obj = calloc(1, 0x20), *decl_set = calloc(1, 0x80);
+	uint8_t *vs_obj = calloc(1, 0x20), *ps_obj = calloc(1, 0x20), *decl_set = calloc(1, 0x100);
 	WP(vs_obj, 8, vsg);
 	WP(ps_obj, 8, psg);
 	WP(decl_set, 0x30, decl);
+	WP(decl_set, 0x30 + 0xe * 8, decl); // vertex type 0xe (the sort-key draws)
 	nat_image_desc id = {NAT_IMAGE_2D, 2, 2, 1, 1, 21, 0, 0};
 	nat_image *im = nat_image_create(dev, &id);
+	gim_im[0] = im;
 	const uint32_t texels[4] = {0xffff0000, 0xff00ff00, 0xff0000ff, 0xffffffff};
 	nat_image_upload(im, 0, 0, texels, 8, 0);
 	uint8_t *mat = calloc(1, 0x200), *textures = calloc(2, 16), *statebits = calloc(4, 8), *tech = calloc(1, 0x200), *args = calloc(4, 16);
 	W32(textures, 0, 0x3333);
 	W8(textures, 6, 0x00);
-	WP(textures, 8, im);
+	WP(textures, 8, gim_im);
 	WP(mat, NG_MAT_TEXTURES, textures);
 	WP(mat, NG_MAT_STATEBITS, statebits);
 	W32(statebits, 0, 1u << 27 | 1u << 28 | 1u << 14 | 1u << 11);
@@ -200,8 +210,8 @@ int main(void)
 	CHECK(vring.offset == 128, "ring wrapped to %d", vring.offset);
 
 	// render target switch: the sampler that holds the target image is unbound
-	g.tex[3] = rt;
-	WP(state, 0x50 + 3 * 8, rt);
+	g.tex[3] = gim_rt;
+	WP(state, 0x50 + 3 * 8, gim_rt);
 	ngf_target_switch(&f, input, state, 1);
 	CHECK(g.tex[3] == NULL && RP(state, 0x50 + 3 * 8) == NULL, "sampler holding the new target is unbound");
 	CHECK(RI(state, 0xb98) == 1 && RI(state, 0xb90) == 64, "target 1 bookkeeping");
@@ -213,6 +223,57 @@ int main(void)
 		const uint32_t a = read_pixel(dev, res, 10, 10, 64, 64), e = read_pixel(dev, res, 50, 50, 64, 64);
 		CHECK(a == 0xffff0000 && e == 0xffffffff, "drawn into the render-target image %08x %08x", a, e);
 		ID3D11Resource_Release(res);
+	}
+	// 0x5fe50: textures 1..3 from the arrays of the global at rva 0x410fd08, 44-byte vertices; the flags are the pass byte +0x1b
+	{
+		uint8_t *glob = calloc(1, 0x40);
+		void *arr1[4] = {im, NULL, NULL, NULL}, *arr2[4] = {rt, NULL, NULL, NULL}, *arr3[4] = {im, NULL, NULL, NULL};
+		WP(glob, 0x18, arr1);
+		WP(glob, 0x30, arr2);
+		WP(glob, 0x38, arr3);
+		WP(exe, 0x410fd08, glob);
+		W8(pass, 0x1b, 7);
+		uint8_t cmds[64] = {0};
+		for (int i = 0; i < 2; i++) {
+			W32(cmds + i * 32, 0, 7);
+			W16(cmds + i * 32, 6, 2);
+			W32(cmds + i * 32, 8, 0);
+			W32(cmds + i * 32, 0xc, i);
+			WP(cmds + i * 32, 0x10, vring.buffer);
+			W32(cmds + i * 32, 0x18, 4);
+		}
+		uintptr_t cur[2] = {(uintptr_t)cmds, (uintptr_t)(cmds + 64)};
+		unsigned d0, x1;
+		nd_stats(d, &x1, &x1, &x1, &x1, &d0, &x1);
+		ngf_target_switch(&f, input, state, 0);
+		ngf_draw_5fe50(&f, cur, ctx);
+		unsigned d1;
+		nd_stats(d, &x1, &x1, &x1, &x1, &d1, &x1);
+		CHECK(d1 == d0 + 2, "0x5fe50 drew %u commands", d1 - d0);
+		CHECK(cur[0] == cur[1], "cursor consumed");
+		CHECK(g.tex[1] && *(nat_image **)g.tex[1] == im && g.tex[2] && *(nat_image **)g.tex[2] == rt && g.tex[3] && *(nat_image **)g.tex[3] == im, "textures 1..3 bound");
+		CHECK(RP(state, 0x58) == &arr1[0] && RP(state, 0x68) == &arr3[0] && RP(state, 0x60) == &arr2[0], "texture caches");
+		CHECK(RI(state, 0xe8) == 0x2c && RI(state, 0xf8) == 0x2c, "stream cache of the last command (offset %d stride %d)", RI(state, 0xf8), RI(state, 0xe8));
+	}
+	// 0x5cc10: sort-key loop, one command; index buffer from the global, vertex stream from the scene data
+	{
+		uint8_t *scene = calloc(1, 0xe0000 + 0x100);
+		W32(scene, 0x1728, 32);
+		WP(scene, 0x1718, vring.buffer);
+		W32(scene, 0xdf780, 2);
+		W32(scene, 0xdf790, 0);
+		WP(input, 0x13b8, scene);
+		WP(exe, 0x4359480, iring.buffer);
+		W8(pass, 0x1b, 0);
+		uint32_t keys[2] = {0x00000005u, 0};
+		uintptr_t cur[2] = {(uintptr_t)keys, (uintptr_t)(keys + 1)};
+		unsigned d0, x1, d1;
+		nd_stats(d, &x1, &x1, &x1, &x1, &d0, &x1);
+		RP(state, 0xd8) = NULL;
+		ngf_draw_5cc10(&f, ctx, cur);
+		nd_stats(d, &x1, &x1, &x1, &x1, &d1, &x1);
+		CHECK(d1 == d0 + 1 && cur[0] == cur[1], "0x5cc10 drew %u", d1 - d0);
+		CHECK(RI(state, 0xe0) == 0xe && RP(state, 0xd8) == iring.buffer && RP(state, 0xf0) == vring.buffer && RI(state, 0xe8) == 32, "0x5cc10 state fields");
 	}
 	unsigned st, la, sh, up, dr, rf;
 	nd_stats(d, &st, &la, &sh, &up, &dr, &rf);

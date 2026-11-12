@@ -51,9 +51,13 @@ void ng_apply_ps_stable(ng_state *s, const ng_ops *ops, void *input, void *state
 // the same three with the list the caller passes (the game's functions are called with a count and a pointer; they equal the pass's own lists on every path read so far)
 void ng_apply_ps_args(ng_state *s, const ng_ops *ops, void *input, void *state, const void *args, unsigned count);
 void ng_apply_object_args(ng_state *s, const ng_ops *ops, void *input, void *state, const void *args, unsigned count);
+// 0x54220: only the code vertex constants (type 3) of a list (the sort-key draws call it with the pass's stable list when the key changed)
+void ng_apply_code_vc_args(ng_state *s, const ng_ops *ops, void *input, void *state, const void *args, unsigned count);
 // 0x53d00: the per-object arguments of the current pass (code vertex constants and code samplers)
 void ng_apply_object(ng_state *s, const ng_ops *ops, void *input, void *state);
 // 0x53f10: the per-primitive arguments of the current pass (code vertex constants)
 void ng_apply_prim(ng_state *s, const ng_ops *ops, void *input, void *state);
+// 0x50b10: sets the sampler byte and word of sampler `slot` without an image (the caller binds the texture itself); forgets the image of the slot
+void ng_set_sampler_state(ng_state *s, const ng_ops *ops, unsigned slot, uint8_t sampler_byte);
 // 0x50a20: binds image `image` (the game's image pointer, may be 0) to sampler `slot` with the material's sampler byte
 void ng_bind_sampler(ng_state *s, const ng_ops *ops, unsigned slot, uint8_t sampler_byte, void *image);

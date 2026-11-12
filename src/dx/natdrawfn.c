@@ -196,3 +196,247 @@ void ngf_draw_399f0(ngf *f, void *ctx, void *material, void *draw_info)
 	ng_apply_prim(f->g, f->ops, input, state);
 	nd_draw_indexed(f->d, f->g, 0, (unsigned)start, 2);
 }
+
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ more draw loops
+void ngf_draw_5cc10(ngf *f, void *ctx, uintptr_t *cursor)
+{
+	void *input = ((void **)ctx)[0], *state = ((void **)ctx)[1];
+	uint8_t *pass = RD_PTR(state, NG_ST_PASS);
+	if (RD_U8(pass, 0x1a))
+		ng_apply_ps_stable(f->g, f->ops, input, state);
+	if (f->fn_5c8d0)
+		f->fn_5c8d0(input);
+	RD_I32(state, NG_ST_VTYPE) = 0xe;
+	ng_apply_decl_shader(f->g, f->ops, state);
+	ngf_depth_range(f, state, (RD_I32(input, 0x16dc) != 0) - 1);
+	uint8_t *scene = RD_PTR(input, 0x13b8);
+	const uint32_t first = *(uint32_t *)*cursor;
+	uint32_t key = first;
+	void *index_buffer = RD_PTR(f->exe, 0x4359480);
+	do {
+		const size_t off = (size_t)(key >> 16) * 0x60;
+		if (RD_PTR(state, 0xd8) != index_buffer) {
+			RD_PTR(state, 0xd8) = index_buffer;
+			nd_set_indices(f->d, (nat_buffer *)index_buffer, 0);
+		}
+		const int stride = RD_I32(scene, 0x1728), voff = stride * RD_I32(scene + off, 0xdf790);
+		ngf_set_streams(f, state, RD_PTR(scene, 0x1718), voff, stride);
+		if (f->fn_5d650)
+			f->fn_5d650(input, scene + 0xdf798 + off, 0);
+		pass = RD_PTR(state, NG_ST_PASS);
+		ng_apply_object(f->g, f->ops, input, state);
+		ng_apply_prim(f->g, f->ops, input, state);
+		nd_draw_indexed(f->d, f->g, 0, 0, (unsigned)RD_I32(scene + off, 0xdf780));
+		*cursor += 4;
+		if (*cursor == cursor[1])
+			break;
+		key = *(uint32_t *)*cursor;
+	} while ((int16_t)key == (int16_t)first);
+}
+
+static void tex_to_slot(ngf *f, unsigned slot, void *texture)
+{
+	memset(f->tex_thunk[slot], 0, 32);
+	*(void **)f->tex_thunk[slot] = texture;
+	f->g->tex[slot] = texture ? f->tex_thunk[slot] : NULL;
+}
+
+void ngf_draw_5fe50(ngf *f, uintptr_t *cursor, void *ctx)
+{
+	void *state = ((void **)ctx)[1];
+	uint8_t *cmd = (uint8_t *)cursor[0];
+	uint8_t *pass = RD_PTR(state, NG_ST_PASS);
+	const uint8_t flags = RD_U8(pass, 0x1b);
+	if (flags & 1)
+		ng_set_sampler_state(f->g, f->ops, 1, 0x72);
+	if (flags & 2)
+		ng_set_sampler_state(f->g, f->ops, 2, 0x62);
+	if (flags & 4)
+		ng_set_sampler_state(f->g, f->ops, 3, 0x62);
+	void *cache1 = RD_PTR(state, 0x58), *cache3 = RD_PTR(state, 0x68), *cache2 = RD_PTR(state, 0x60);
+	uint8_t *globals = RD_PTR(f->exe, 0x410fd08);
+	uint8_t *arr1 = RD_PTR(globals, 0x18), *arr3 = RD_PTR(globals, 0x38), *arr2 = RD_PTR(globals, 0x30);
+	const int key = RD_I32(cmd, 0);
+	unsigned prev_b5 = 0xff;
+	uint32_t prev_b4 = 0xffffffffu;
+	int last_voff = -1;
+	do {
+		const unsigned b5 = RD_U8(cmd, 5), b4 = RD_U8(cmd, 4);
+		if (prev_b5 != b5 || prev_b4 != b4) {
+			prev_b4 = b4;
+			if (!(flags & 1)) {
+				cache1 = NULL;
+			} else {
+				uint8_t *e = arr1 + (size_t)b5 * 8;
+				if (cache1 != e) {
+					tex_to_slot(f, 1, *(void **)e);
+					cache1 = e;
+				}
+			}
+			prev_b5 = b5;
+			if (!(flags & 4)) {
+				cache2 = NULL;
+				cache3 = NULL;
+			} else {
+				uint8_t *e3 = arr3 + (size_t)b4 * 8;
+				if (cache3 != e3) {
+					tex_to_slot(f, 3, *(void **)e3);
+					cache3 = e3;
+				}
+				if (!(flags & 2)) {
+					cache2 = NULL;
+				} else {
+					uint8_t *e2 = arr2 + (size_t)b4 * 8;
+					if (cache2 != e2) {
+						tex_to_slot(f, 2, *(void **)e2);
+						cache2 = e2;
+					}
+				}
+			}
+		}
+		const int voff = RD_I32(cmd, 0xc);
+		if (last_voff != voff) {
+			ngf_set_streams(f, state, RD_PTR(cmd, 0x10), voff * 0x2c, 0x2c);
+			last_voff = voff;
+		}
+		nd_draw_indexed(f->d, f->g, 0, (unsigned)RD_I32(cmd, 8), RD_U16(cmd, 6));
+		cmd += 0x20;
+		cursor[0] = (uintptr_t)cmd;
+		if (cmd == (uint8_t *)cursor[1])
+			break;
+	} while (key == RD_I32(cmd, 0));
+	RD_PTR(state, 0x58) = cache1;
+	RD_PTR(state, 0x68) = cache3;
+	RD_PTR(state, 0x60) = cache2;
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ sprites and particles
+enum { G_VERSION_XOR = 0x385ce0, G_PARTICLE_TABLE = 0x4115920, G_FLOAT_A = 0x385a98, G_FLOAT_B = 0x3859d8, G_FLOAT_C = 0x488a2c0, G_COLOR_SCALE = 0x3569e0 };
+
+// the block these functions start with: when the "mode" flag of the input is set, the versions of the constants that depend on it are bumped (the game re-sends them) and the flag cleared
+static void bump_mode_versions(ngf *f, void *input)
+{
+	if (RD_I32(input, 0x16b8) == 0)
+		return;
+	RD_U32(input, 0x129c) ^= RD_U32(f->exe, G_VERSION_XOR);
+	const unsigned offs[] = {0x1676, 0x1678, 0x1682, 0x1688, 0x168e, 0x15fe};
+	for (unsigned i = 0; i < 6; i++)
+		RD_U16(input, offs[i]) = (uint16_t)(RD_U16(input, offs[i]) + 1);
+	RD_I32(input, 0x16b8) = 0;
+}
+
+void ngf_draw_63850(ngf *f, const uint8_t *item, void *ctx)
+{
+	void *input = ((void **)ctx)[0], *state = ((void **)ctx)[1];
+	const uint8_t *desc = RD_PTR(item, 0x28);
+	const unsigned num_verts = RD_U16(desc, 2), prims = RD_U16(desc, 4);
+	const uint8_t kind = RD_U8(desc, 6);
+	void *ib = NULL, *vb = NULL;
+	int start = 0, voff = 0;
+	if (f->fn_efbe0)
+		f->fn_efbe0(kind, RD_PTR(desc, 0x10), &ib, &start);
+	if (RD_PTR(state, 0xd8) != ib) {
+		RD_PTR(state, 0xd8) = ib;
+		nd_set_indices(f->d, (nat_buffer *)ib, 0);
+	}
+	if (f->fn_efdd0)
+		f->fn_efdd0(kind, RD_PTR(desc, 0x28), &vb, &voff);
+	ngf_set_streams(f, state, vb, voff, 0x20);
+	const float fa = RD_F32(f->exe, G_FLOAT_A), fb = RD_F32(f->exe, G_FLOAT_B), fc = RD_F32(f->exe, G_FLOAT_C);
+	const unsigned count = RD_U32(item, 0x30);
+	const uint16_t *list = RD_PTR(item, 0x38);
+	uint8_t *table = RD_PTR(RD_PTR(f->exe, G_PARTICLE_TABLE), 0x328);
+	for (unsigned i = 0; i < count; i++) {
+		uint8_t *p = table + (size_t)list[i] * 0x58;
+		if (f->fn_637a0)
+			f->fn_637a0(p, input);
+		if (RD_U16(p, 0x42) != 1) {
+			const uint32_t u = (uint32_t)RD_U16(p, 0x42) - 1;
+			RD_F32(input, 0x11a4) = ((float)(u >> 4 & 0xffffffc) + fa) * fc;
+			RD_U32(input, 0x11a8) = 0x3f000000;
+			RD_U32(input, 0x11ac) = 0x3f800000;
+			RD_F32(input, 0x11a0) = ((float)((u & 0x3f) << 2) + fa) * fb;
+			RD_U16(input, 0x15e0) = (uint16_t)(RD_U16(input, 0x15e0) + 1);
+		}
+		const float c0 = (float)RD_U8(p, 0x48) * RD_F32(f->exe, G_COLOR_SCALE), c1 = (float)RD_U8(p, 0x49) * RD_F32(f->exe, G_COLOR_SCALE + 4);
+		const float c2 = (float)RD_U8(p, 0x4a) * RD_F32(f->exe, G_COLOR_SCALE + 8), c3 = (float)RD_U8(p, 0x4b) * RD_F32(f->exe, G_COLOR_SCALE + 12);
+		RD_F32(input, 0x11b0) = c0 * c0;
+		RD_F32(input, 0x11b8) = c2 * c2;
+		RD_F32(input, 0x11b4) = c1 * c1;
+		RD_F32(input, 0x11bc) = c3;
+		RD_U16(input, 0x15e2) = (uint16_t)(RD_U16(input, 0x15e2) + 1);
+		ng_apply_prim(f->g, f->ops, input, state);
+		nd_draw_indexed(f->d, f->g, 0, (unsigned)start, prims);
+		(void)num_verts;
+	}
+}
+
+void ngf_draw_5f220(ngf *f, void *ctx, uintptr_t *cursor)
+{
+	void *input = ((void **)ctx)[0], *state = ((void **)ctx)[1];
+	const int mode = *(int *)((void **)ctx)[2];
+	uint8_t *pass = RD_PTR(state, NG_ST_PASS);
+	if (RD_U8(pass, 0x1a))
+		ng_apply_ps_stable(f->g, f->ops, input, state);
+	RD_PTR(input, 0x1698) = (void *)3;
+	bump_mode_versions(f, input);
+	RD_I32(state, NG_ST_VTYPE) = 1;
+	ng_apply_decl_shader(f->g, f->ops, state);
+	ngf_depth_range(f, state, (RD_I32(input, 0x16dc) != 0) - 1);
+	pass = RD_PTR(state, NG_ST_PASS);
+	if (RD_U8(pass, 0x19))
+		ng_apply_object(f->g, f->ops, input, state);
+	uint8_t *base = (uint8_t *)cursor[0];
+	uint16_t *cur = (uint16_t *)cursor[1];
+	if (mode == 9) {
+		const uint16_t head0 = cur[0], head1 = cur[1];
+		cur += 2;
+		cursor[1] = (uintptr_t)cur;
+		if (RD_U8(pass, 0x1b) & 1) {
+			uint8_t *globals = RD_PTR(f->exe, 0x410fd08);
+			void *image = *(void **)((uint8_t *)RD_PTR(globals, 8) + (size_t)(head0 & 0xff) * 8);
+			ng_bind_sampler(f->g, f->ops, 1, 0x72, image);
+		}
+		for (int n = (head1 >> 12) + 1; n > 0; n--) {
+			const uint16_t v = *(uint16_t *)cursor[1];
+			cursor[1] += 2;
+			uint8_t *slot = base + (size_t)(v >> 4) * 4;
+			uint8_t item[0x40] = {0};
+			RD_PTR(item, 0x28) = (uint8_t *)RD_PTR(slot, 0) + (size_t)(v & 0xf) * 0x58;
+			RD_U32(item, 0x30) = RD_U16(slot, 8);
+			RD_PTR(item, 0x38) = slot + 10;
+			ngf_draw_63850(f, item, ctx);
+		}
+	} else {
+		const int n0 = (cur[1] >> 12) + 1;
+		cursor[1] += 4;
+		for (int n = n0; n > 0; n--) {
+			const uint16_t v = *(uint16_t *)cursor[1];
+			cursor[1] += 2;
+			const size_t m = (size_t)(v & 0xf) * 0x58;
+			uint8_t *slot = base + (size_t)(v >> 4) * 4;
+			uint8_t *mesh = RD_PTR(slot, 0);
+			const unsigned count = RD_U16(slot, 8);
+			const unsigned num_verts = RD_U16(mesh + m, 2), prims = RD_U16(mesh + m, 4);
+			void *ib = NULL, *vb = NULL;
+			int start = 0, voff = 0;
+			if (f->fn_efbe0)
+				f->fn_efbe0(RD_U8(mesh + m, 6), RD_PTR(mesh + m, 0x10), &ib, &start);
+			if (RD_PTR(state, 0xd8) != ib) {
+				RD_PTR(state, 0xd8) = ib;
+				nd_set_indices(f->d, (nat_buffer *)ib, 0);
+			}
+			if (f->fn_efdd0)
+				f->fn_efdd0(RD_U8(mesh + m, 6), RD_PTR(mesh + m, 0x28), &vb, &voff);
+			ngf_set_streams(f, state, vb, voff, 0x20);
+			uint8_t *table = RD_PTR(RD_PTR(f->exe, G_PARTICLE_TABLE), 0x328);
+			for (unsigned j = 0; j < count; j++) {
+				if (f->fn_637a0)
+					f->fn_637a0(table + (size_t)RD_U16(slot, 10 + j * 2) * 0x58, input);
+				ng_apply_prim(f->g, f->ops, input, state);
+				nd_draw_indexed(f->d, f->g, 0, (unsigned)start, prims);
+			}
+			(void)num_verts;
+		}
+	}
+}

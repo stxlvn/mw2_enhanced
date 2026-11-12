@@ -209,3 +209,17 @@ void ng_apply_object_args(ng_state *s, const ng_ops *ops, void *input, void *sta
 {
 	apply_args(s, ops, input, state, args, count, (1u << A_CODE_VC) | (1u << A_CODE_SAMPLER));
 }
+
+void ng_set_sampler_state(ng_state *s, const ng_ops *ops, unsigned slot, uint8_t sampler_byte)
+{
+	if (slot >= 16)
+		return;
+	s->sampler_byte[slot] = sampler_byte;
+	s->sampler_word[slot] = state11_sampler_word(sampler_byte, 0, ops->filter_table);
+	s->n_samplers++;
+}
+
+void ng_apply_code_vc_args(ng_state *s, const ng_ops *ops, void *input, void *state, const void *args, unsigned count)
+{
+	apply_args(s, ops, input, state, args, count, 1u << A_CODE_VC);
+}

@@ -16,6 +16,12 @@ typedef struct {
 	void (*fn_2d_constants)(void *input);        // 0x4ec20
 	void (*fn_viewport_rect)(void *input, int *rect4); // 0x50ba0
 	void (*fn_projection)(void *input, int *rect4);    // 0x50d70
+	void (*fn_5c8d0)(void *input);                     // 0x5c8d0: constant-version bookkeeping for the sort-key draws
+	void (*fn_5d650)(void *input, void *arg, int zero); // 0x5d650: per-batch constants
+	void (*fn_637a0)(void *particle, void *input);      // 0x637a0: per-particle constants (CPU)
+	void (*fn_efbe0)(uint8_t kind, void *handle, void **index_buffer, int *start_index); // 0xefbe0: the index buffer and start of a mesh kind
+	void (*fn_efdd0)(uint8_t kind, void *handle, void **vertex_buffer, int *byte_offset); // 0xefdd0
+	uint8_t tex_thunk[16][32];                          // game-image look-alikes (first field = the native image) for the raw texture pointers of 0x5fe50
 } ngf;
 
 // the dynamic-ring structs of the game: {int offset, int capacity, buffer pointer} (vertex ring: *(rva 0x41165d8); index rings: rva 0x4116568 and the one *(rva 0x4116580) points to)
@@ -38,5 +44,13 @@ void ngf_depth_range(ngf *f, void *state, int hack);
 void ngf_target_switch(ngf *f, void *input, void *state, int n);
 // 0x26840: the draw loop over the passes of the current technique; cmd = {numVerts, primCount, startIndex}
 void ngf_draw_26840(ngf *f, void *ctx, const int *cmd);
+// 0x5cc10: the sort-key draw loop (one index buffer, per-key vertex stream); cursor = {cur, end} of 4-byte commands
+void ngf_draw_5cc10(ngf *f, void *ctx, uintptr_t *cursor);
+// 0x5fe50: the sky / probe draw loop: textures 1..3 from the arrays of the game's global at rva 0x410fd08, 44-byte vertices; cursor = {cur, end} of 32-byte commands
+void ngf_draw_5fe50(ngf *f, uintptr_t *cursor, void *ctx);
+// 0x63850: one batch of particles / sprites (item = the 0x5f220 batch record); ctx = {input, state}
+void ngf_draw_63850(ngf *f, const uint8_t *item, void *ctx);
+// 0x5f220: sprite / particle batches; ctx = {input, state, mode pointer}, cursor = {base, current} (see natdrawfn.c)
+void ngf_draw_5f220(ngf *f, void *ctx, uintptr_t *cursor);
 // 0x399f0: a full-screen-style draw of one material with its own streams
 void ngf_draw_399f0(ngf *f, void *ctx, void *material, void *draw_info);
