@@ -6,6 +6,7 @@
 
 #include "../log.h"
 #include "../settings.h"
+#include "../upscale.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -332,6 +333,15 @@ int nbr_start(nbr *n, uint8_t *p)
 	np.low_latency = settings_lowlatency();
 	np.hdr = settings_hdr(&np.hdr_white, &np.hdr_peak);
 	np.msaa = RD_I32(p, 0x28);
+	{ // FSR 1 upscaling (settings.ini [display] upscale): the game renders at its own size, the swap chain and the window have the output size
+		int ow = 0, oh = 0;
+		if (upscale_native_sizes((int)np.width, (int)np.height, &ow, &oh)) {
+			np.out_width = (unsigned)ow;
+			np.out_height = (unsigned)oh;
+			np.up_sharp = settings_upscale_sharpness();
+			upscale_device_made((HWND)np.hwnd);
+		}
+	}
 	char err[160] = "";
 	RD_I32(e, G_DEPTH_FMT) = 0x4b;
 	log_printf("native11: nbr_start: window %p, %ux%u, mode %d, refresh %u, samples %d", np.hwnd, np.width, np.height, RD_I32(p, 0xc), np.refresh, np.msaa);

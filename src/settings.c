@@ -248,8 +248,8 @@ void settings_load(void)
 		directx11_on = 0; // one native renderer at a time (12 wins)
 	if (directx11_on || directx12_on) { // the native renderer: nothing creates a Direct3D 9 device, so every feature that is built on one is off
 		if (d3d9ex_on || d3d9on12_on || fsr3_on || dlss_on || upscale_on)
-			log_printf("settings: [display] directx%d=1: d3d9ex / d3d9on12 / upscale / fsr3 / dlss are ignored (they work on a Direct3D 9 device)", directx12_on ? 12 : 11);
-		d3d9ex_on = d3d9on12_on = fsr3_on = dlss_on = upscale_on = 0;
+			log_printf("settings: [display] directx%d=1: d3d9ex / d3d9on12 / fsr3 / dlss are ignored (they work on a Direct3D 9 device)", directx12_on ? 12 : 11);
+		d3d9ex_on = d3d9on12_on = fsr3_on = dlss_on = 0; // (upscale = FSR 1 is done by the native renderer itself)
 	}
 	borderless_on = GetPrivateProfileIntA("display", "borderless", 1, path) != 0;
 	hudtextscale = (int)GetPrivateProfileIntA("display", "hudtextscale", 50, path);

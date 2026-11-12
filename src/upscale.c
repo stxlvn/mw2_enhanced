@@ -24,7 +24,7 @@
 #include "settings.h"
 #include "upscale.h"
 
-static const char easu_hlsl[] =
+const char upscale_easu_hlsl[] =
 	"sampler2D src : register(s0);\n"
 	"float4 c0 : register(c0);\n" // viewport / output size, offsets
 	"float4 c1 : register(c1);\n" // 1 / input size, first gather offsets
@@ -140,7 +140,7 @@ static const char easu_hlsl[] =
 	"  return float4(pix, 1.0);\n"
 	"}\n";
 
-static const char rcas_hlsl[] =
+const char upscale_rcas_hlsl[] =
 	"sampler2D src : register(s0);\n"
 	"float4 k0 : register(c0);\n" // x: the sharpness (2 ^ -stops), yz: 1 / size
 	"float3 Ld(float2 ip, float2 o) { return tex2D(src, (ip + o + 0.5) * k0.yz).rgb; }\n"
@@ -169,6 +169,9 @@ static const char rcas_hlsl[] =
 	"  return float4(pix, 1.0);\n"
 	"}\n";
 
+#define easu_hlsl upscale_easu_hlsl
+#define rcas_hlsl upscale_rcas_hlsl
+
 static const char vs_hlsl[] = "float4 main(float4 p : POSITION) : POSITION { return p; }\n";
 
 typedef HRESULT(WINAPI *compile_t)(const void *, SIZE_T, const char *, const void *, void *, const char *, const char *, UINT, UINT, void **, void **);
@@ -190,6 +193,26 @@ int upscale_enabled(void)
 {
 	// the sizing (the game renders small, the back buffer has the output size, the window and the cursor follow) is shared with FSR 3 (fsr3.c); the FSR 1 passes only run with upscale=1
 	return (settings_upscale() || settings_fsr3()) && settings_upscale_width() > 0 && settings_upscale_height() > 0;
+}
+
+// the native renderers (nat11.c / nat12.c): the game renders in_w x in_h, the swap chain (and the window) is out_w x out_h; 0 when nothing is upscaled
+int upscale_native_sizes(int game_w, int game_h, int *out_width, int *out_height)
+{
+	if (!upscale_enabled() || !settings_upscale())
+		return 0;
+	const int w = settings_upscale_width(), h = settings_upscale_height();
+	if (game_w == w && game_h == h) {
+		log_printf("upscale: the game asked for the output size %dx%d itself: nothing to upscale (set the game's own resolution lower)", w, h);
+		return 0;
+	}
+	out_w = w;
+	out_h = h;
+	in_w = game_w;
+	in_h = game_h;
+	*out_width = w;
+	*out_height = h;
+	log_printf("upscale: native renderer: the game renders %dx%d, the swap chain is %dx%d (FSR 1: EASU + RCAS, sharpness %d/100 stop)", in_w, in_h, w, h, settings_upscale_sharpness());
+	return 1;
 }
 
 int upscale_adjust_params(D3DPRESENT_PARAMETERS *pp)

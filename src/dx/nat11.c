@@ -8,6 +8,9 @@
 #include <dxgi.h>
 #include "natswap.h"
 #include <dxgi1_6.h>
+#include "natup.h"
+#define BW(d) ((d)->p.out_width ? (d)->p.out_width : (d)->p.width)
+#define BH(d) ((d)->p.out_height ? (d)->p.out_height : (d)->p.height)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,7 +43,14 @@ struct nat_device {
 	// HDR: the swap chain is scRGB (R16G16B16A16_FLOAT, linear, 1.0 = 80 nits) and the present is a pass that converts the scene into it
 	int hdr_on;
 	ID3D11RenderTargetView *back_rtv;
-	nat_shader *hdr_vs, *hdr_ps;
+	nat_shader *hdr_vs, *hdr_ps, *easu_ps, *rcas_ps;
+	ID3D11SamplerState *hdr_smp;
+	int up_on; // the picture is upscaled (FSR 1) from the scene size to the swap chain's
+	struct up_img {
+		ID3D11Texture2D *tex;
+		ID3D11RenderTargetView *rtv;
+		ID3D11ShaderResourceView *srv;
+	} up_a, up_b;
 	ID3D11Buffer *hdr_cb;
 	ID3D11RasterizerState *hdr_rs;
 	ID3D11DepthStencilState *hdr_ds;
@@ -74,6 +84,12 @@ static void release_targets(nat_device *d)
 	REL(d->depth);
 	REL(d->backbuffer);
 	REL(d->back_rtv);
+	REL(d->up_a.rtv);
+	REL(d->up_a.srv);
+	REL(d->up_a.tex);
+	REL(d->up_b.rtv);
+	REL(d->up_b.srv);
+	REL(d->up_b.tex);
 }
 
 static nat_shader *shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, char *err, size_t err_size);
@@ -101,12 +117,12 @@ static void hdr_setup(nat_device *d)
 	if (FAILED(IUnknown_QueryInterface((IUnknown *)d->swap, &IID_IDXGISwapChain3, (void **)&s3)) || !s3)
 		return;
 	// (the support is asked for the swap chain's current format: the buffers become half float first, and go back when scRGB is not available)
-	const HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, d->p.width, d->p.height, DXGI_FORMAT_R16G16B16A16_FLOAT, ns_swap_flags(d->tearing));
+	const HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, BW(d), BH(d), DXGI_FORMAT_R16G16B16A16_FLOAT, ns_swap_flags(d->tearing));
 	const HRESULT hc = SUCCEEDED(hr) ? IDXGISwapChain3_CheckColorSpaceSupport(s3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, &support) : hr;
 	if (SUCCEEDED(hc) && (support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) && SUCCEEDED(IDXGISwapChain3_SetColorSpace1(s3, DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)))
 		d->hdr_on = 1;
 	else if (SUCCEEDED(hr))
-		IDXGISwapChain_ResizeBuffers(d->swap, 0, d->p.width, d->p.height, DXGI_FORMAT_B8G8R8A8_UNORM, ns_swap_flags(d->tearing));
+		IDXGISwapChain_ResizeBuffers(d->swap, 0, BW(d), BH(d), DXGI_FORMAT_B8G8R8A8_UNORM, ns_swap_flags(d->tearing));
 	if (nat_log_hook)
 		nat_log_hook("native11: HDR: ResizeBuffers %lx, colour space support %lx / %x -> %s", (unsigned long)hr, (unsigned long)hc, support, d->hdr_on ? "scRGB on" : "off");
 	IDXGISwapChain3_Release(s3);
@@ -127,13 +143,16 @@ static const char HDR_PS[] =
 	"  return float4(lin * e * k.x, 1.0);\n"
 	"}\n";
 
-static int hdr_present(nat_device *d)
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ the final passes (FSR 1, HDR)
+static nat_shader *shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, char *err, size_t err_size);
+
+// one full-screen pass: the shader's texture t0 is `srv`, its constants (up to four float4) are k, the target is `rtv` of w x h pixels
+static int pass11(nat_device *d, nat_shader *ps, ID3D11ShaderResourceView *srv, const float *k, unsigned nk, ID3D11RenderTargetView *rtv, unsigned w, unsigned h)
 {
 	if (!d->hdr_vs) {
 		char err[160];
 		d->hdr_vs = shader_from_hlsl(d, HDR_VS, 1, err, sizeof(err));
-		d->hdr_ps = shader_from_hlsl(d, HDR_PS, 0, err, sizeof(err));
-		D3D11_BUFFER_DESC bd = {16, D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE, 0, 0};
+		D3D11_BUFFER_DESC bd = {64, D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE, 0, 0};
 		ID3D11Device_CreateBuffer(d->dev, &bd, NULL, &d->hdr_cb);
 		D3D11_RASTERIZER_DESC rd = {0};
 		rd.FillMode = D3D11_FILL_SOLID;
@@ -144,22 +163,23 @@ static int hdr_present(nat_device *d)
 		D3D11_BLEND_DESC bl = {0};
 		bl.RenderTarget[0].RenderTargetWriteMask = 15;
 		ID3D11Device_CreateBlendState(d->dev, &bl, &d->hdr_bs);
+		D3D11_SAMPLER_DESC sd = {0};
+		sd.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+		sd.AddressU = sd.AddressV = sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+		sd.MaxLOD = D3D11_FLOAT32_MAX;
+		ID3D11Device_CreateSamplerState(d->dev, &sd, &d->hdr_smp);
 	}
-	if (!d->hdr_vs || !d->hdr_ps || !d->hdr_cb || !d->back_rtv)
+	if (!d->hdr_vs || !ps || !d->hdr_cb || !rtv || !srv)
 		return 0;
-	nat_scene_resolve(d);
 	D3D11_MAPPED_SUBRESOURCE m;
 	if (SUCCEEDED(ID3D11DeviceContext_Map(d->ctx, (ID3D11Resource *)d->hdr_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &m))) {
-		float *k = (float *)m.pData;
-		const float white = (float)(d->p.hdr_white > 0 ? d->p.hdr_white : 200), peak = (float)(d->p.hdr_peak > 0 ? d->p.hdr_peak : 600);
-		k[0] = white / 80.0f;
-		k[1] = peak > white ? peak / white : 1.0f;
-		k[2] = k[3] = 0;
+		memset(m.pData, 0, 64);
+		memcpy(m.pData, k, nk * 16);
 		ID3D11DeviceContext_Unmap(d->ctx, (ID3D11Resource *)d->hdr_cb, 0);
 	}
 	ID3D11DeviceContext *x = d->ctx;
-	ID3D11DeviceContext_OMSetRenderTargets(x, 1, &d->back_rtv, NULL);
-	D3D11_VIEWPORT vp = {0, 0, (float)d->p.width, (float)d->p.height, 0, 1};
+	ID3D11DeviceContext_OMSetRenderTargets(x, 1, &rtv, NULL);
+	D3D11_VIEWPORT vp = {0, 0, (float)w, (float)h, 0, 1};
 	ID3D11DeviceContext_RSSetViewports(x, 1, &vp);
 	ID3D11DeviceContext_RSSetState(x, d->hdr_rs);
 	ID3D11DeviceContext_OMSetBlendState(x, d->hdr_bs, NULL, 0xffffffffu);
@@ -167,13 +187,91 @@ static int hdr_present(nat_device *d)
 	ID3D11DeviceContext_IASetInputLayout(x, NULL);
 	ID3D11DeviceContext_IASetPrimitiveTopology(x, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	ID3D11DeviceContext_VSSetShader(x, (ID3D11VertexShader *)nat_shader_object(d->hdr_vs), NULL, 0);
-	ID3D11DeviceContext_PSSetShader(x, (ID3D11PixelShader *)nat_shader_object(d->hdr_ps), NULL, 0);
+	ID3D11DeviceContext_PSSetShader(x, (ID3D11PixelShader *)nat_shader_object(ps), NULL, 0);
 	ID3D11DeviceContext_PSSetConstantBuffers(x, 0, 1, &d->hdr_cb);
-	ID3D11DeviceContext_PSSetShaderResources(x, 0, 1, &d->scene_srv);
+	ID3D11DeviceContext_PSSetShaderResources(x, 0, 1, &srv);
+	ID3D11DeviceContext_PSSetSamplers(x, 0, 1, &d->hdr_smp);
 	ID3D11DeviceContext_Draw(x, 3, 0);
 	ID3D11ShaderResourceView *none = NULL;
 	ID3D11DeviceContext_PSSetShaderResources(x, 0, 1, &none);
+	ID3D11DeviceContext_OMSetRenderTargets(x, 0, NULL, NULL);
 	return 1;
+}
+
+// a render target texture of the output size (RGBA8) and its views, for the passes' intermediate pictures
+static int up_target(nat_device *d, struct up_img *u)
+{
+	if (u->tex)
+		return 1;
+	D3D11_TEXTURE2D_DESC td = {0};
+	td.Width = BW(d);
+	td.Height = BH(d);
+	td.MipLevels = 1;
+	td.ArraySize = 1;
+	td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	td.SampleDesc.Count = 1;
+	td.Usage = D3D11_USAGE_DEFAULT;
+	td.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+	if (FAILED(ID3D11Device_CreateTexture2D(d->dev, &td, NULL, &u->tex)))
+		return 0;
+	ID3D11Device_CreateRenderTargetView(d->dev, (ID3D11Resource *)u->tex, NULL, &u->rtv);
+	ID3D11Device_CreateShaderResourceView(d->dev, (ID3D11Resource *)u->tex, NULL, &u->srv);
+	return u->rtv && u->srv;
+}
+
+// the present of an upscaled and / or HDR picture: scene -> (EASU -> RCAS) -> (HDR conversion) -> the back buffer; 0 when it could not be done
+static int final_passes(nat_device *d)
+{
+	char err[160];
+	if (!d->back_rtv)
+		return 0;
+	nat_scene_resolve(d);
+	ID3D11ShaderResourceView *src = d->scene_srv;
+	if (d->up_on) {
+		if (!d->easu_ps) {
+			char *e = nu_shader(0), *r = nu_shader(1);
+			d->easu_ps = shader_from_hlsl(d, e, 0, err, sizeof(err));
+			d->rcas_ps = shader_from_hlsl(d, r, 0, err, sizeof(err));
+			free(e);
+			free(r);
+			if (!d->easu_ps || !d->rcas_ps) {
+				if (nat_log_hook)
+					nat_log_hook("native11: FSR 1 shaders failed: %s", err);
+				d->up_on = 0;
+				return 0;
+			}
+		}
+		if (!up_target(d, &d->up_a) || (d->hdr_on && !up_target(d, &d->up_b)))
+			return 0;
+		const float fin_w = (float)d->p.width, fin_h = (float)d->p.height, fout_w = (float)BW(d), fout_h = (float)BH(d);
+		const float con[16] = {
+			fin_w / fout_w, fin_h / fout_h, 0.5f * fin_w / fout_w - 0.5f, 0.5f * fin_h / fout_h - 0.5f,
+			1.0f / fin_w, 1.0f / fin_h, 1.0f / fin_w, -1.0f / fin_h,
+			-1.0f / fin_w, 2.0f / fin_h, 1.0f / fin_w, 2.0f / fin_h,
+			0.0f, 4.0f / fin_h, 0.0f, 0.0f,
+		};
+		if (!pass11(d, d->easu_ps, src, con, 4, d->up_a.rtv, BW(d), BH(d)))
+			return 0;
+		float sharp = 1.0f;
+		for (int i = 0; i < d->p.up_sharp; i++)
+			sharp *= 0.99309249543703590153f; // 2 ^ (-1/100)
+		const float k0[4] = {sharp, 1.0f / fout_w, 1.0f / fout_h, 0.0f};
+		if (d->hdr_on) {
+			if (!pass11(d, d->rcas_ps, d->up_a.srv, k0, 1, d->up_b.rtv, BW(d), BH(d)))
+				return 0;
+			src = d->up_b.srv;
+		} else {
+			return pass11(d, d->rcas_ps, d->up_a.srv, k0, 1, d->back_rtv, BW(d), BH(d));
+		}
+	}
+	if (d->hdr_on) {
+		if (!d->hdr_ps)
+			d->hdr_ps = shader_from_hlsl(d, HDR_PS, 0, err, sizeof(err));
+		const float white = (float)(d->p.hdr_white > 0 ? d->p.hdr_white : 200), peak = (float)(d->p.hdr_peak > 0 ? d->p.hdr_peak : 600);
+		const float k[4] = {white / 80.0f, peak > white ? peak / white : 1.0f, 0, 0};
+		return pass11(d, d->hdr_ps, src, k, 1, d->back_rtv, BW(d), BH(d));
+	}
+	return 0;
 }
 
 static int build_targets(nat_device *d, char *err, size_t err_size)
@@ -183,7 +281,7 @@ static int build_targets(nat_device *d, char *err, size_t err_size)
 		set_err(err, err_size, "swap chain buffer: %lx", (unsigned long)hr);
 		return 0;
 	}
-	if (d->hdr_on)
+	if (d->hdr_on || d->up_on)
 		ID3D11Device_CreateRenderTargetView(d->dev, (ID3D11Resource *)d->backbuffer, NULL, &d->back_rtv);
 	D3D11_TEXTURE2D_DESC td = {0};
 	td.Width = d->p.width;
@@ -336,8 +434,8 @@ int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size
 	IDXGIDevice_Release(dxdev);
 	d->samples = pick_samples(d, p->msaa);
 	DXGI_SWAP_CHAIN_DESC sc = {0};
-	sc.BufferDesc.Width = d->p.width;
-	sc.BufferDesc.Height = d->p.height;
+	sc.BufferDesc.Width = BW(d);
+	sc.BufferDesc.Height = BH(d);
 	sc.BufferDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 	sc.SampleDesc.Count = 1;
 	sc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
@@ -355,6 +453,7 @@ int nat_create(const nat_params *p, nat_device **out, char *err, size_t err_size
 	}
 	d->waitable = ns_waitable((IUnknown *)d->swap, d->p.low_latency ? 1 : 2);
 	IDXGIFactory_MakeWindowAssociation(d->factory, d->hwnd, DXGI_MWA_NO_WINDOW_CHANGES | DXGI_MWA_NO_ALT_ENTER); // the game handles Alt+Enter itself
+	d->up_on = d->p.out_width != 0 && (d->p.out_width != d->p.width || d->p.out_height != d->p.height);
 	if (d->p.hdr)
 		hdr_setup(d);
 	if (!build_targets(d, err, err_size)) {
@@ -410,13 +509,13 @@ int nat_reset(nat_device *d, const nat_params *p, char *err, size_t err_size)
 		d->fullscreen_set = 0;
 	}
 	DXGI_MODE_DESC m = {0};
-	m.Width = p->width;
-	m.Height = p->height;
+	m.Width = BW(d);
+	m.Height = BH(d);
 	m.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 	IDXGISwapChain_ResizeTarget(d->swap, &m);
 	if (p->fullscreen && !d->fullscreen_set && SUCCEEDED(IDXGISwapChain_SetFullscreenState(d->swap, TRUE, NULL)))
 		d->fullscreen_set = 1;
-	HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, p->width, p->height, d->hdr_on ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_UNKNOWN, ns_swap_flags(d->tearing));
+	HRESULT hr = IDXGISwapChain_ResizeBuffers(d->swap, 0, BW(d), BH(d), d->hdr_on ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_UNKNOWN, ns_swap_flags(d->tearing));
 	if (FAILED(hr)) {
 		set_err(err, err_size, "ResizeBuffers: %lx", (unsigned long)hr);
 		return 0;
@@ -430,10 +529,55 @@ void nat_scene_resolve(nat_device *d)
 		ID3D11DeviceContext_ResolveSubresource(d->ctx, (ID3D11Resource *)d->resolved, 0, (ID3D11Resource *)d->scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
 }
 
+// QA: MW2COOP_DUMPBACK=<n>: the back buffer (B8G8R8A8) of the n-th present is written to mw2coop\native11\back.bmp (what the upscaling passes made)
+static void dump_back(nat_device *d)
+{
+	D3D11_TEXTURE2D_DESC td;
+	ID3D11Texture2D_GetDesc(d->backbuffer, &td);
+	if (td.Format != DXGI_FORMAT_B8G8R8A8_UNORM)
+		return;
+	td.Usage = D3D11_USAGE_STAGING;
+	td.BindFlags = 0;
+	td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	td.MiscFlags = 0;
+	ID3D11Texture2D *st = NULL;
+	if (FAILED(ID3D11Device_CreateTexture2D(d->dev, &td, NULL, &st)))
+		return;
+	ID3D11DeviceContext_CopyResource(d->ctx, (ID3D11Resource *)st, (ID3D11Resource *)d->backbuffer);
+	D3D11_MAPPED_SUBRESOURCE m;
+	if (SUCCEEDED(ID3D11DeviceContext_Map(d->ctx, (ID3D11Resource *)st, 0, D3D11_MAP_READ, 0, &m))) {
+		FILE *f = fopen("mw2coop\native11\back.bmp", "wb");
+		if (f) {
+			const unsigned w = td.Width, h = td.Height;
+			uint8_t hdr[54] = {'B', 'M'};
+			const uint32_t size = 54 + w * h * 4, off = 54, dib = 40, planes_bpp = 1 | 32u << 16;
+			memcpy(hdr + 2, &size, 4);
+			memcpy(hdr + 10, &off, 4);
+			memcpy(hdr + 14, &dib, 4);
+			memcpy(hdr + 18, &w, 4);
+			const int32_t nh = -(int32_t)h;
+			memcpy(hdr + 22, &nh, 4);
+			memcpy(hdr + 26, &planes_bpp, 4);
+			fwrite(hdr, 1, 54, f);
+			for (unsigned y = 0; y < h; y++)
+				fwrite((uint8_t *)m.pData + (size_t)y * m.RowPitch, 4, w, f);
+			fclose(f);
+		}
+		ID3D11DeviceContext_Unmap(d->ctx, (ID3D11Resource *)st, 0);
+	}
+	ID3D11Texture2D_Release(st);
+}
+
 int nat_present(nat_device *d)
 {
-	if (d->hdr_on && hdr_present(d))
-		;
+	if ((d->hdr_on || d->up_on) && final_passes(d)) {
+		static int n_present;
+		const char *want = getenv("MW2COOP_DUMPBACK");
+		if (want && ++n_present == atoi(want))
+			dump_back(d);
+	}
+	else if (BW(d) != d->p.width || BH(d) != d->p.height)
+		; // (upscaling failed: there is nothing to copy 1:1)
 	else if (d->samples > 1)
 		ID3D11DeviceContext_ResolveSubresource(d->ctx, (ID3D11Resource *)d->backbuffer, 0, (ID3D11Resource *)d->scene, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
 	else

@@ -18,6 +18,8 @@ typedef struct {
 	int hdr; // HDR wanted: an scRGB swap chain when the window's monitor has HDR on in Windows (nat_hdr_active tells)
 	int hdr_white; // paper white in nits (the picture's 100 per cent)
 	int hdr_peak; // the nits the brightest highlights are stretched to
+	unsigned out_width, out_height; // the swap chain's size when the picture is upscaled (0 = the size above); up_sharp: RCAS sharpening in hundredths of a stop
+	int up_sharp;
 	int low_latency; // one frame may be queued for the display (default two)
 	int msaa; // samples: 0 / 1 none, 2, 4, 8 (lowered to what the adapter supports)
 } nat_params;
