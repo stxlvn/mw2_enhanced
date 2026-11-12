@@ -247,6 +247,17 @@ void nd_set_scissor(nd *d, int enable, int left, int top, int right, int bottom)
 	d->scissor.right = right;
 	d->scissor.bottom = bottom;
 }
+void nd_set_scissor_rect(nd *d, int left, int top, int right, int bottom)
+{
+	d->scissor.left = left;
+	d->scissor.top = top;
+	d->scissor.right = right;
+	d->scissor.bottom = bottom;
+}
+void nd_set_scissor_enable(nd *d, int enable)
+{
+	d->scissor_on = enable;
+}
 void nd_set_stencil(nd *d, unsigned ref, unsigned read_mask, unsigned write_mask)
 {
 	d->stencil_ref = ref;
@@ -485,7 +496,7 @@ static ID3D11SamplerState *sampler_state(nd *d, uint32_t word)
 	state11_sampler_t sd;
 	state11_sampler_decode(word, &sd);
 	D3D11_SAMPLER_DESC desc = {0};
-	if (sd.min == 3 || sd.mag == 3 || sd.mip == 3 || sd.aniso >= 2)
+	if (sd.min == 3 || sd.mag == 3 || sd.mip == 3) // (the anisotropy level alone changes nothing in Direct3D 9: the filter must be anisotropic)
 		desc.Filter = D3D11_FILTER_ANISOTROPIC;
 	else
 		desc.Filter = (D3D11_FILTER)((sd.min == 2 ? 0x10 : 0) | (sd.mag == 2 ? 4 : 0) | (sd.mip == 2 ? 1 : 0));
@@ -570,8 +581,7 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 	ID3D11DeviceContext_OMSetRenderTargets(c, rtv ? 1 : 0, &rtv, dsv);
 	D3D11_VIEWPORT vp = {d->vp[0], d->vp[1], d->vp[2], d->vp[3], d->vp[4], d->vp[5]};
 	ID3D11DeviceContext_RSSetViewports(c, 1, &vp);
-	if (d->scissor_on)
-		ID3D11DeviceContext_RSSetScissorRects(c, 1, &d->scissor);
+	ID3D11DeviceContext_RSSetScissorRects(c, 1, &d->scissor);
 	ID3D11DeviceContext_RSSetState(c, raster_state(d, &st, d->scissor_on, bias, slope));
 	ID3D11DeviceContext_OMSetBlendState(c, blend_state(d, &st), NULL, 0xffffffffu);
 	ID3D11DeviceContext_OMSetDepthStencilState(c, depth_state(d, &st), d->stencil_ref);

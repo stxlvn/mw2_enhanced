@@ -41,6 +41,9 @@ void nd_destroy(nd *d);
 void nd_set_targets(nd *d, nat_image *color, nat_image *depth);
 void nd_set_viewport(nd *d, float x, float y, float w, float h, float min_z, float max_z);
 void nd_set_scissor(nd *d, int enable, int left, int top, int right, int bottom);
+// the scissor rectangle is always set by the game (0x50c60); whether it is applied is a separate switch (the UI clip commands 0x42fd0 / 0x43100)
+void nd_set_scissor_rect(nd *d, int left, int top, int right, int bottom);
+void nd_set_scissor_enable(nd *d, int enable);
 void nd_set_stencil(nd *d, unsigned ref, unsigned read_mask, unsigned write_mask);
 void nd_set_stream(nd *d, unsigned slot, nat_buffer *vb, unsigned offset, unsigned stride);
 void nd_set_indices(nd *d, nat_buffer *ib, int is32);
