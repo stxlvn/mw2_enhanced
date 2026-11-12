@@ -28,6 +28,7 @@
 #include "dx/stateprobe.h"
 #include "dx/mirror11.h"
 #include "dx/d3dcallers.h"
+#include "dx/natcheck.h"
 
 #define VT_CREATE_DEVICE         16 // IDirect3D9::CreateDevice
 #define VT_CREATE_TEXTURE        23 // IDirect3DDevice9::CreateTexture ... CreateIndexBuffer
@@ -299,6 +300,7 @@ static void hook_shader_dump(IDirect3DDevice9 *dev)
 	d3dcallers_hook_device(dev); // QA, MW2COOP_D3DCALLERS=1
 	stateprobe_hook_device(dev); // QA, MW2COOP_STATEPROBE=1
 	mirror11_hook_device(dev);   // QA, MW2COOP_D3D11MIRROR=1
+	natcheck_hook_device(dev);  // QA, MW2COOP_NATCHECK=1
 	if (!getenv("MW2COOP_DUMPSHADERS"))
 		return;
 	void **vt = *(void ***)dev;
