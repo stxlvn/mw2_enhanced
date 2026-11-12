@@ -351,3 +351,15 @@ Design: one direct queue and one command list (render thread), three command all
 In one DLL: `build.sh` compiles the renderer files that call the API (and the two Direct3D 12 files) a second time, prefixes every global symbol they define with `b12_` (`llvm-objcopy --redefine-syms`) and links both; `natboot.c` (Direct3D 11) hands over to `b12_natboot_install` when `[display] directx12=1` (or `MW2COOP_NATIVE12=1`). The DirectX row of the Enhanced page has "DirectX 12 (native)" as its fifth choice.
 
 Not known yet: whether the game runs on it (the first in-game run is the next step), the cost of pipeline state compiles and per-draw constant uploads, MSAA resolves at present, exclusive full screen with the flip model.
+
+## Features on the native renderers (2026-11-12 night)
+
+All in the DirectX 11 and 12 back ends; settings.ini `[display]` (documented in content/release/settings.ini):
+
+- **Flip model swap chain, tearing, frame latency**: `natswap.h`. 11 and 12 use `FLIP_DISCARD`, the frame latency waitable object (`lowlatency=1` queues one frame instead of two) and present with `ALLOW_TEARING` when vsync is off, the window is not in exclusive full screen and the system allows it.
+- **`aniso=2|4|8|16`**: forces anisotropic filtering on every sampler that is mipmapped with linear min/mag (`nd_aniso_override`; the game's own level stays when it asks for more).
+- **`hdr=1`** (`hdr_white`, `hdr_peak`): scRGB swap chain (R16G16B16A16_FLOAT, G10 P709) when Windows has HDR on for the monitor; the scene is linearised (gamma 2.2), scaled to the paper white, highlights stretched towards the peak, in a final pass. The buffers go half float BEFORE `CheckColorSpaceSupport` (it asks for the current format). `MW2COOP_HDRFORCE=1` forces it on an SDR monitor (looks overexposed there, by design).
+- **`upscale=1`** (FSR 1, `upscale_width/height/sharpness`): the scene stays at the game's size, the swap chain and the window have the output size (`upscale_native_sizes`, `upscale_device_made` from upscale.c); EASU + RCAS are the SM3 shaders of upscale.c turned into SM5 by text substitution (`natup.h`). Final passes: scene -> EASU -> RCAS -> (HDR) -> back buffer, `pass11` / `pass12`. FSR 3 / DLSS are still off in the native modes (they need depth, motion vectors and a jitter in the projection: the code in fsr3.c is built on Direct3D 9 on 12).
+- **Shader cache**: `natcache.h`, compiled DXBC on disk in `mw2coop/shadercache`, worker threads warm it when the game loads its shaders.
+- **Bug found with it: a render target change must reset the viewport and scissor** (Direct3D 9 does; the engine's blur / downsample passes rely on it). Without it the pause blur and every effect that renders into a smaller target came out as one flat colour (the owner's "solid colour flash"). `ngf_target_switch` in natdrawfn.c.
+- QA: `MW2COOP_FRAMETIME=1` (frame times, shader compile times), `MW2COOP_TRACEFRAME=<n>` (every draw of one frame), `MW2COOP_DUMPBACK=<n>` (back buffer BMP, 11 only: did not write a file in the first try, not debugged).
