@@ -369,7 +369,18 @@ static int fmt_info(unsigned f, fmt_t *o)
 	return 0;
 }
 
+// An image starts with a Direct3D 9 style vtable (Release +0x10) for the engine's unload code that releases the stored pointer itself (the film planes, 0x9f10).
+static void *image_vt[4];
+static long image_nop(void *self)
+{
+	(void)self;
+	return 0;
+}
+static long image_release(void *self);
+static long image_addref(void *self);
 struct nat_image {
+	void **vt;
+	int refs; // the Direct3D 9 surfaces of a texture (the render-target table's entries) hold references: the image is freed with the last release
 	nat_device *dev;
 	nat_image_desc desc;
 	fmt_t f;
@@ -398,6 +409,13 @@ nat_image *nat_image_create(nat_device *d, const nat_image_desc *desc)
 	if (!fmt_info(desc->d3d9_format, &f))
 		return NULL;
 	nat_image *im = calloc(1, sizeof(*im));
+	if (!image_vt[0]) {
+		image_vt[0] = image_vt[3] = (void *)image_nop;
+		image_vt[1] = (void *)image_addref;
+		image_vt[2] = (void *)image_release;
+	}
+	im->vt = image_vt;
+	im->refs = 1;
 	im->dev = d;
 	im->desc = *desc;
 	im->f = f;
@@ -475,9 +493,17 @@ nat_image *nat_image_create(nat_device *d, const nat_image_desc *desc)
 	return im;
 }
 
+void nat_image_addref(nat_image *i)
+{
+	if (i)
+		i->refs++;
+}
+
 void nat_image_destroy(nat_image *i)
 {
 	if (!i)
+		return;
+	if (--i->refs > 0)
 		return;
 	REL(i->srv);
 	REL(i->srv_srgb);
@@ -486,6 +512,16 @@ void nat_image_destroy(nat_image *i)
 	REL(i->dsv);
 	REL(i->res);
 	free(i);
+}
+static long image_release(void *self)
+{
+	nat_image_destroy((nat_image *)self);
+	return 0;
+}
+static long image_addref(void *self)
+{
+	nat_image_addref((nat_image *)self);
+	return 0;
 }
 
 int nat_image_upload(nat_image *i, unsigned face, unsigned level, const void *data, unsigned row_pitch, unsigned slice_pitch)

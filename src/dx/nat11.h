@@ -94,6 +94,7 @@ void nat_image_destroy(nat_image *i);
 // one level (and face for cubes); data is the level's pixels in the game's layout: rows of (width pixels or 4x4 blocks), slices of volumes one after the other. L8 / A8L8 are widened to 8888.
 int nat_image_upload(nat_image *i, unsigned face, unsigned level, const void *data, unsigned row_pitch, unsigned slice_pitch);
 void *nat_image_srv(nat_image *i, int srgb);
+void nat_image_addref(nat_image *i); // one more owner (the image is freed with the last nat_image_destroy)
 int nat_image_is_depth(const nat_image *i); // a depth texture (Direct3D 9: a hardware shadow map when sampled by a shader)
 void *nat_image_rtv(nat_image *i, int srgb);
 void *nat_image_dsv(nat_image *i);

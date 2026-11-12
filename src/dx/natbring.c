@@ -259,6 +259,7 @@ static void nbr_bee0(nbr *n);
 // QA: where the other threads are (an asset loader that stopped making progress): each thread is stopped for a moment and its instruction pointer and the code addresses on the top of
 // its stack are logged as module+offset (exe addresses as rva).
 #include <tlhelp32.h>
+static void *nbr_swapchain_stub(void);
 void nbr_dump_threads(uint8_t *exe)
 {
 	HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
@@ -659,6 +660,7 @@ void nbr_init(nbr *n)
 			RD_PTR(e, G_WINDOWS + (size_t)RD_I32(e, G_WINDOW_COUNT) * 24) = hwnd;
 			RD_I32(e, G_WINDOWS + 0x10 + (size_t)RD_I32(e, G_WINDOW_COUNT) * 24) = RD_I32(params, 0x20);
 			RD_I32(e, G_WINDOWS + 0x14 + (size_t)RD_I32(e, G_WINDOW_COUNT) * 24) = RD_I32(params, 0x24);
+			RD_PTR(e, G_WINDOWS + 8 + (size_t)RD_I32(e, G_WINDOW_COUNT) * 24) = nbr_swapchain_stub(); // the engine releases this slot at shutdown (0xfa40)
 			RD_I32(e, G_WINDOW_COUNT)++;
 			ShowWindow(hwnd, 5);
 			n->fn.after_window();
@@ -741,6 +743,19 @@ static void shadow_map(nbr *n, int idx, unsigned w16, unsigned mult, uint8_t *re
 	}
 }
 
+// A stand-in for the swap chain pointer the window table slot held: only Release (+0x10) is ever called on it.
+static long stub_nop(void *self)
+{
+	(void)self;
+	return 0;
+}
+static void *stub_vt[4] = {(void *)stub_nop, (void *)stub_nop, (void *)stub_nop, (void *)stub_nop};
+static void *stub_obj[2] = {stub_vt, NULL};
+static void *nbr_swapchain_stub(void)
+{
+	return stub_obj;
+}
+
 void nbr_targets(nbr *n)
 {
 	uint8_t *e = n->exe;
@@ -778,4 +793,11 @@ void nbr_targets(nbr *n)
 	color_target(n, 4, 2, 2, fmt, t + 0x120);
 	color_target(n, 5, 2, 2, fmt, t + 0xc0);
 	color_target(n, 6, 2, 2, fmt, t + 0xe0);
+	// the engine's unload (0xfa40) releases the colour and depth target of every entry like Direct3D 9 surfaces (which hold a reference of their texture): each stored pointer is one reference
+	for (int i = 0; i < 12; i++)
+		for (int k = 8; k <= 0x10; k += 8) {
+			void *p = RD_PTR(t + i * 0x20, k);
+			if (p && p != ND_NO_DEPTH)
+				nat_image_addref(p);
+		}
 }

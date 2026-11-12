@@ -69,7 +69,31 @@ static void kc_put(kc *c, const uint32_t *key, void *val)
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ declarations and shaders
+// Declarations and shaders start with the vtable pointer of a Direct3D 9 object: the engine's unload code (0x9180 and its siblings) calls Release (+0x10) on the pointer it kept.
+static void *obj_vt[4];
+static long obj_nop(void *self)
+{
+	(void)self;
+	return 0;
+}
+static long decl_release(void *self);
+static long shader_release(void *self);
+static void *decl_vt[4], *shader_vt[4];
+static void obj_vts_init(void)
+{
+	if (decl_vt[0])
+		return;
+	decl_vt[0] = decl_vt[1] = (void *)obj_nop;
+	decl_vt[2] = (void *)decl_release;
+	decl_vt[3] = (void *)obj_nop;
+	shader_vt[0] = shader_vt[1] = (void *)obj_nop;
+	shader_vt[2] = (void *)shader_release;
+	shader_vt[3] = (void *)obj_nop;
+	(void)obj_vt;
+}
+
 struct nd_decl {
+	void **vt;
 	nd_elem el[32];
 	int n;
 	sm3_int_input ints[32];
@@ -80,6 +104,8 @@ struct nd_decl {
 nd_decl *nd_decl_create(const nd_elem *elems, int count)
 {
 	nd_decl *d = calloc(1, sizeof(*d));
+	obj_vts_init();
+	d->vt = decl_vt;
 	d->n = count > 32 ? 32 : count;
 	memcpy(d->el, elems, (size_t)d->n * sizeof(nd_elem));
 	unsigned h = 17;
@@ -102,6 +128,7 @@ void nd_decl_destroy(nd_decl *d)
 }
 
 struct nd_shader {
+	void **vt;
 	nat_device *dev;
 	uint32_t *code;
 	size_t dwords;
@@ -118,6 +145,8 @@ nd_shader *nd_shader_create(nd *d, const uint32_t *code, size_t dwords)
 {
 	(void)d;
 	nd_shader *s = calloc(1, sizeof(*s));
+	obj_vts_init();
+	s->vt = shader_vt;
 	s->code = malloc(dwords * 4);
 	memcpy(s->code, code, dwords * 4);
 	s->dwords = dwords;
@@ -132,6 +161,16 @@ void nd_shader_destroy(nd_shader *s)
 		nat_shader_destroy(s->var[i].s);
 	free(s->code);
 	free(s);
+}
+static long decl_release(void *self)
+{
+	nd_decl_destroy((nd_decl *)self);
+	return 0;
+}
+static long shader_release(void *self)
+{
+	nd_shader_destroy((nd_shader *)self);
+	return 0;
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ the flush
