@@ -1083,6 +1083,49 @@ int nat_output_count(void)
 #endif
 
 #ifdef _WIN32
+int nat_read_pixel(nat_device *d, nat_image *im, unsigned x, unsigned y, uint32_t *out)
+{
+	ID3D11Resource *src = im ? im->res : (ID3D11Resource *)d->scene;
+	const unsigned w = im ? im->desc.w : d->p.width, h = im ? im->desc.h : d->p.height;
+	if (x >= w || y >= h)
+		return 0;
+	D3D11_TEXTURE2D_DESC td = {0};
+	td.Width = w;
+	td.Height = h;
+	td.MipLevels = 1;
+	td.ArraySize = 1;
+	td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+	td.SampleDesc.Count = 1;
+	td.Usage = D3D11_USAGE_STAGING;
+	td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	ID3D11Texture2D *st = NULL;
+	if (FAILED(ID3D11Device_CreateTexture2D(d->dev, &td, NULL, &st)))
+		return 0;
+	ID3D11Texture2D *tmp = NULL;
+	if (!im && d->samples > 1) {
+		D3D11_TEXTURE2D_DESC rd = td;
+		rd.Usage = D3D11_USAGE_DEFAULT;
+		rd.CPUAccessFlags = 0;
+		rd.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS;
+		if (SUCCEEDED(ID3D11Device_CreateTexture2D(d->dev, &rd, NULL, &tmp))) {
+			ID3D11DeviceContext_ResolveSubresource(d->ctx, (ID3D11Resource *)tmp, 0, src, 0, DXGI_FORMAT_B8G8R8A8_UNORM);
+			src = (ID3D11Resource *)tmp;
+		}
+	}
+	ID3D11DeviceContext_CopyResource(d->ctx, (ID3D11Resource *)st, src);
+	D3D11_MAPPED_SUBRESOURCE m;
+	int ok = 0;
+	if (SUCCEEDED(ID3D11DeviceContext_Map(d->ctx, (ID3D11Resource *)st, 0, D3D11_MAP_READ, 0, &m))) {
+		*out = ((uint32_t *)((uint8_t *)m.pData + (size_t)y * m.RowPitch))[x];
+		ID3D11DeviceContext_Unmap(d->ctx, (ID3D11Resource *)st, 0);
+		ok = 1;
+	}
+	if (tmp)
+		ID3D11Texture2D_Release(tmp);
+	ID3D11Texture2D_Release(st);
+	return ok;
+}
+
 int nat_save_scene_bmp(nat_device *d, const char *path)
 {
 	D3D11_TEXTURE2D_DESC td = {0};

@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 typedef struct nat_device nat_device;
+typedef struct nat_image nat_image;
 
 typedef struct {
 	void *hwnd;
@@ -53,6 +54,8 @@ int nat_reset(nat_device *d, const nat_params *p, char *err, size_t err_size);
 // resolves the scene to the back buffer and presents; 0 = shown, 1 = occluded (nothing to do), -1 = device lost / removed
 int nat_present(nat_device *d);
 void nat_get_size(const nat_device *d, unsigned *w, unsigned *h);
+// QA / tests: one pixel (B8G8R8A8) of an image (NULL = the scene, resolved when multisampled); 1 on success
+int nat_read_pixel(nat_device *d, nat_image *im, unsigned x, unsigned y, uint32_t *out);
 // QA: the scene as a BMP file (resolved when multisampled); 1 on success
 int nat_save_scene_bmp(nat_device *d, const char *path);
 
@@ -88,7 +91,6 @@ typedef struct {
 	unsigned flags;
 	int msaa; // render targets only
 } nat_image_desc;
-typedef struct nat_image nat_image;
 nat_image *nat_image_create(nat_device *d, const nat_image_desc *desc);
 void nat_image_destroy(nat_image *i);
 // one level (and face for cubes); data is the level's pixels in the game's layout: rows of (width pixels or 4x4 blocks), slices of volumes one after the other. L8 / A8L8 are widened to 8888.

@@ -13,6 +13,8 @@ int sm3_translate(const uint32_t *code, size_t count, char **hlsl, int *is_vs, c
 #define SM3_ALPHA_TEST 1
 // A pixel shader whose samplers in the mask hold depth textures (Direct3D 9's hardware shadow maps: tex2Dproj on a depth texture returns the comparison result): bits 8..23 of the flags, one per sampler;
 // those samplers are declared Texture2D<float> / SamplerComparisonState and sampled with SampleCmpLevelZero (depth <= stored), the result in all four channels
+// SM3_D3D12: the pixel shader's constant buffers are b3 (constants), b4 (integer / boolean) and b5 (alpha test) so that one root signature holds both stages' buffers (vertex shaders keep b0 / b1)
+#define SM3_D3D12 2
 #define SM3_SHADOW_MASK(m) (((unsigned)(m) & 0xffffu) << 8)
 int sm3_translate_ex(const uint32_t *code, size_t count, int flags, char **hlsl, int *is_vs, char *err, size_t err_size);
 

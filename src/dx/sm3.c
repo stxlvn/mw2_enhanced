@@ -637,12 +637,13 @@ int sm3_translate_vs(const uint32_t *code, size_t count, int flags, const sm3_in
 	if (!parse(sh, code, count, &c))
 		goto done;
 	sb_add(&L, "// translated from Direct3D 9 shader model 3 (src/dx/sm3.c)\n");
-	sb_add(&L, "cbuffer ConstF : register(b0) { float4 c[256]; };\n");
-	sb_add(&L, "cbuffer ConstIB : register(b1) { int4 ic[16]; uint4 bc[8]; };\n");
+	const int rb = ((flags & SM3_D3D12) && !sh->vs) ? 3 : 0; // Direct3D 12: the pixel stage's buffers are b3, b4, b5 (see SM3_D3D12)
+	sb_add(&L, "cbuffer ConstF : register(b%d) { float4 c[256]; };\n", rb);
+	sb_add(&L, "cbuffer ConstIB : register(b%d) { int4 ic[16]; uint4 bc[8]; };\n", rb + 1);
 	sb_add(&L, "#define B(n) (bc[(n) >> 2][(n) & 3] != 0)\n");
 	const int alpha_test = (flags & SM3_ALPHA_TEST) && !sh->vs && sh->maxcolor >= 0;
 	if (alpha_test)
-		sb_add(&L, "cbuffer AlphaTestCB : register(b2) { float4 at; };\n");
+		sb_add(&L, "cbuffer AlphaTestCB : register(b%d) { float4 at; };\n", rb + 2);
 	for (int n = 0; n < 16; n++) {
 		if (!sh->sampler_used[n])
 			continue;
