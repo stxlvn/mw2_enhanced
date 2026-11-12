@@ -52,6 +52,7 @@ unsigned nat12_buffer_size(const nat_buffer *b);
 void nat12_buffer_used(nat_device *d, nat_buffer *b); // the frame's commands read this buffer version
 // shader blobs (DXBC) for the pipeline states
 void *nat12_shader_blob(nat_shader *s, size_t *size);
+unsigned nat12_shader_nconst(const nat_shader *s); // constant registers (float4) the shader reads: the size of the constant buffer it needs is 16 times this
 
 // the CPU descriptor of a sampler made from a description (cached by the caller), and a shader-visible table of 16 of them
 int nat12_sampler_create(nat_device *d, const D3D12_SAMPLER_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE *cpu);

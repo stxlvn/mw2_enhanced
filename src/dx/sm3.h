@@ -15,6 +15,8 @@ int sm3_translate(const uint32_t *code, size_t count, char **hlsl, int *is_vs, c
 // those samplers are declared Texture2D<float> / SamplerComparisonState and sampled with SampleCmpLevelZero (depth <= stored), the result in all four channels
 // SM3_D3D12: the pixel shader's constant buffers are b3 (constants), b4 (integer / boolean) and b5 (alpha test) so that one root signature holds both stages' buffers (vertex shaders keep b0 / b1)
 #define SM3_D3D12 2
+// the number of constant registers (float4) the shader of the last sm3_translate_vs call on this thread reads, as it declared them (256 without SM3_D3D12)
+int sm3_last_const_count(void);
 #define SM3_SHADOW_MASK(m) (((unsigned)(m) & 0xffffu) << 8)
 int sm3_translate_ex(const uint32_t *code, size_t count, int flags, char **hlsl, int *is_vs, char *err, size_t err_size);
 

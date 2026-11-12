@@ -1454,6 +1454,7 @@ static long buffer_unlock(void *self)
 struct nat_shader {
 	IUnknown *blob;
 	int is_vs;
+	unsigned nconst;
 };
 
 nat_shader *nat_shader_from_hlsl(nat_device *d, const char *hlsl, int is_vs, char *err, size_t err_size)
@@ -1490,8 +1491,11 @@ nat_shader *nat_shader_from_sm3(nat_device *d, const uint32_t *code, size_t dwor
 			snprintf(err, err_size, "translate: %s", why);
 		return NULL;
 	}
+	const unsigned nconst = (unsigned)sm3_last_const_count();
 	nat_shader *s = nat_shader_from_hlsl(d, hlsl, is_vs, err, err_size);
 	free(hlsl);
+	if (s)
+		s->nconst = nconst;
 	return s;
 }
 
@@ -1512,6 +1516,7 @@ void *nat_shader_blob(nat_shader *s, size_t *size)
 }
 void *nat12_shader_blob(nat_shader *s, size_t *size) { return nat_shader_blob(s, size); }
 int nat_shader_is_vs(const nat_shader *s) { return s->is_vs; }
+unsigned nat12_shader_nconst(const nat_shader *s) { return s->nconst ? s->nconst : 256; }
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ outputs, modes, screenshots
 int nat_list_modes(int output, nat_mode *out, int max)

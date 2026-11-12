@@ -44,6 +44,7 @@ typedef struct {
 	int out_used[16], out_usage[16], out_index[16];
 	int sampler_used[16], sampler_kind[16];
 	int maxtemp, maxcolor, uses_depth;
+	int maxconst; // the highest constant register read (255 when one is addressed relatively)
 	int misc0, misc1;
 	instr_t *body;
 	size_t nbody, cap;
@@ -136,7 +137,7 @@ static int parse(shader_t *sh, const uint32_t *t, size_t count, ctx_t *c)
 	if ((ver & 0xffff) != 0x300)
 		FAIL(c, "version %08x", ver);
 	sh->vs = (ver >> 16) == 0xfffe;
-	sh->maxtemp = sh->maxcolor = -1;
+	sh->maxtemp = sh->maxcolor = sh->maxconst = -1;
 	size_t i = 1;
 	while (i < count) {
 		const uint32_t tok = t[i];
@@ -250,6 +251,11 @@ static int parse(shader_t *sh, const uint32_t *t, size_t count, ctx_t *c)
 						sh->uses_depth = 1;
 				} else if (p->rtype == R_TEMP && (int)p->num > sh->maxtemp) {
 					sh->maxtemp = (int)p->num;
+				}
+				if (!p->is_dest && p->rtype == R_CONST) {
+					const int top = p->relative ? 255 : (int)p->num > 255 ? 255 : (int)p->num;
+					if (top > sh->maxconst)
+						sh->maxconst = top;
 				}
 			}
 		}
@@ -627,6 +633,9 @@ static const char *usage_name(int u)
 	return u >= 0 && u < 14 ? USAGES[u] : "TEXCOORD";
 }
 
+static _Thread_local int last_nconst = 256;
+int sm3_last_const_count(void) { return last_nconst; }
+
 int sm3_translate_vs(const uint32_t *code, size_t count, int flags, const sm3_int_input *ints, int nints, char **hlsl, int *is_vs, char *err, size_t err_size)
 {
 	shader_t *sh = calloc(1, sizeof(*sh));
@@ -638,7 +647,9 @@ int sm3_translate_vs(const uint32_t *code, size_t count, int flags, const sm3_in
 		goto done;
 	sb_add(&L, "// translated from Direct3D 9 shader model 3 (src/dx/sm3.c)\n");
 	const int rb = ((flags & SM3_D3D12) && !sh->vs) ? 3 : 0; // Direct3D 12: the pixel stage's buffers are b3, b4, b5 (see SM3_D3D12)
-	sb_add(&L, "cbuffer ConstF : register(b%d) { float4 c[256]; };\n", rb);
+	// Direct3D 12 declares only the registers the shader reads (the caller uploads that many): rounded up to 8, and sm3_last_const_count tells how many
+	last_nconst = (flags & SM3_D3D12) ? (sh->maxconst < 0 ? 1 : ((sh->maxconst + 1 + 7) & ~7)) : 256;
+	sb_add(&L, "cbuffer ConstF : register(b%d) { float4 c[%d]; };\n", rb, last_nconst);
 	sb_add(&L, "cbuffer ConstIB : register(b%d) { int4 ic[16]; uint4 bc[8]; };\n", rb + 1);
 	sb_add(&L, "#define B(n) (bc[(n) >> 2][(n) & 3] != 0)\n");
 	const int alpha_test = (flags & SM3_ALPHA_TEST) && !sh->vs && sh->maxcolor >= 0;

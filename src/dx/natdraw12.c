@@ -189,6 +189,7 @@ struct nd {
 	// what is bound in the list being recorded (valid while list_gen is the device's)
 	unsigned list_gen;
 	D3D12_GPU_VIRTUAL_ADDRESS cb_vs_va, cb_ps_va, cb_ints_va, cb_alpha_va;
+	unsigned cb_vs_n, cb_ps_n; // the bytes of the constant buffers uploaded (a shader reads only its first registers)
 	float alpha_last[4];
 	UINT64 srv_last[16];
 	D3D12_GPU_DESCRIPTOR_HANDLE srv_table_last;
@@ -349,6 +350,7 @@ static void check_list(nd *d)
 		return;
 	d->list_gen = gen;
 	d->cb_vs_va = d->cb_ps_va = d->cb_ints_va = d->cb_alpha_va = 0;
+	d->cb_vs_n = d->cb_ps_n = 0;
 	d->srv_table_valid = 0;
 	d->smp_last_key = 0;
 	d->pso_cur = NULL;
@@ -724,18 +726,21 @@ int nd_draw_indexed(nd *d, ng_state *g, int base_vertex, unsigned start_index, u
 		vs_dirty |= g->vs_dirty[i] != 0;
 		ps_dirty |= g->ps_dirty[i] != 0;
 	}
-	if (vs_dirty || !d->cb_vs_va) {
-		void *p = alloc_const(d, sizeof(g->vs_c), &d->cb_vs_va);
+	const unsigned vs_need = nat12_shader_nconst(vs) * 16, ps_need = ps ? nat12_shader_nconst(ps) * 16 : 16;
+	if (vs_dirty || !d->cb_vs_va || vs_need > d->cb_vs_n) {
+		void *p = alloc_const(d, vs_need, &d->cb_vs_va);
 		if (p)
-			memcpy(p, g->vs_c, sizeof(g->vs_c));
+			memcpy(p, g->vs_c, vs_need < sizeof(g->vs_c) ? vs_need : sizeof(g->vs_c));
+		d->cb_vs_n = vs_need;
 		memset(g->vs_dirty, 0, sizeof(g->vs_dirty));
 		ID3D12GraphicsCommandList_SetGraphicsRootConstantBufferView(d->list, RS_VS_B0, d->cb_vs_va);
 		d->n_uploads++;
 	}
-	if (ps_dirty || !d->cb_ps_va) {
-		void *p = alloc_const(d, sizeof(g->ps_c), &d->cb_ps_va);
+	if (ps_dirty || !d->cb_ps_va || ps_need > d->cb_ps_n) {
+		void *p = alloc_const(d, ps_need, &d->cb_ps_va);
 		if (p)
-			memcpy(p, g->ps_c, sizeof(g->ps_c));
+			memcpy(p, g->ps_c, ps_need < sizeof(g->ps_c) ? ps_need : sizeof(g->ps_c));
+		d->cb_ps_n = ps_need;
 		memset(g->ps_dirty, 0, sizeof(g->ps_dirty));
 		ID3D12GraphicsCommandList_SetGraphicsRootConstantBufferView(d->list, RS_PS_B3, d->cb_ps_va);
 		d->n_uploads++;
@@ -922,6 +927,7 @@ int nd_stretch(nd *d, nat_image *src, const nd_rect *sr, nat_image *dst, const n
 	ID3D12GraphicsCommandList_SetGraphicsRootConstantBufferView(d->list, RS_VS_B0, va);
 	ID3D12GraphicsCommandList_SetGraphicsRootConstantBufferView(d->list, RS_PS_B3, va);
 	d->cb_vs_va = d->cb_ps_va = 0; // the draw path binds its own constants again
+	d->cb_vs_n = d->cb_ps_n = 0;
 	D3D12_CPU_DESCRIPTOR_HANDLE cpu;
 	D3D12_GPU_DESCRIPTOR_HANDLE gpu;
 	if (!nat12_srv_alloc(d->dev, 16, &cpu, &gpu))
