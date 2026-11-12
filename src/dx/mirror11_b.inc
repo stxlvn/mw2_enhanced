@@ -1,10 +1,11 @@
 // part B of mirror11.c (included there): the Direct3D 9 resources the game creates, and their Direct3D 11 twins
-static UINT mip_count(UINT w, UINT h)
+static UINT mip_count(UINT w, UINT h, UINT d)
 {
 	UINT n = 1;
-	while (w > 1 || h > 1) {
+	while (w > 1 || h > 1 || d > 1) {
 		w = w > 1 ? w >> 1 : 1;
 		h = h > 1 ? h >> 1 : 1;
+		d = d > 1 ? d >> 1 : 1;
 		n++;
 	}
 	return n;
@@ -14,6 +15,21 @@ static void level_size(const tex_t *t, UINT level, UINT *w, UINT *h)
 {
 	*w = t->w >> level ? t->w >> level : 1;
 	*h = t->h >> level ? t->h >> level : 1;
+}
+
+// the subresources of a texture: levels (2D, volume) or 6 faces x levels (cube; index face * levels + level, the same order as in Direct3D 11)
+static UINT subs_of(const tex_t *t)
+{
+	return t->kind == 2 ? 6 * t->levels : t->levels;
+}
+static UINT level_of(const tex_t *t, UINT sub)
+{
+	return t->kind == 2 ? sub % t->levels : sub;
+}
+static UINT level_depth(const tex_t *t, UINT level)
+{
+	const UINT d = t->kind == 3 ? t->d >> level : 1;
+	return d ? d : 1;
 }
 
 static int fmt_block(D3DFORMAT f)
@@ -52,14 +68,9 @@ static tex_t *tex_make(int kind, UINT w, UINT h, UINT d, UINT levels, DWORD usag
 	t->d = d;
 	t->usage = usage;
 	t->fmt = fmt;
-	t->rt = (usage & D3DUSAGE_RENDERTARGET) != 0;
-	t->depth = (usage & D3DUSAGE_DEPTHSTENCIL) != 0;
-	t->levels = levels ? levels : mip_count(w, h);
-	if (kind != 1) {
-		t->failed = 1;
-		InterlockedIncrement((volatile LONG *)&stat.tex_unsupported);
-		return t;
-	}
+	t->rt = kind == 1 && (usage & D3DUSAGE_RENDERTARGET) != 0;
+	t->depth = kind == 1 && (usage & D3DUSAGE_DEPTHSTENCIL) != 0;
+	t->levels = levels ? levels : mip_count(w, h, kind == 3 ? d : 1);
 	int blk, bpp;
 	if (!fmt_info(fmt, &t->dxgi, &t->dxgi_srgb, &t->srv_fmt, &t->expand, &blk, &bpp)) {
 		t->failed = 1;
@@ -73,16 +84,31 @@ static tex_t *tex_make(int kind, UINT w, UINT h, UINT d, UINT levels, DWORD usag
 	td.Width = w;
 	td.Height = h;
 	td.MipLevels = t->levels;
-	td.ArraySize = 1;
+	td.ArraySize = kind == 2 ? 6 : 1;
 	td.Format = t->dxgi;
 	td.SampleDesc.Count = 1;
 	td.Usage = D3D11_USAGE_DEFAULT;
 	td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	if (kind == 2)
+		td.MiscFlags = D3D11_RESOURCE_MISC_TEXTURECUBE;
 	if (t->rt)
 		td.BindFlags |= D3D11_BIND_RENDER_TARGET;
-	if (t->depth || fmt == 0x5a544e49)
+	if (t->depth || (kind == 1 && fmt == 0x5a544e49))
 		td.BindFlags |= D3D11_BIND_DEPTH_STENCIL;
-	HRESULT hr = ID3D11Device_CreateTexture2D(dev11, &td, NULL, &t->tex);
+	HRESULT hr;
+	if (kind == 3) { // volume: a Texture3D, kept in the same pointer (it is only ever used as an ID3D11Resource)
+		D3D11_TEXTURE3D_DESC vd = {0};
+		vd.Width = w;
+		vd.Height = h;
+		vd.Depth = d;
+		vd.MipLevels = t->levels;
+		vd.Format = t->dxgi;
+		vd.Usage = D3D11_USAGE_DEFAULT;
+		vd.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		hr = ID3D11Device_CreateTexture3D(dev11, &vd, NULL, (ID3D11Texture3D **)&t->tex);
+	} else {
+		hr = ID3D11Device_CreateTexture2D(dev11, &td, NULL, &t->tex);
+	}
 	if (FAILED(hr)) {
 		t->failed = 1;
 		static LONG logged;
@@ -92,8 +118,13 @@ static tex_t *tex_make(int kind, UINT w, UINT h, UINT d, UINT levels, DWORD usag
 	}
 	D3D11_SHADER_RESOURCE_VIEW_DESC sd = {0};
 	sd.Format = t->srv_fmt;
-	sd.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-	sd.Texture2D.MipLevels = t->levels;
+	sd.ViewDimension = kind == 2 ? D3D11_SRV_DIMENSION_TEXTURECUBE : kind == 3 ? D3D11_SRV_DIMENSION_TEXTURE3D : D3D11_SRV_DIMENSION_TEXTURE2D;
+	if (kind == 2)
+		sd.TextureCube.MipLevels = t->levels;
+	else if (kind == 3)
+		sd.Texture3D.MipLevels = t->levels;
+	else
+		sd.Texture2D.MipLevels = t->levels;
 	ID3D11Device_CreateShaderResourceView(dev11, (ID3D11Resource *)t->tex, &sd, &t->srv);
 	if (t->dxgi_srgb) {
 		sd.Format = t->dxgi_srgb;
@@ -123,25 +154,27 @@ static void tex_sync(tex_t *t)
 	if (!t->tex || !t->dirty || !t->shadow)
 		return;
 	t->dirty = 0;
-	for (UINT l = 0; l < t->levels; l++) {
-		if (!t->shadow[l])
+	for (UINT sub = 0; sub < subs_of(t); sub++) {
+		if (!t->shadow[sub])
 			continue;
+		const UINT l = level_of(t, sub);
 		const UINT rb = level_row_bytes(t, l), rows = level_rows(t, l);
+		UINT w, h;
+		level_size(t, l, &w, &h);
+		const UINT dl = level_depth(t, l);
 		if (t->expand) { // L8 / A8L8 to 8888 (B, G, R = L; A = 255 or the data's)
-			UINT w, h;
-			level_size(t, l, &w, &h);
-			uint32_t *tmp = malloc((size_t)w * h * 4);
-			for (UINT y = 0; y < h; y++)
-				for (UINT x = 0; x < w; x++) {
-					const uint8_t *s = t->shadow[l] + (size_t)y * rb + x * (t->expand == 1 ? 1 : 2);
-					const uint32_t lum = s[0], a = t->expand == 1 ? 255 : s[1];
-					tmp[(size_t)y * w + x] = a << 24 | lum << 16 | lum << 8 | lum;
-				}
-			ID3D11DeviceContext_UpdateSubresource(ctx11, (ID3D11Resource *)t->tex, l, NULL, tmp, w * 4, 0);
+			uint32_t *tmp = malloc((size_t)w * h * dl * 4);
+			for (UINT z = 0; z < dl; z++)
+				for (UINT y = 0; y < h; y++)
+					for (UINT x = 0; x < w; x++) {
+						const uint8_t *s = t->shadow[sub] + ((size_t)z * rows + y) * rb + x * (t->expand == 1 ? 1 : 2);
+						const uint32_t lum = s[0], a = t->expand == 1 ? 255 : s[1];
+						tmp[((size_t)z * h + y) * w + x] = a << 24 | lum << 16 | lum << 8 | lum;
+					}
+			ID3D11DeviceContext_UpdateSubresource(ctx11, (ID3D11Resource *)t->tex, sub, NULL, tmp, w * 4, w * h * 4);
 			free(tmp);
 		} else {
-			(void)rows;
-			ID3D11DeviceContext_UpdateSubresource(ctx11, (ID3D11Resource *)t->tex, l, NULL, t->shadow[l], rb, 0);
+			ID3D11DeviceContext_UpdateSubresource(ctx11, (ID3D11Resource *)t->tex, sub, NULL, t->shadow[sub], rb, rb * rows);
 		}
 	}
 }
@@ -173,8 +206,34 @@ static HRESULT STDMETHODCALLTYPE create_texture_hook(IDirect3DDevice9 *d, UINT w
 static HRESULT STDMETHODCALLTYPE create_cube_hook(IDirect3DDevice9 *d, UINT edge, UINT levels, DWORD usage, D3DFORMAT fmt, D3DPOOL pool, IDirect3DCubeTexture9 **out, HANDLE *shared)
 {
 	HRESULT hr = create_cube_o(d, edge, levels, usage, fmt, pool, out, shared);
-	if (SUCCEEDED(hr) && out && *out && dev11)
+	if (SUCCEEDED(hr) && out && *out && dev11) {
 		pmap_put(&textures, *out, tex_make(2, edge, edge, 1, levels, usage, fmt));
+		void **vt = *(void ***)*out;
+		if (hooked_vt_cube != vt) {
+			hooked_vt_cube = vt;
+			extern HRESULT STDMETHODCALLTYPE lock_cube_hook(IDirect3DCubeTexture9 *, D3DCUBEMAP_FACES, UINT, D3DLOCKED_RECT *, const RECT *, DWORD);
+			extern HRESULT STDMETHODCALLTYPE unlock_cube_hook(IDirect3DCubeTexture9 *, D3DCUBEMAP_FACES, UINT);
+			PATCH(vt, 19, lock_cube);
+			PATCH(vt, 20, unlock_cube);
+		}
+	}
+	return hr;
+}
+
+static HRESULT STDMETHODCALLTYPE create_volume_hook(IDirect3DDevice9 *d, UINT w, UINT h, UINT depth, UINT levels, DWORD usage, D3DFORMAT fmt, D3DPOOL pool, IDirect3DVolumeTexture9 **out, HANDLE *shared)
+{
+	HRESULT hr = create_volume_o(d, w, h, depth, levels, usage, fmt, pool, out, shared);
+	if (SUCCEEDED(hr) && out && *out && dev11) {
+		pmap_put(&textures, *out, tex_make(3, w, h, depth, levels, usage, fmt));
+		void **vt = *(void ***)*out;
+		if (hooked_vt_vol != vt) {
+			hooked_vt_vol = vt;
+			extern HRESULT STDMETHODCALLTYPE lock_box_hook(IDirect3DVolumeTexture9 *, UINT, D3DLOCKED_BOX *, const D3DBOX *, DWORD);
+			extern HRESULT STDMETHODCALLTYPE unlock_box_hook(IDirect3DVolumeTexture9 *, UINT);
+			PATCH(vt, 19, lock_box);
+			PATCH(vt, 20, unlock_box);
+		}
+	}
 	return hr;
 }
 
@@ -185,10 +244,14 @@ HRESULT STDMETHODCALLTYPE get_surface_level_hook(IDirect3DTexture9 *t, UINT leve
 {
 	HRESULT hr = get_surface_level_o(t, level, out);
 	tex_t *mt = tex_of(t);
-	if (SUCCEEDED(hr) && out && *out && mt && !pmap_get(&surfaces, *out)) {
-		surf_t *s = calloc(1, sizeof(*s));
+	if (SUCCEEDED(hr) && out && *out && mt) {
+		// the surface objects are transient (the game fetches them again and again); an address can come back for a surface of another texture, so the entry is always rewritten
+		surf_t *s = pmap_get(&surfaces, *out);
+		if (!s)
+			s = calloc(1, sizeof(*s));
 		s->tex = mt;
 		s->level = level;
+		s->backbuffer = 0;
 		pmap_put(&surfaces, *out, s);
 		void **svt = *(void ***)*out;
 		if (hooked_vt_surf != svt) {
@@ -202,10 +265,11 @@ HRESULT STDMETHODCALLTYPE get_surface_level_hook(IDirect3DTexture9 *t, UINT leve
 
 static struct {
 	tex_t *t;
-	UINT level;
+	UINT level; // the subresource (cube: face * levels + level)
 	RECT r;
 	int has_rect;
 	D3DLOCKED_RECT lr;
+	int slice_pitch;
 	int active;
 } tlock[8];
 
@@ -231,11 +295,17 @@ static void texture_locked(tex_t *mt, UINT level, const D3DLOCKED_RECT *lr, cons
 	if (rect)
 		tlock[slot].r = *rect;
 	tlock[slot].lr = *lr;
+	tlock[slot].slice_pitch = 0;
 }
 
 HRESULT STDMETHODCALLTYPE lock_rect_hook(IDirect3DTexture9 *t, UINT level, D3DLOCKED_RECT *lr, const RECT *rect, DWORD flags)
 {
 	HRESULT hr = lock_rect_o(t, level, lr, rect, flags);
+	stat.lock_calls++;
+	if (!tex_of(t))
+		stat.lock_unknown++;
+	else if (flags & D3DLOCK_READONLY)
+		stat.lock_readonly++;
 	if (SUCCEEDED(hr))
 		texture_locked(tex_of(t), level, lr, rect, flags);
 	return hr;
@@ -243,18 +313,39 @@ HRESULT STDMETHODCALLTYPE lock_rect_hook(IDirect3DTexture9 *t, UINT level, D3DLO
 
 static void texture_unlocked(tex_t *mt, UINT level, IDirect3DTexture9 *t)
 {
+	stat.unlock_calls++;
+	int matched = 0;
+	for (int i = 0; i < 8; i++)
+		matched |= tlock[i].active && tlock[i].t == mt && tlock[i].level == level;
+	if (!matched)
+		stat.unlock_unmatched++;
 	for (int i = 0; i < 8; i++) {
 		if (!tlock[i].active || tlock[i].t != mt || tlock[i].level != level)
 			continue;
 		tlock[i].active = 0;
-		if (mt->rt || mt->depth || mt->failed || level >= mt->levels)
+		const UINT sub = level; // the subresource; from here "level" is the mip level
+		if (mt->rt || mt->depth || mt->failed || sub >= subs_of(mt))
 			break;
+		level = level_of(mt, sub);
 		if (!mt->shadow) {
-			mt->shadow = calloc(mt->levels, sizeof(uint8_t *));
+			mt->shadow = calloc(subs_of(mt), sizeof(uint8_t *));
 		}
 		const UINT rb = level_row_bytes(mt, level), rows = level_rows(mt, level);
-		if (!mt->shadow[level])
-			mt->shadow[level] = calloc(1, (size_t)rb * rows);
+		const UINT dl = level_depth(mt, level);
+		if (!mt->shadow[sub])
+			mt->shadow[sub] = calloc(1, (size_t)rb * rows * dl);
+		if (mt->kind == 3) { // a volume: the whole level slice by slice (lock_box_hook only records locks without a box)
+			const uint8_t *vsrc = (const uint8_t *)tlock[i].lr.pBits;
+			for (UINT z = 0; z < dl && vsrc; z++)
+				for (UINT y = 0; y < rows; y++) {
+					const uint8_t *from = vsrc + (size_t)z * (size_t)tlock[i].slice_pitch + (size_t)y * (size_t)tlock[i].lr.Pitch;
+					if (IsBadReadPtr(from, rb))
+						break;
+					memcpy(mt->shadow[sub] + ((size_t)z * rows + y) * rb, from, rb);
+				}
+			mt->dirty = 1;
+			break;
+		}
 		const int blk = fmt_block(mt->fmt), bpp = fmt_bpp(mt->fmt);
 		UINT x0 = 0, y0 = 0, x1, y1; // in pixels or (blocks)
 		UINT w, h;
@@ -299,9 +390,10 @@ static void texture_unlocked(tex_t *mt, UINT level, IDirect3DTexture9 *t)
 					log_printf("mirror11: locked texture memory unreadable: format %x %ux%u level %u row %u pitch %d", (unsigned)mt->fmt, mt->w, mt->h, level, y, tlock[i].lr.Pitch);
 				break;
 			}
-			memcpy(mt->shadow[level] + (size_t)y * rb + (size_t)x0 * unit, from, (size_t)(x1 - x0) * unit);
+			memcpy(mt->shadow[sub] + (size_t)y * rb + (size_t)x0 * unit, from, (size_t)(x1 - x0) * unit);
 		}
 		mt->dirty = 1;
+		stat.unlock_stored++;
 		break;
 	}
 }
@@ -310,6 +402,49 @@ HRESULT STDMETHODCALLTYPE unlock_rect_hook(IDirect3DTexture9 *t, UINT level)
 {
 	texture_unlocked(tex_of(t), level, t);
 	return unlock_rect_o(t, level);
+}
+
+// cube faces (LockRect(face, level)) and volumes (LockBox(level), whole levels only)
+HRESULT STDMETHODCALLTYPE lock_cube_hook(IDirect3DCubeTexture9 *t, D3DCUBEMAP_FACES face, UINT level, D3DLOCKED_RECT *lr, const RECT *rect, DWORD flags)
+{
+	HRESULT hr = lock_cube_o(t, face, level, lr, rect, flags);
+	tex_t *mt = tex_of(t);
+	if (SUCCEEDED(hr) && mt)
+		texture_locked(mt, (UINT)face * mt->levels + level, lr, rect, flags);
+	return hr;
+}
+HRESULT STDMETHODCALLTYPE unlock_cube_hook(IDirect3DCubeTexture9 *t, D3DCUBEMAP_FACES face, UINT level)
+{
+	tex_t *mt = tex_of(t);
+	if (mt)
+		texture_unlocked(mt, (UINT)face * mt->levels + level, NULL);
+	return unlock_cube_o(t, face, level);
+}
+HRESULT STDMETHODCALLTYPE lock_box_hook(IDirect3DVolumeTexture9 *t, UINT level, D3DLOCKED_BOX *lb, const D3DBOX *box, DWORD flags)
+{
+	HRESULT hr = lock_box_o(t, level, lb, box, flags);
+	tex_t *mt = tex_of(t);
+	if (SUCCEEDED(hr) && mt && !box && !(flags & D3DLOCK_READONLY)) {
+		D3DLOCKED_RECT lr;
+		lr.Pitch = lb->RowPitch;
+		lr.pBits = lb->pBits;
+		texture_locked(mt, level, &lr, NULL, flags);
+		for (int i = 0; i < 8; i++)
+			if (tlock[i].active && tlock[i].t == mt && tlock[i].level == level)
+				tlock[i].slice_pitch = lb->SlicePitch;
+	} else if (SUCCEEDED(hr) && mt && box && !(flags & D3DLOCK_READONLY)) {
+		static LONG logged;
+		if (InterlockedIncrement(&logged) <= 5)
+			log_printf("mirror11: LockBox with a box is not tracked (volume %ux%ux%u)", mt->w, mt->h, mt->d);
+	}
+	return hr;
+}
+HRESULT STDMETHODCALLTYPE unlock_box_hook(IDirect3DVolumeTexture9 *t, UINT level)
+{
+	tex_t *mt = tex_of(t);
+	if (mt)
+		texture_unlocked(mt, level, NULL);
+	return unlock_box_o(t, level);
 }
 
 // the same through a surface of the texture (GetSurfaceLevel + LockRect)
@@ -426,6 +561,21 @@ static void buf_sync(buf_t *b)
 }
 
 // depth-stencil surfaces: a texture entity of their own
+// CreateRenderTarget: single-sample here whatever the game's multisampling (a StretchRect resolves it)
+static HRESULT STDMETHODCALLTYPE create_rt_hook(IDirect3DDevice9 *d, UINT w, UINT h, D3DFORMAT fmt, D3DMULTISAMPLE_TYPE ms, DWORD q, BOOL lockable, IDirect3DSurface9 **out, HANDLE *shared)
+{
+	HRESULT hr = create_rt_o(d, w, h, fmt, ms, q, lockable, out, shared);
+	if (SUCCEEDED(hr) && out && *out && dev11) {
+		surf_t *s = calloc(1, sizeof(*s));
+		s->tex = tex_make(1, w, h, 1, 1, D3DUSAGE_RENDERTARGET, fmt);
+		pmap_put(&surfaces, *out, s);
+		static LONG logged;
+		if (InterlockedIncrement(&logged) <= 12)
+			log_printf("mirror11: CreateRenderTarget %ux%u format %x multisample %d", w, h, (unsigned)fmt, (int)ms);
+	}
+	return hr;
+}
+
 static HRESULT STDMETHODCALLTYPE create_depth_hook(IDirect3DDevice9 *d, UINT w, UINT h, D3DFORMAT fmt, D3DMULTISAMPLE_TYPE ms, DWORD q, BOOL discard, IDirect3DSurface9 **out, HANDLE *shared)
 {
 	HRESULT hr = create_depth_o(d, w, h, fmt, ms, q, discard, out, shared);
@@ -486,6 +636,14 @@ static HRESULT STDMETHODCALLTYPE create_decl_hook(IDirect3DDevice9 *d, const D3D
 			dl->n++;
 		}
 		pmap_put(&decls, *out, dl);
+		static unsigned char seen[32][16];
+		for (int i = 0; i < dl->n; i++) {
+			const unsigned ty = dl->el[i].Type & 31, us = dl->el[i].Usage & 15;
+			if (!seen[ty][us]) {
+				seen[ty][us] = 1;
+				log_printf("mirror11: vertex element type %u usage %u (stream %u, offset %u)", ty, us, dl->el[i].Stream, dl->el[i].Offset);
+			}
+		}
 	}
 	return hr;
 }

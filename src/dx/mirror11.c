@@ -86,6 +86,7 @@ typedef struct {
 	void *obj11; // ID3D11VertexShader / ID3D11PixelShader
 	ID3DBlob *blob;
 	int tried, failed;
+	unsigned sig; // vertex shader: signature of the integer-typed elements of the declaration it was compiled for
 } shader_t;
 
 typedef struct {
@@ -104,6 +105,7 @@ typedef struct {
 	UINT *pitch;
 	int dirty;
 	int failed;
+	int logged;
 } tex_t;
 
 typedef struct {
@@ -163,7 +165,7 @@ static struct {
 
 static struct {
 	long draws, draws_skipped, clears, presents;
-	long skip_no_vs, skip_no_ps, skip_layout, skip_shader, skip_prim, skip_target, tex_unsupported, buf_unknown, layout_fail, shader_fail;
+	long skip_no_vs, skip_no_ps, skip_layout, skip_shader, skip_prim, skip_target, tex_unsupported, buf_unknown, layout_fail, shader_fail, bound_nodata, bound_partial, lock_calls, lock_unknown, lock_readonly, unlock_calls, unlock_unmatched, unlock_stored;
 } stat;
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ original methods (shared vtable of the game's device and resources)
@@ -173,11 +175,18 @@ ORIG(create_vs, HRESULT, (IDirect3DDevice9 *, const DWORD *, IDirect3DVertexShad
 ORIG(create_ps, HRESULT, (IDirect3DDevice9 *, const DWORD *, IDirect3DPixelShader9 **));
 ORIG(create_texture, HRESULT, (IDirect3DDevice9 *, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DTexture9 **, HANDLE *));
 ORIG(create_cube, HRESULT, (IDirect3DDevice9 *, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DCubeTexture9 **, HANDLE *));
+ORIG(create_volume, HRESULT, (IDirect3DDevice9 *, UINT, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DVolumeTexture9 **, HANDLE *));
+ORIG(lock_cube, HRESULT, (IDirect3DCubeTexture9 *, D3DCUBEMAP_FACES, UINT, D3DLOCKED_RECT *, const RECT *, DWORD));
+ORIG(unlock_cube, HRESULT, (IDirect3DCubeTexture9 *, D3DCUBEMAP_FACES, UINT));
+ORIG(lock_box, HRESULT, (IDirect3DVolumeTexture9 *, UINT, D3DLOCKED_BOX *, const D3DBOX *, DWORD));
+ORIG(unlock_box, HRESULT, (IDirect3DVolumeTexture9 *, UINT));
 ORIG(create_vb, HRESULT, (IDirect3DDevice9 *, UINT, DWORD, DWORD, D3DPOOL, IDirect3DVertexBuffer9 **, HANDLE *));
 ORIG(create_ib, HRESULT, (IDirect3DDevice9 *, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DIndexBuffer9 **, HANDLE *));
+ORIG(create_rt, HRESULT, (IDirect3DDevice9 *, UINT, UINT, D3DFORMAT, D3DMULTISAMPLE_TYPE, DWORD, BOOL, IDirect3DSurface9 **, HANDLE *));
 ORIG(create_depth, HRESULT, (IDirect3DDevice9 *, UINT, UINT, D3DFORMAT, D3DMULTISAMPLE_TYPE, DWORD, BOOL, IDirect3DSurface9 **, HANDLE *));
 ORIG(create_decl, HRESULT, (IDirect3DDevice9 *, const D3DVERTEXELEMENT9 *, IDirect3DVertexDeclaration9 **));
 ORIG(stretch_rect, HRESULT, (IDirect3DDevice9 *, IDirect3DSurface9 *, const RECT *, IDirect3DSurface9 *, const RECT *, D3DTEXTUREFILTERTYPE));
+ORIG(update_texture, HRESULT, (IDirect3DDevice9 *, IDirect3DBaseTexture9 *, IDirect3DBaseTexture9 *));
 ORIG(set_rt, HRESULT, (IDirect3DDevice9 *, DWORD, IDirect3DSurface9 *));
 ORIG(set_ds, HRESULT, (IDirect3DDevice9 *, IDirect3DSurface9 *));
 ORIG(clear, HRESULT, (IDirect3DDevice9 *, DWORD, const D3DRECT *, DWORD, D3DCOLOR, float, DWORD));
@@ -212,7 +221,7 @@ ORIG(vb_unlock, HRESULT, (IDirect3DVertexBuffer9 *));
 ORIG(ib_lock, HRESULT, (IDirect3DIndexBuffer9 *, UINT, UINT, void **, DWORD));
 ORIG(ib_unlock, HRESULT, (IDirect3DIndexBuffer9 *));
 
-static void *hooked_vt_tex, *hooked_vt_vb, *hooked_vt_ib, *hooked_vt_surf;
+static void *hooked_vt_tex, *hooked_vt_vb, *hooked_vt_ib, *hooked_vt_surf, *hooked_vt_cube, *hooked_vt_vol;
 
 static void patch(void **vt, int index, void *hook, void **orig)
 {
@@ -238,6 +247,7 @@ static int fmt_info(D3DFORMAT f, DXGI_FORMAT *dxgi, DXGI_FORMAT *srgb, DXGI_FORM
 	case 0x33545844: *dxgi = DXGI_FORMAT_BC2_TYPELESS; *srv = DXGI_FORMAT_BC2_UNORM; *srgb = DXGI_FORMAT_BC2_UNORM_SRGB; *block = 16; *bpp = 0; return 1;
 	case 0x35545844: *dxgi = DXGI_FORMAT_BC3_TYPELESS; *srv = DXGI_FORMAT_BC3_UNORM; *srgb = DXGI_FORMAT_BC3_UNORM_SRGB; *block = 16; *bpp = 0; return 1;
 	case 28: *dxgi = *srv = DXGI_FORMAT_A8_UNORM; *bpp = 1; return 1;
+	case 0x4c4c554e: *dxgi = DXGI_FORMAT_B8G8R8A8_TYPELESS; *srv = DXGI_FORMAT_B8G8R8A8_UNORM; *bpp = 4; return 1; // "NULL": the depth-only render target trick; a plain target here
 	case 50: *dxgi = DXGI_FORMAT_B8G8R8A8_TYPELESS; *srv = DXGI_FORMAT_B8G8R8A8_UNORM; *expand = 1; *bpp = 1; return 1; // L8
 	case 51: *dxgi = DXGI_FORMAT_B8G8R8A8_TYPELESS; *srv = DXGI_FORMAT_B8G8R8A8_UNORM; *expand = 2; *bpp = 2; return 1; // A8L8
 	case 113: *dxgi = *srv = DXGI_FORMAT_R16G16B16A16_FLOAT; *bpp = 8; return 1;

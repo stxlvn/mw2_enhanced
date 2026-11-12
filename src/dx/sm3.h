@@ -12,3 +12,10 @@ int sm3_translate(const uint32_t *code, size_t count, char **hlsl, int *is_vs, c
 // reference (0..255), enable, 0}, and the shader discards the pixel when the 8-bit alpha of render target 0 fails the test.
 #define SM3_ALPHA_TEST 1
 int sm3_translate_ex(const uint32_t *code, size_t count, int flags, char **hlsl, int *is_vs, char *err, size_t err_size);
+
+// Vertex inputs whose data is integer in Direct3D 11 (D3DDECLTYPE_UBYTE4 -> R8G8B8A8_UINT, SHORT2 / SHORT4 -> R16G16(B16A16)_SINT): Direct3D 9 delivers them as floats (UBYTE4 as 0..255), Direct3D 11 would
+// reinterpret the bits, so the vertex shader declares such an input as uint4 / int4 and converts it. kind 1 = unsigned (uint4), 2 = signed (int4); usage / index are the D3DDECLUSAGE and its index.
+typedef struct {
+	unsigned char usage, index, kind;
+} sm3_int_input;
+int sm3_translate_vs(const uint32_t *code, size_t count, int flags, const sm3_int_input *ints, int nints, char **hlsl, int *is_vs, char *err, size_t err_size);

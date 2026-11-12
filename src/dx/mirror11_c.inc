@@ -50,14 +50,46 @@ static void put_cb(ID3D11Buffer *b, const void *data, size_t size)
 	}
 }
 
-static int shader_ready(shader_t *s)
+// the integer-typed elements of a vertex declaration (see sm3_int_input) and a signature of them
+static int decl_ints(const decl_t *dl, sm3_int_input *out, unsigned *sig)
 {
-	if (s->tried)
+	int n = 0;
+	unsigned h = 17;
+	for (int i = 0; dl && i < dl->n && n < 32; i++) {
+		const int t = dl->el[i].Type;
+		if (t != D3DDECLTYPE_UBYTE4 && t != D3DDECLTYPE_SHORT2 && t != D3DDECLTYPE_SHORT4)
+			continue;
+		out[n].usage = (unsigned char)dl->el[i].Usage;
+		out[n].index = (unsigned char)dl->el[i].UsageIndex;
+		out[n].kind = t == D3DDECLTYPE_UBYTE4 ? 1 : 2;
+		h = h * 31 + (unsigned)(out[n].usage | out[n].index << 4 | out[n].kind << 8);
+		n++;
+	}
+	*sig = n ? h : 0;
+	return n;
+}
+
+static int shader_ready(shader_t *s, const decl_t *dl)
+{
+	sm3_int_input ints[32];
+	unsigned sig = 0;
+	const int nints = (s->is_vs && dl) ? decl_ints(dl, ints, &sig) : 0;
+	if (s->tried && (!s->is_vs || s->sig == sig))
 		return !s->failed;
+	if (s->tried) { // a vertex shader used with a declaration that types its inputs differently: compiled again for this one
+		if (s->obj11)
+			ID3D11VertexShader_Release((ID3D11VertexShader *)s->obj11);
+		if (s->blob)
+			ID3D10Blob_Release(s->blob);
+		s->obj11 = NULL;
+		s->blob = NULL;
+		s->failed = 0;
+	}
 	s->tried = 1;
+	s->sig = sig;
 	char *hlsl = NULL, err[128] = "";
 	int is_vs = 0;
-	if (!sm3_translate_ex(s->code, s->dwords, SM3_ALPHA_TEST, &hlsl, &is_vs, err, sizeof(err))) {
+	if (!sm3_translate_vs(s->code, s->dwords, SM3_ALPHA_TEST, ints, nints, &hlsl, &is_vs, err, sizeof(err))) {
 		s->failed = 1;
 		if (InterlockedIncrement((volatile LONG *)&stat.shader_fail) <= 10)
 			log_printf("mirror11: shader not translated: %s", err);
@@ -113,7 +145,8 @@ static ID3D11InputLayout *layout_for(decl_t *dl, shader_t *vs)
 	unsigned char key[40] = {0};
 	memcpy(key, &dl, 8);
 	memcpy(key + 8, &vs, 8);
-	ID3D11InputLayout *l = cache_get(&layout_cache, key, 16);
+	memcpy(key + 16, &vs->sig, 4);
+	ID3D11InputLayout *l = cache_get(&layout_cache, key, 20);
 	if (l)
 		return l == (ID3D11InputLayout *)1 ? NULL : l;
 	D3D11_INPUT_ELEMENT_DESC ed[32];
@@ -136,10 +169,10 @@ static ID3D11InputLayout *layout_for(decl_t *dl, shader_t *vs)
 	if (FAILED(hr)) {
 		if (InterlockedIncrement((volatile LONG *)&stat.layout_fail) <= 10)
 			log_printf("mirror11: input layout failed: hr %lx (%d elements)", (unsigned long)hr, n);
-		cache_put(&layout_cache, key, 16, (void *)1);
+		cache_put(&layout_cache, key, 20, (void *)1);
 		return NULL;
 	}
-	cache_put(&layout_cache, key, 16, l);
+	cache_put(&layout_cache, key, 20, l);
 	return l;
 }
 
@@ -316,11 +349,11 @@ static int setup_draw(D3DPRIMITIVETYPE prim, UINT count, UINT *vertices, int *ha
 		stat.skip_no_vs++;
 		return 0;
 	}
-	if (!shader_ready(vs) || (ps && !shader_ready(ps))) {
+	decl_t *dl = st.decl ? pmap_get(&decls, st.decl) : NULL;
+	if (!shader_ready(vs, dl) || (ps && !shader_ready(ps, NULL))) {
 		stat.skip_shader++;
 		return 0;
 	}
-	decl_t *dl = st.decl ? pmap_get(&decls, st.decl) : NULL;
 	ID3D11InputLayout *layout = dl ? layout_for(dl, vs) : NULL;
 	if (!layout) {
 		stat.skip_layout++;
@@ -331,6 +364,12 @@ static int setup_draw(D3DPRIMITIVETYPE prim, UINT count, UINT *vertices, int *ha
 	bind_targets(&rtv, &dsv);
 	if (!rtv) {
 		stat.skip_target++;
+		static LONG tl;
+		if (InterlockedIncrement(&tl) <= 12) {
+			tex_t *q = surface_tex(st.rt0);
+			log_printf("mirror11: draw without a render target view: rt0 %p (%s, %ux%u fmt %x failed %d rt %d), depth %p vs %08x", (void *)st.rt0, q ? "known" : "unknown", q ? q->w : 0, q ? q->h : 0, q ? (unsigned)q->fmt : 0, q ? q->failed : 0, q ? q->rt : 0, (void *)st.ds,
+				   (unsigned)(st.vs ? 1 : 0));
+		}
 		return 0;
 	}
 	// textures first: one that is also the target must not be bound for reading
@@ -341,6 +380,23 @@ static int setup_draw(D3DPRIMITIVETYPE prim, UINT count, UINT *vertices, int *ha
 		if (!t || t->failed || !t->tex)
 			continue;
 		tex_sync(t);
+		if (!t->rt && !t->depth) {
+			if (!t->shadow) {
+				stat.bound_nodata++;
+				static LONG nlog;
+				if (!t->logged && InterlockedIncrement(&nlog) <= 40) {
+					t->logged = 1;
+					log_printf("mirror11: bound but never uploaded: kind %d %ux%u levels %u format %x usage %lx slot %d (draw %ld)", t->kind, t->w, t->h, t->levels, (unsigned)t->fmt, (unsigned long)t->usage, i, stat.draws);
+				}
+			}
+			else {
+				UINT have = 0;
+				for (UINT q = 0; q < subs_of(t); q++)
+					have += t->shadow[q] != NULL;
+				if (have < subs_of(t))
+					stat.bound_partial++;
+			}
+		}
 		if (t->tex == main_target.tex || (surface_tex(st.rt0) && surface_tex(st.rt0)->tex == t->tex))
 			continue;
 		srv[i] = (st.smp[i][11] && t->srv_srgb) ? t->srv_srgb : t->srv;
@@ -400,10 +456,43 @@ static void bind_streams(void)
 	}
 }
 
+// MW2COOP_MIRRORTRACE=<scene>: one log line per draw of that scene (what the last passes of a frame are)
+static int scene_no, trace_scene = -1;
+static char trace_ring[120][460];
+static int trace_n;
+static void trace_draw(const char *kind, D3DPRIMITIVETYPE prim, UINT count)
+{
+	if (scene_no + 1 != trace_scene)
+		return;
+	tex_t *rt = surface_tex(st.rt0);
+	shader_t *ps = st.ps ? pmap_get(&shaders, st.ps) : NULL, *vs = st.vs ? pmap_get(&shaders, st.vs) : NULL;
+	unsigned psh = 0, vsh = 0;
+	for (size_t i = 0; ps && i < ps->dwords; i++)
+		psh = psh * 31 + ps->code[i];
+	for (size_t i = 0; vs && i < vs->dwords; i++)
+		vsh = vsh * 31 + vs->code[i];
+	tex_t *t0 = tex_of(st.tex[0]);
+	char *line = trace_ring[trace_n++ % 120];
+	snprintf(line, 460, "mirror11 trace: %s #%ld prim %d count %u rt %ux%u%s blend %lu src %lu dst %lu z %lu zw %lu cw %lx vs %08x ps %08x tex0 %ux%u fmt %x", kind, stat.draws, (int)prim, count, rt ? rt->w : bb_w, rt ? rt->h : bb_h, rt && rt->tex == main_target.tex ? "(bb)" : "",
+		   (unsigned long)st.rs[27], (unsigned long)st.rs[19], (unsigned long)st.rs[20], (unsigned long)st.rs[7], (unsigned long)st.rs[14], (unsigned long)st.rs[168], vsh, psh, t0 ? t0->w : 0, t0 ? t0->h : 0, t0 ? (unsigned)t0->fmt : 0);
+	{
+		if (t0) {
+			const size_t m = strlen(line);
+			snprintf(line + m, 460 - m, " | t0 rt %d usage %lx shadow %p dirty %d levels %u failed %d", t0->rt, (unsigned long)t0->usage, (void *)t0->shadow, t0->dirty, t0->levels, t0->failed);
+		}
+		if (t0 && t0->shadow && t0->shadow[0] && t0->fmt == D3DFMT_A8R8G8B8) {
+			const size_t m = strlen(line);
+			snprintf(line + m, 460 - m, " | t0px %02x%02x%02x%02x", t0->shadow[0][0], t0->shadow[0][1], t0->shadow[0][2], t0->shadow[0][3]);
+		}
+		snprintf(line + strlen(line), 460 - strlen(line), " | ps c0 %g %g %g %g c1 %g %g %g %g c2 %g %g %g %g", st.ps_f[0][0], st.ps_f[0][1], st.ps_f[0][2], st.ps_f[0][3], st.ps_f[1][0], st.ps_f[1][1], st.ps_f[1][2], st.ps_f[1][3], st.ps_f[2][0], st.ps_f[2][1], st.ps_f[2][2], st.ps_f[2][3]);
+	}
+}
+
 static HRESULT STDMETHODCALLTYPE draw_indexed_hook(IDirect3DDevice9 *d, D3DPRIMITIVETYPE prim, INT base, UINT minv, UINT numv, UINT start, UINT count)
 {
 	HRESULT hr = draw_indexed_o(d, prim, base, minv, numv, start, count);
 	stat.draws++;
+	trace_draw("indexed", prim, count);
 	UINT n;
 	int has_ps;
 	buf_t *ib = st.ib ? pmap_get(&buffers, st.ib) : NULL;
@@ -426,6 +515,7 @@ static HRESULT STDMETHODCALLTYPE draw_prim_hook(IDirect3DDevice9 *d, D3DPRIMITIV
 {
 	HRESULT hr = draw_prim_o(d, prim, start, count);
 	stat.draws++;
+	trace_draw("prim", prim, count);
 	UINT n;
 	int has_ps;
 	if (!setup_draw(prim, count, &n, &has_ps)) {
@@ -523,6 +613,30 @@ static HRESULT STDMETHODCALLTYPE stretch_rect_hook(IDirect3DDevice9 *d, IDirect3
 	else if (InterlockedIncrement(&logged) <= 10)
 		log_printf("mirror11: StretchRect not replayed (src %p %s %ux%u dxgi %d, dst %p %s %ux%u dxgi %d, rects %d/%d)", (void *)src, a ? "known" : "unknown", a ? a->w : 0, a ? a->h : 0, a ? (int)a->dxgi : 0, (void *)dst, b ? "known" : "unknown",
 			   b ? b->w : 0, b ? b->h : 0, b ? (int)b->dxgi : 0, sr != NULL, dr != NULL);
+	return hr;
+}
+
+// UpdateTexture: the film (Bink) planes are decoded into system-memory textures and copied to the real ones this way
+static HRESULT STDMETHODCALLTYPE update_texture_hook(IDirect3DDevice9 *d, IDirect3DBaseTexture9 *src, IDirect3DBaseTexture9 *dst)
+{
+	HRESULT hr = update_texture_o(d, src, dst);
+	tex_t *a = tex_of(src), *b = tex_of(dst);
+	if (a && b && a->shadow && !a->failed && !b->failed && !a->rt && !b->rt && a->kind == 1 && b->kind == 1 && a->fmt == b->fmt) {
+		if (!b->shadow)
+			b->shadow = calloc(b->levels, sizeof(uint8_t *));
+		for (UINT l = 0; l < a->levels && l < b->levels; l++) {
+			UINT aw, ah, bw, bh;
+			level_size(a, l, &aw, &ah);
+			level_size(b, l, &bw, &bh);
+			if (!a->shadow[l] || aw != bw || ah != bh)
+				continue;
+			const size_t n = (size_t)level_row_bytes(b, l) * level_rows(b, l);
+			if (!b->shadow[l])
+				b->shadow[l] = calloc(1, n);
+			memcpy(b->shadow[l], a->shadow[l], n);
+			b->dirty = 1;
+		}
+	}
 	return hr;
 }
 
@@ -734,9 +848,9 @@ static void compare_frame(IDirect3DDevice9 *d)
 		}
 		log_printf("mirror11: frame %d: mean difference %.2f / 255 per channel, %.2f%% of pixels differ by more than 24 | draws %ld replayed %ld, clears %ld", frames, sum / (3.0 * (double)total), 100.0 * (double)over / (double)total,
 			   stat.draws, stat.draws - stat.draws_skipped, stat.clears);
-		log_printf("mirror11:   skipped: no vs %ld, no layout %ld, shader %ld, prim %ld, target %ld; failures: shaders %ld layouts %ld, textures unsupported %ld, unknown buffers %ld", stat.skip_no_vs, stat.skip_layout, stat.skip_shader, stat.skip_prim,
-			   stat.skip_target, stat.shader_fail, stat.layout_fail, stat.tex_unsupported, stat.buf_unknown);
-		if (frames == 120 || (frames % 600 == 0 && frames <= 4200)) {
+		log_printf("mirror11:   skipped: no vs %ld, no layout %ld, shader %ld, prim %ld, target %ld; failures: shaders %ld layouts %ld, textures unsupported %ld, unknown buffers %ld; bound textures never uploaded %ld, partly uploaded %ld; texture locks %ld (unknown %ld, read-only %ld), unlocks %ld (unmatched %ld, stored %ld)", stat.skip_no_vs, stat.skip_layout, stat.skip_shader, stat.skip_prim,
+			   stat.skip_target, stat.shader_fail, stat.layout_fail, stat.tex_unsupported, stat.buf_unknown, stat.bound_nodata, stat.bound_partial, stat.lock_calls, stat.lock_unknown, stat.lock_readonly, stat.unlock_calls, stat.unlock_unmatched, stat.unlock_stored);
+		if (frames == 120 || frames == 1320 || frames == 1440 || frames == 1560 || (frames % 600 == 0 && frames <= 4200)) {
 			char p[MAX_PATH];
 			snprintf(p, sizeof(p), "%sd3d9-%d.bmp", out_dir, frames);
 			save_bmp(p, lr.pBits, bb_w, bb_h, (UINT)lr.Pitch);
@@ -826,8 +940,12 @@ static HRESULT STDMETHODCALLTYPE end_scene_hook(IDirect3DDevice9 *d)
 {
 	HRESULT hr = end_scene_o(d);
 	if (!display_mode) {
-		static int scenes;
-		scenes++;
+		int scenes = ++scene_no;
+		if (scenes == trace_scene) { // the last 120 draws of the traced scene
+			log_printf("mirror11 trace: scene %d had %d draws, the last %d:", scenes, trace_n, trace_n < 120 ? trace_n : 120);
+			for (int q = trace_n < 120 ? 0 : trace_n - 120; q < trace_n; q++)
+				log_printf("%s", trace_ring[q % 120]);
+		}
 		if (scenes == 1 || scenes == 60)
 			log_printf("mirror11: scene %d (draws %ld, replayed %ld)", scenes, stat.draws, stat.draws - stat.draws_skipped);
 		if (scenes % 120 == 0) {
@@ -849,6 +967,8 @@ void mirror11_hook_device(struct IDirect3DDevice9 *device)
 {
 	static int started;
 	display_mode = getenv("MW2COOP_D3D11") != NULL;
+	if (getenv("MW2COOP_MIRRORTRACE"))
+		trace_scene = atoi(getenv("MW2COOP_MIRRORTRACE")), log_printf("mirror11: tracing the draws of scene %d", trace_scene);
 	if ((!getenv("MW2COOP_D3D11MIRROR") && !display_mode) || started)
 		return;
 	started = 1;
@@ -878,7 +998,7 @@ void mirror11_hook_device(struct IDirect3DDevice9 *device)
 	{ // the target the mirror draws the back buffer's content into
 		tex_t *t = &main_target;
 		memset(t, 0, sizeof(*t));
-		t->kind = 1; t->w = bb_w; t->h = bb_h; t->levels = 1; t->rt = 1; t->fmt = D3DFMT_A8R8G8B8;
+		t->kind = 1; t->w = bb_w; t->h = bb_h; t->levels = 1; t->rt = 1; t->fmt = D3DFMT_A8R8G8B8; t->dxgi = DXGI_FORMAT_B8G8R8A8_TYPELESS;
 		D3D11_TEXTURE2D_DESC td = {0};
 		td.Width = bb_w; td.Height = bb_h; td.MipLevels = 1; td.ArraySize = 1;
 		td.Format = DXGI_FORMAT_B8G8R8A8_TYPELESS;
@@ -907,10 +1027,13 @@ void mirror11_hook_device(struct IDirect3DDevice9 *device)
 	PATCH(vt, 17, present);
 	PATCH(vt, 23, create_texture);
 	PATCH(vt, 25, create_cube);
+	PATCH(vt, 24, create_volume);
 	PATCH(vt, 26, create_vb);
 	PATCH(vt, 27, create_ib);
+	PATCH(vt, 28, create_rt);
 	PATCH(vt, 29, create_depth);
 	PATCH(vt, 34, stretch_rect);
+	PATCH(vt, 31, update_texture);
 	PATCH(vt, 37, set_rt);
 	PATCH(vt, 39, set_ds);
 	PATCH(vt, 42, end_scene);

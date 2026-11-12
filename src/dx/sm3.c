@@ -621,7 +621,7 @@ static const char *usage_name(int u)
 	return u >= 0 && u < 14 ? USAGES[u] : "TEXCOORD";
 }
 
-int sm3_translate_ex(const uint32_t *code, size_t count, int flags, char **hlsl, int *is_vs, char *err, size_t err_size)
+int sm3_translate_vs(const uint32_t *code, size_t count, int flags, const sm3_int_input *ints, int nints, char **hlsl, int *is_vs, char *err, size_t err_size)
 {
 	shader_t *sh = calloc(1, sizeof(*sh));
 	ctx_t c = {{0}};
@@ -643,9 +643,15 @@ int sm3_translate_ex(const uint32_t *code, size_t count, int flags, char **hlsl,
 		sb_add(&L, "%s tex_s%d : register(t%d); SamplerState smp_s%d : register(s%d);\n", k == 3 ? "TextureCube" : k == 4 ? "Texture3D" : "Texture2D", n, n, n, n);
 	}
 	sb_t ins = {0};
+	int in_kind[16] = {0}; // integer vertex inputs (vertex shader only), see sm3_int_input
+	for (int n = 0; n < 16; n++)
+		if (sh->in_used[n] && sh->vs)
+			for (int q = 0; q < nints; q++)
+				if (ints[q].usage == sh->in_usage[n] && ints[q].index == sh->in_index[n])
+					in_kind[n] = ints[q].kind;
 	for (int n = 0; n < 16; n++)
 		if (sh->in_used[n])
-			sb_add(&ins, "\tfloat4 v%d : %s%d;\n", n, usage_name(sh->in_usage[n]), sh->in_index[n]);
+			sb_add(&ins, "\t%s v%d : %s%d;\n", in_kind[n] == 1 ? "uint4" : in_kind[n] == 2 ? "int4" : "float4", n, usage_name(sh->in_usage[n]), sh->in_index[n]);
 	if (sh->vs) {
 		sb_add(&L, "struct VSIn {\n%s\n};\n", ins.s ? ins.s : "");
 		// the outputs: the position first, then by register
@@ -667,7 +673,7 @@ int sm3_translate_ex(const uint32_t *code, size_t count, int flags, char **hlsl,
 		sb_add(&L, "VSOut main(VSIn input)\n{\n\tVSOut output;\n");
 		for (int n = 0; n < 16; n++)
 			if (sh->in_used[n])
-				sb_add(&L, "\tfloat4 v%d = input.v%d;\n", n, n);
+				sb_add(&L, in_kind[n] ? "\tfloat4 v%d = float4(input.v%d);\n" : "\tfloat4 v%d = input.v%d;\n", n, n);
 		for (int n = 0; n < 16; n++)
 			if (sh->out_used[n])
 				sb_add(&L, "\tfloat4 o%d = 0;\n", n);
@@ -748,6 +754,11 @@ done:
 	free(sh->body);
 	free(sh);
 	return ok;
+}
+
+int sm3_translate_ex(const uint32_t *code, size_t count, int flags, char **hlsl, int *is_vs, char *err, size_t err_size)
+{
+	return sm3_translate_vs(code, count, flags, NULL, 0, hlsl, is_vs, err, err_size);
 }
 
 int sm3_translate(const uint32_t *code, size_t count, char **hlsl, int *is_vs, char *err, size_t err_size)
