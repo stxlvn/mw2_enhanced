@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "d3dcap.h"
+#include "dx/natboot.h"
 #include "log.h"
 #include "shot.h"
 #include "game.h"
@@ -199,6 +200,15 @@ static int hook(void)
 
 void shot_request(const char *name)
 {
+	if (natboot_active()) { // the native renderer has no Direct3D 9 device: its own present saves the frame
+		char native_clean[96];
+		int k = 0;
+		for (const char *c = name; *c && k < (int)sizeof(native_clean) - 1; c++)
+			native_clean[k++] = (*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || *c == '-' ? *c : '_';
+		native_clean[k] = 0;
+		natboot_shot(native_clean);
+		return;
+	}
 	if (!hook()) {
 		log_printf("shot: %s not saved (no Direct3D device yet)", name);
 		return;

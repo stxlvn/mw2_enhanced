@@ -190,10 +190,30 @@ static void *w_24df0(void **out, uint64_t size)
 }
 static unsigned w_4f380(void *dev, unsigned slot, unsigned word, unsigned old) { InterlockedIncrement(&hits[45]); (void)dev; (void)slot; (void)old; return word; }
 static void w_39420(void) { InterlockedIncrement(&hits[46]); if (N.created) nbr_targets(&N); }
+static char shot_name[96];
+void natboot_shot(const char *name)
+{
+	lstrcpynA(shot_name, name, sizeof(shot_name));
+}
 static void w_45060(unsigned flags)
 { InterlockedIncrement(&hits[47]);
 	if (!N.created || !(flags & 2))
 		return;
+	if (shot_name[0]) { // !shot <name>
+		char name[96], path[MAX_PATH];
+		lstrcpynA(name, shot_name, sizeof(name));
+		shot_name[0] = 0;
+		DWORD n = GetModuleFileNameA(NULL, path, MAX_PATH);
+		while (n > 0 && path[n - 1] != 92)
+			n--;
+		path[n] = 0;
+		lstrcatA(path, "mw2coop\\shots");
+		CreateDirectoryA(path, NULL);
+		lstrcatA(path, "\\");
+		lstrcatA(path, name);
+		lstrcatA(path, ".bmp");
+		log_printf("shot: %s (native frame): %s", name, nat_save_scene_bmp(N.dev, path) ? "saved" : "not saved");
+	}
 	static int frame;
 	frame++;
 	if (frame == 300 || frame == 900 || frame == 1800 || frame == 3000 || (frame > 3000 && frame <= 24000 && frame % 1500 == 0)) {
