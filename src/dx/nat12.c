@@ -107,6 +107,14 @@ typedef struct {
 	UINT64 value;
 } garbage_t;
 
+// static vertex / index buffers are cut from big upload buffers (a committed buffer costs a 64 KB heap each, and a level has tens of thousands of them)
+typedef struct chunk {
+	ID3D12Resource *res;
+	uint8_t *map;
+	UINT64 size, used;
+	int live, full;
+} chunk_t;
+
 struct nat_device {
 	ID3D12Device *dev;
 	ID3D12CommandQueue *queue, *cqueue;
@@ -155,6 +163,7 @@ struct nat_device {
 	// deferred releases
 	garbage_t *gc;
 	size_t gc_n, gc_cap;
+	chunk_t *cur_chunk;
 	// occlusion queries
 	ID3D12QueryHeap *qheap;
 	ID3D12Resource *qread;
@@ -1145,7 +1154,70 @@ typedef struct {
 	ID3D12Resource *res;
 	uint8_t *map;
 	UINT64 value; // the last submission that read this version
+	UINT64 off;   // the offset in res (a piece of a chunk), 0 for an own resource
+	chunk_t *chunk;
 } bver_t;
+
+#define CHUNK_SIZE (32ull << 20)
+
+static int sub_alloc(nat_device *d, UINT64 size, bver_t *v)
+{
+	size = (size + 255) & ~255ull;
+	if (size > CHUNK_SIZE / 4)
+		return 0;
+	EnterCriticalSection(&d->lock);
+	chunk_t *c = d->cur_chunk;
+	if (!c || c->used + size > c->size) {
+		if (c)
+			c->full = 1;
+		chunk_t *n = calloc(1, sizeof(*n));
+		n->size = CHUNK_SIZE;
+		n->res = make_buffer(d, CHUNK_SIZE, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+		if (!n->res) {
+			free(n);
+			if (c && c->live == 0) {
+				gc_add(d, c->res);
+				free(c);
+			}
+			d->cur_chunk = NULL;
+			LeaveCriticalSection(&d->lock);
+			return 0;
+		}
+		D3D12_RANGE none = {0, 0};
+		ID3D12Resource_Map(n->res, 0, &none, (void **)&n->map);
+		if (c && c->live == 0) {
+			gc_add(d, c->res);
+			free(c);
+		}
+		d->cur_chunk = c = n;
+	}
+	v->res = c->res;
+	v->map = c->map + c->used;
+	v->off = c->used;
+	v->chunk = c;
+	c->used += size;
+	c->live++;
+	LeaveCriticalSection(&d->lock);
+	return 1;
+}
+
+static void version_free(nat_device *d, bver_t *v)
+{
+	if (!v->res)
+		return;
+	if (!v->chunk) {
+		gc_add(d, v->res);
+		return;
+	}
+	EnterCriticalSection(&d->lock);
+	chunk_t *c = v->chunk;
+	c->live--;
+	if (c->live == 0 && c->full) {
+		gc_add(d, c->res);
+		free(c);
+	}
+	LeaveCriticalSection(&d->lock);
+}
 
 struct nat_buffer {
 	void **vt;
@@ -1189,11 +1261,14 @@ static void buffer_vt_init(void)
 
 void (*nat_log_hook)(const char *fmt, ...);
 
-static int add_version(nat_buffer *b)
+static int add_version(nat_buffer *b, int piece)
 {
 	if (b->nver >= 8)
 		return -1;
 	bver_t *v = &b->ver[b->nver];
+	memset(v, 0, sizeof(*v));
+	if (piece && sub_alloc(b->dev, b->size, v))
+		return b->nver++;
 	v->res = make_buffer(b->dev, b->size, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
 	if (!v->res)
 		return -1;
@@ -1214,7 +1289,7 @@ static uint8_t *next_version(nat_buffer *b)
 			return b->ver[i].map;
 		}
 	}
-	const int i = add_version(b);
+	const int i = add_version(b, 0);
 	if (i >= 0) {
 		b->cur = i;
 		return b->ver[i].map;
@@ -1234,7 +1309,7 @@ nat_buffer *nat_buffer_create(nat_device *d, unsigned size, int is_index, int dy
 	b->dynamic = dynamic;
 	b->is_index = is_index;
 	b->size = size;
-	if (add_version(b) < 0) {
+	if (add_version(b, !dynamic) < 0) {
 		free(b);
 		return NULL;
 	}
@@ -1248,7 +1323,7 @@ void nat_buffer_destroy(nat_buffer *b)
 	if (!b)
 		return;
 	for (int i = 0; i < b->nver; i++)
-		gc_add(b->dev, b->ver[i].res);
+		version_free(b->dev, &b->ver[i]);
 	free(b->cpu);
 	free(b->stage);
 	free(b);
@@ -1273,9 +1348,10 @@ nat_buffer *nat_buffer_create_static(nat_device *d, unsigned size, int is_index,
 
 nat_buffer *nat_buffer_create_staged(nat_device *d, unsigned size, const volatile int *used)
 {
-	nat_buffer *b = nat_buffer_create(d, size, 0, 0, NULL);
+	nat_buffer *b = nat_buffer_create(d, size, 0, 1, NULL); // (own upload resources, rotated by Lock: the ring is big and rewritten every frame)
 	if (!b)
 		return NULL;
+	b->dynamic = 0;
 	b->stage = calloc(1, size);
 	if (!b->stage) {
 		nat_buffer_destroy(b);
@@ -1317,7 +1393,7 @@ D3D12_GPU_VIRTUAL_ADDRESS nat12_buffer_address(nat_buffer *b)
 {
 	if (!b || b->nver < 1)
 		return 0;
-	return ID3D12Resource_GetGPUVirtualAddress(b->ver[b->cur].res);
+	return ID3D12Resource_GetGPUVirtualAddress(b->ver[b->cur].res) + b->ver[b->cur].off;
 }
 unsigned nat12_buffer_size(const nat_buffer *b) { return b ? b->size : 0; }
 void nat12_buffer_used(nat_device *d, nat_buffer *b)
@@ -1365,7 +1441,7 @@ static long buffer_unlock(void *self)
 	nat_buffer *b = (nat_buffer *)self;
 	if (b->dynamic || b->stage || !b->cpu)
 		return 0;
-	if (add_version(b) >= 0) {
+	if (add_version(b, 1) >= 0) {
 		b->cur = b->nver - 1;
 		memcpy(b->ver[b->cur].map, b->cpu, b->size);
 	}
