@@ -6972,6 +6972,16 @@ static void p0_put(uint8_t *slot)
 		float *f = (float *)slot;
 		f[CF_YAW0] = f[CF_YAW1] = f[CF_YAW2] = y;
 	}
+	// ... and his pitch (the float before each yaw): the body's torso aims by it. Without it the body of player 1 in player 2's half held his rifle low whatever he looked at
+	// (aiming at player 2's head, the muzzle was well below it) ([native] pitchkeep=0 off)
+	static int pitch_on = -1;
+	if (pitch_on < 0)
+		pitch_on = cfg("pitchkeep", 1);
+	if (pitch_on && ctx_store[0][5]) {
+		float pt = *(const float *)(ctx_store[0][5] + CL_BLOCK_PS + 0x108);
+		float *f = (float *)slot;
+		f[CF_YAW0 - 1] = f[CF_YAW1 - 1] = f[CF_YAW2 - 1] = pt;
+	}
 }
 
 #ifdef _WIN64

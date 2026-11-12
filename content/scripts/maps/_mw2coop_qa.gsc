@@ -203,6 +203,12 @@ main()
 		case "face":
 			face();
 			break;
+		case "aimhead":
+			aimhead();
+			break;
+		case "pitchramp":
+			pitchramp();
+			break;
 		case "gunface":
 			gunface();
 			break;
@@ -981,6 +987,64 @@ gunface()
 		level.player SwitchToWeapon( "m4_grunt" );
 		level.player2 SwitchToWeapon( "m4_grunt" );
 		wait 0.5;
+	}
+}
+
+// aimhead: (split screen test) after the briefing, player 2 stands 200 units in front of player 1, both hold a rifle; player 1 aims at player 2's eyes and player 2 looks at player 1's eyes.
+// Composed frames "aimhead-<n>" show where player 1's muzzle is in player 2's half (it must be on the line from player 2's eye, i.e. right at his crosshair, not lower).
+aimhead()
+{
+	wait 45;
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	a = level.player;
+	b = level.player2;
+	SetSavedDvar( "cg_drawGun", 1 );
+	a GiveWeapon( "m4_grunt" );
+	b GiveWeapon( "m4_grunt" );
+	a SwitchToWeapon( "m4_grunt" );
+	b SwitchToWeapon( "m4_grunt" );
+	fwd = AnglesToForward( ( 0, a.angles[ 1 ], 0 ) );
+	b SetOrigin( a.origin + fwd * 200 );
+	for ( i = 0; i < 400; i++ )
+	{
+		ae = a.origin + ( 0, 0, 60 );
+		be = b.origin + ( 0, 0, 60 );
+		a SetPlayerAngles( VectorToAngles( be - ae ) );
+		b SetPlayerAngles( VectorToAngles( ae - be ) );
+		wait 0.05;
+		if ( i == 100 || i == 200 || i == 300 )
+		{
+			SetDvar( "mw2coop_qa_frame", "aimhead-" + i );
+			report( "aimhead " + i + ": p1 eye " + ae + " angles " + a GetPlayerAngles() + " | p2 eye " + be + " angles " + b GetPlayerAngles() );
+		}
+	}
+}
+
+// pitchramp: (split screen test) like aimhead, but player 1's pitch is stepped through -40 .. 40 degrees, 3 s each; the pitch is logged with the time, to be lined up with the native log's entdump lines
+// of context 1's slot 1 (the body of player 1 as player 2's cgame sees it)
+pitchramp()
+{
+	wait 45;
+	level.mw2coop_no_follow = true;
+	level.mw2coop_no_leash = true;
+	a = level.player;
+	b = level.player2;
+	SetSavedDvar( "cg_drawGun", 1 );
+	a GiveWeapon( "m4_grunt" );
+	a SwitchToWeapon( "m4_grunt" );
+	fwd = AnglesToForward( ( 0, a.angles[ 1 ], 0 ) );
+	b SetOrigin( a.origin + fwd * 200 );
+	b SetPlayerAngles( ( 0, a.angles[ 1 ] + 180, 0 ) );
+	for ( p = -40; p <= 40; p += 20 )
+	{
+		for ( i = 0; i < 60; i++ )
+		{
+			a SetPlayerAngles( ( p, a.angles[ 1 ], 0 ) );
+			wait 0.05;
+		}
+		report( "pitchramp t " + GetTime() + " p1 pitch set " + p + " now " + a GetPlayerAngles() );
+		SetDvar( "mw2coop_qa_frame", "pitch" + ( p + 40 ) );
 	}
 }
 
