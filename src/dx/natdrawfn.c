@@ -90,6 +90,7 @@ void ngf_set_viewport(ngf *f, void *state, const int *vp4)
 		return;
 	memcpy(AT(state, 0xb88), vp4, 16);
 	nd_set_viewport(f->d, (float)vp4[0], (float)vp4[1], (float)vp4[2], (float)vp4[3], RD_F32(state, 0x148), RD_F32(state, 0x14c));
+	ng_weapon_viewport(f->g, RD_F32(state, 0x148));
 	apply_scissor(f, state);
 }
 
@@ -103,6 +104,7 @@ void ngf_depth_range(ngf *f, void *state, int hack)
 	RD_F32(state, 0x148) = mn;
 	RD_F32(state, 0x14c) = mx;
 	nd_set_viewport(f->d, (float)RD_I32(state, 0xb88), (float)RD_I32(state, 0xb8c), (float)RD_I32(state, 0xb90), (float)RD_I32(state, 0xb94), mn, mx);
+	ng_weapon_viewport(f->g, mn);
 	apply_scissor(f, state);
 }
 
@@ -139,6 +141,7 @@ void ngf_target_switch(ngf *f, void *input, void *state, int n)
 		RD_F32(state, 0x14c) = 1.0f;
 		// Direct3D 9 resets the device's viewport and scissor rectangle to the new target's size when a target is set (the engine relies on it: its blur and downsample passes never set the viewport)
 		nd_set_viewport(f->d, 0.0f, 0.0f, (float)RD_I32(entry, 0x18), (float)RD_I32(entry, 0x1c), 0.0f, 1.0f);
+		ng_weapon_viewport(f->g, 0.0f);
 		nd_set_scissor_rect(f->d, 0, 0, RD_I32(entry, 0x18), RD_I32(entry, 0x1c));
 	}
 	nd_set_targets(f->d, color, depth);

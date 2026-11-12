@@ -823,6 +823,44 @@ int nat_image_upload(nat_image *i, unsigned face, unsigned level, const void *da
 	return 1;
 }
 
+int nat_image_download(nat_image *i, unsigned level, void **out, unsigned *pitch, unsigned *rows)
+{
+	if (!i || !i->res || level >= i->levels)
+		return 0;
+	D3D11_TEXTURE2D_DESC td;
+	ID3D11Texture2D_GetDesc((ID3D11Texture2D *)i->res, &td);
+	td.Width = td.Width >> level ? td.Width >> level : 1;
+	td.Height = td.Height >> level ? td.Height >> level : 1;
+	td.MipLevels = 1;
+	td.ArraySize = 1;
+	td.Usage = D3D11_USAGE_STAGING;
+	td.BindFlags = 0;
+	td.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	td.MiscFlags = 0;
+	td.SampleDesc.Count = 1;
+	ID3D11Texture2D *st = NULL;
+	if (FAILED(ID3D11Device_CreateTexture2D(i->dev->dev, &td, NULL, &st)))
+		return 0;
+	ID3D11DeviceContext_CopySubresourceRegion(i->dev->ctx, (ID3D11Resource *)st, 0, 0, 0, 0, i->res, level, NULL);
+	D3D11_MAPPED_SUBRESOURCE m;
+	int ok = 0;
+	if (SUCCEEDED(ID3D11DeviceContext_Map(i->dev->ctx, (ID3D11Resource *)st, 0, D3D11_MAP_READ, 0, &m))) {
+		const unsigned r = ((td.Format >= 70 && td.Format <= 84) || (td.Format >= 94 && td.Format <= 99)) ? (td.Height + 3) / 4 : td.Height;
+		uint8_t *buf = malloc((size_t)m.RowPitch * r);
+		if (buf) {
+			memcpy(buf, m.pData, (size_t)m.RowPitch * r);
+			*out = buf;
+			*pitch = m.RowPitch;
+			*rows = r;
+			ok = 1;
+		}
+		ID3D11DeviceContext_Unmap(i->dev->ctx, (ID3D11Resource *)st, 0);
+	}
+	ID3D11Texture2D_Release(st);
+	return ok;
+}
+
+unsigned nat_image_d3d9_format(const nat_image *i) { return i->desc.d3d9_format; }
 int nat_image_is_depth(const nat_image *i) { return i && (i->desc.flags & NAT_DEPTH) != 0; }
 void *nat_image_srv(nat_image *i, int srgb) { return srgb && i->srv_srgb ? i->srv_srgb : i->srv; }
 void *nat_image_rtv(nat_image *i, int srgb) { return srgb && i->rtv_srgb ? i->rtv_srgb : i->rtv; }

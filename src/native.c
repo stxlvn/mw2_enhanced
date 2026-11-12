@@ -2319,6 +2319,20 @@ static void final2d_hook(void *vp)
 		IDirect3DSurface9_Release(old);
 }
 
+// [native] weaponfov on the native renderers (src/dx/natgfx.c ng_weapon_viewport): tan(view fov / 2) / tan(weapon fov / 2), 0 when the weapon keeps the game's field of view
+static float weaponfov_base_tan(void);
+float native_weapon_k(void);
+float native_weapon_k(void)
+{
+	static float wt = -1;
+	if (wt < 0) {
+		const int fov = cfg("weaponfov", 0);
+		wt = fov > 0 ? tanf((float)fov * 3.14159265f / 360.0f) : 0;
+	}
+	const float vt = wt > 0 ? weaponfov_base_tan() : 0;
+	return vt > 0 && wt > 0 ? vt / wt : 0;
+}
+
 // the native renderers' frame end (natboot.c): is this frame one half of a split frame, and which; the first frame of a pair is composed but not shown
 int native_nat_split_frame(int *half);
 int native_nat_split_frame(int *half)

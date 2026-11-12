@@ -103,6 +103,8 @@ typedef struct {
 } nat_image_desc;
 nat_image *nat_image_create(nat_device *d, const nat_image_desc *desc);
 void nat_image_destroy(nat_image *i);
+// the mod's own users of the game's textures (logo, pad pictures, fonts): one level of an image read back (the rows as the game's layout holds them: pixels, or 4x4 blocks for DXT); *out is malloc'd
+int nat_image_download(nat_image *i, unsigned level, void **out, unsigned *pitch, unsigned *rows);
 // one level (and face for cubes); data is the level's pixels in the game's layout: rows of (width pixels or 4x4 blocks), slices of volumes one after the other. L8 / A8L8 are widened to 8888.
 int nat_image_upload(nat_image *i, unsigned face, unsigned level, const void *data, unsigned row_pitch, unsigned slice_pitch);
 void *nat_image_srv(nat_image *i, int srgb);
@@ -116,6 +118,7 @@ unsigned nat_image_dxgi_format(const nat_image *i); // the DXGI_FORMAT of the re
 void *nat_scene_resource(nat_device *d);
 unsigned nat_scene_samples(const nat_device *d); // the ID3D11Resource (readbacks, copies)
 unsigned nat_image_levels(const nat_image *i);
+unsigned nat_image_d3d9_format(const nat_image *i);
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------------ buffers
 typedef struct nat_buffer nat_buffer;

@@ -11,10 +11,21 @@ void natboot_shot(const char *name);
 int natboot_comp_make(void);
 void natboot_layer_begin(int half, int clear);
 void natboot_layer_end(void);
+// textures of the active native renderer for the mod's own code (src/modtex.c)
+void *natboot_tex_create(unsigned w, unsigned h, unsigned levels, unsigned d3dfmt);
+int natboot_tex_upload(void *img, unsigned level, const void *data, unsigned pitch);
+int natboot_tex_download(void *img, unsigned level, void **out, unsigned *pitch, unsigned *rows);
+int natboot_tex_info(void *img, unsigned *w, unsigned *h, unsigned *levels, unsigned *max_size, unsigned *fmt);
+void natboot_tex_release(void *img);
 #else
 static inline int natboot_active(void) { return 0; } // the native renderer is 64-bit only
 static inline void natboot_shot(const char *name) { (void)name; }
 static inline int natboot_comp_make(void) { return 0; }
 static inline void natboot_layer_begin(int half, int clear) { (void)half; (void)clear; }
 static inline void natboot_layer_end(void) {}
+static inline void *natboot_tex_create(unsigned w, unsigned h, unsigned levels, unsigned d3dfmt) { (void)w; (void)h; (void)levels; (void)d3dfmt; return 0; }
+static inline int natboot_tex_upload(void *img, unsigned level, const void *data, unsigned pitch) { (void)img; (void)level; (void)data; (void)pitch; return 0; }
+static inline int natboot_tex_download(void *img, unsigned level, void **out, unsigned *pitch, unsigned *rows) { (void)img; (void)level; (void)out; (void)pitch; (void)rows; return 0; }
+static inline int natboot_tex_info(void *img, unsigned *w, unsigned *h, unsigned *levels, unsigned *max_size, unsigned *fmt) { (void)img; (void)w; (void)h; (void)levels; (void)max_size; (void)fmt; return 0; }
+static inline void natboot_tex_release(void *img) { (void)img; }
 #endif

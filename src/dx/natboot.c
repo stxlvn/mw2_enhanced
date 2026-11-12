@@ -360,6 +360,54 @@ static void natboot_comp_frame(void)
 	cp_lay_have[0] = cp_lay_have[1] = 0; // (each frame draws its own layer again)
 }
 
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ textures for the mod's own code
+// src/modtex.c: the logo, the gamepad pictures and the font atlas are textures the mod makes or reads on the game's device; with the native renderer they are images of this back end (the same field
+// of the game's image struct holds either). One function per operation, each handed to the copy of this file that belongs to the active back end.
+#ifdef NAT_BACKEND_12
+#define TEX_DISPATCH(ret, name, proto, args)
+#else
+#define TEX_DISPATCH(ret, name, proto, args) \
+	if (settings_directx12()) { \
+		extern ret b12_##name proto; \
+		return b12_##name args; \
+	}
+#endif
+void *natboot_tex_create(unsigned w, unsigned h, unsigned levels, unsigned d3dfmt)
+{
+	TEX_DISPATCH(void *, natboot_tex_create, (unsigned, unsigned, unsigned, unsigned), (w, h, levels, d3dfmt))
+	if (!N.created)
+		return NULL;
+	nat_image_desc d = {NAT_IMAGE_2D, w, h, 1, levels, d3dfmt, 0, 0};
+	return nat_image_create(N.dev, &d);
+}
+int natboot_tex_upload(void *img, unsigned level, const void *data, unsigned pitch)
+{
+	TEX_DISPATCH(int, natboot_tex_upload, (void *, unsigned, const void *, unsigned), (img, level, data, pitch))
+	return nat_image_upload((nat_image *)img, 0, level, data, pitch, 0);
+}
+int natboot_tex_download(void *img, unsigned level, void **out, unsigned *pitch, unsigned *rows)
+{
+	TEX_DISPATCH(int, natboot_tex_download, (void *, unsigned, void **, unsigned *, unsigned *), (img, level, out, pitch, rows))
+	return nat_image_download((nat_image *)img, level, out, pitch, rows);
+}
+int natboot_tex_info(void *img, unsigned *w, unsigned *h, unsigned *levels, unsigned *max_size, unsigned *fmt)
+{
+	TEX_DISPATCH(int, natboot_tex_info, (void *, unsigned *, unsigned *, unsigned *, unsigned *, unsigned *), (img, w, h, levels, max_size, fmt))
+	if (!N.created || !img)
+		return 0;
+	unsigned s;
+	nat_image_size((nat_image *)img, w, h, &s);
+	*levels = nat_image_levels((nat_image *)img);
+	*fmt = nat_image_d3d9_format((nat_image *)img);
+	*max_size = nat_get_caps(N.dev)->max_texture;
+	return 1;
+}
+void natboot_tex_release(void *img)
+{
+	TEX_DISPATCH(void, natboot_tex_release, (void *), (img))
+	nat_image_destroy((nat_image *)img);
+}
+
 static volatile DWORD render_tid;
 extern int nd_trace;
 static void w_45060(unsigned flags)
@@ -863,6 +911,11 @@ static void install_all(void)
 	memset(&N, 0, sizeof(N));
 	nbr_bind(&N, exe);
 	nat_log_hook = log_printf;
+	{
+		extern float native_weapon_k(void);
+		ng_weapon_k = native_weapon_k; // [native] weaponfov on the native renderer
+	}
+
 	AddVectoredExceptionHandler(1, veh);
 	CloseHandle(CreateThread(NULL, 0, monitor, NULL, 0, NULL));
 	if (getenv("MW2COOP_PROFILE"))

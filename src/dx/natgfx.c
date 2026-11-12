@@ -1,4 +1,5 @@
 // The apply half of the new back end (see natgfx.h). Pure C, no Direct3D.
+#include <math.h>
 #include "natgfx.h"
 
 #include <string.h>
@@ -20,6 +21,42 @@ void ng_init(ng_state *s)
 	memset(s, 0, sizeof(*s));
 }
 
+float (*ng_weapon_k)(void);
+static float wf_orig[16]; // the game's view-projection matrix while the weapon's scaled one is in the registers
+static int wf_scaled;
+
+static int wf_perspective(const float *m) // clip w comes from depth: row 3 has no constant w part (the 2D passes in the same depth range are orthographic and stay as they are)
+{
+	return fabsf(m[15]) < 1e-4f && (fabsf(m[12]) + fabsf(m[13]) + fabsf(m[14])) > 1e-4f;
+}
+
+static void wf_mark_dirty(ng_state *s)
+{
+	s->vs_dirty[0] |= 15;
+	s->n_vs_writes++;
+}
+
+void ng_weapon_viewport(ng_state *s, float min_z)
+{
+	if (!ng_weapon_k)
+		return;
+	const int weapon = min_z > 0.0f;
+	if (weapon && !wf_scaled) {
+		const float k = ng_weapon_k();
+		if (k > 0 && wf_perspective(&s->vs_c[0][0])) {
+			memcpy(wf_orig, s->vs_c, sizeof(wf_orig));
+			for (int i = 0; i < 8; i++)
+				(&s->vs_c[0][0])[i] *= k;
+			wf_mark_dirty(s);
+			wf_scaled = 1;
+		}
+	} else if (!weapon && wf_scaled) {
+		memcpy(s->vs_c, wf_orig, sizeof(wf_orig));
+		wf_mark_dirty(s);
+		wf_scaled = 0;
+	}
+}
+
 static void put_const(ng_state *s, int pixel, unsigned reg, const float *src, unsigned rows)
 {
 	float(*file)[4] = pixel ? s->ps_c : s->vs_c;
@@ -28,6 +65,25 @@ static void put_const(ng_state *s, int pixel, unsigned reg, const float *src, un
 		return;
 	if (reg + rows > 256)
 		rows = 256 - reg;
+	if (!pixel && wf_scaled) {
+		if (reg == 0 && rows >= 4 && !wf_perspective(src)) {
+			wf_scaled = 0; // an orthographic matrix: not the weapon any more, left as the game sends it
+		} else if (reg < 4) {
+			const float k = ng_weapon_k ? ng_weapon_k() : 0;
+			if (k > 0) {
+				for (unsigned r = reg; r < reg + rows && r < 4; r++)
+					memcpy(wf_orig + r * 4, src + (r - reg) * 4, 16); // what the game holds in the register
+				memcpy(file[reg], src, (size_t)rows * 16);
+				for (unsigned r = reg; r < reg + rows && r < 2; r++)
+					for (int j = 0; j < 4; j++)
+						file[r][j] *= k;
+				for (unsigned r = reg; r < reg + rows; r++)
+					dirty[r >> 5] |= 1u << (r & 31);
+				s->n_vs_writes++;
+				return;
+			}
+		}
+	}
 	memcpy(file[reg], src, (size_t)rows * 16);
 	for (unsigned r = reg; r < reg + rows; r++)
 		dirty[r >> 5] |= 1u << (r & 31);

@@ -1902,6 +1902,50 @@ int nat_output_count(void)
 	return n;
 }
 
+unsigned nat_image_d3d9_format(const nat_image *i) { return i->desc.d3d9_format; }
+
+int nat_image_download(nat_image *im, unsigned level, void **out, unsigned *pitch, unsigned *rows)
+{
+	nat_device *d = im ? im->dev : NULL;
+	if (!d || !im->res || level >= im->levels)
+		return 0;
+	nat12_image_transition(d, im, D3D12_RESOURCE_STATE_COPY_SOURCE);
+	D3D12_RESOURCE_DESC rd = ID3D12Resource_GetDesc(im->res);
+	D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp;
+	UINT nrows;
+	UINT64 rowsize, total;
+	ID3D12Device_GetCopyableFootprints(d->dev, &rd, level, 1, 0, &fp, &nrows, &rowsize, &total);
+	ID3D12Resource *rb = make_buffer(d, total, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+	if (!rb)
+		return 0;
+	D3D12_TEXTURE_COPY_LOCATION dst = {0}, sl = {0};
+	dst.pResource = rb;
+	dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+	dst.PlacedFootprint = fp;
+	sl.pResource = im->res;
+	sl.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+	sl.SubresourceIndex = level;
+	ID3D12GraphicsCommandList_CopyTextureRegion(d->list, &dst, 0, 0, 0, &sl, NULL);
+	nat12_flush(d);
+	int ok = 0;
+	uint8_t *map = NULL;
+	D3D12_RANGE all = {0, (SIZE_T)total};
+	if (SUCCEEDED(ID3D12Resource_Map(rb, 0, &all, (void **)&map))) {
+		uint8_t *buf = malloc((size_t)fp.Footprint.RowPitch * nrows);
+		if (buf) {
+			memcpy(buf, map, (size_t)fp.Footprint.RowPitch * nrows);
+			*out = buf;
+			*pitch = fp.Footprint.RowPitch;
+			*rows = nrows;
+			ok = 1;
+		}
+		D3D12_RANGE none = {0, 0};
+		ID3D12Resource_Unmap(rb, 0, &none);
+	}
+	ID3D12Resource_Release(rb);
+	return ok;
+}
+
 int nat_read_pixel(nat_device *d, nat_image *im, unsigned x, unsigned y, uint32_t *out)
 {
 	nat_image *src = im ? im : d->scene;

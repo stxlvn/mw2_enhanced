@@ -41,6 +41,11 @@ enum {
 };
 
 void ng_init(ng_state *s);
+// The weapon's own field of view ([native] weaponfov, src/weaponfov.c does it on the Direct3D 9 device): while the viewport's depth range starts above 0 (the weapon's "depth hack") the clip x and y
+// rows of the view-projection matrix (vertex constants c0..c3) are scaled by ng_weapon_k() = tan(view fov / 2) / tan(weapon fov / 2); when the range goes back the game's own matrix is put back.
+// ng_weapon_k is NULL (off) unless the host sets it; it returns 0 when the weapon keeps the game's field of view.
+extern float (*ng_weapon_k)(void);
+void ng_weapon_viewport(ng_state *s, float min_z);
 // 0x54a10: selects pass `pass_index` of the current technique (updates state +0x138 / +0x140), applies the render-state words, the pixel shader and the pass's stable arguments (vertex side
 // and samplers; the pixel constants of the stable list are ng_apply_ps_stable's)
 void ng_select_pass(ng_state *s, const ng_ops *ops, void *input, void *state, unsigned pass_index);

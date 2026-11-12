@@ -10,6 +10,7 @@
 #include <string.h>
 
 #include "log.h"
+#include "modtex.h"
 #include "padicon.h"
 
 #ifdef _WIN64
@@ -182,21 +183,18 @@ static void *build_material(void *keyboard_material, sample_fn fn, float width, 
 	IDirect3DTexture9 *old = image ? *(IDirect3DTexture9 **)image : NULL;
 	if (!old)
 		return NULL; // the renderer has not made the keyboard's texture yet
-	IDirect3DDevice9 *dev = NULL;
 	D3DSURFACE_DESC desc;
-	if (FAILED(IDirect3DTexture9_GetDevice(old, &dev)) || FAILED(IDirect3DTexture9_GetLevelDesc(old, 0, &desc)))
+	if (FAILED(modtex_get_level_desc(old, 0, &desc)))
 		return NULL;
 	UINT w = desc.Width < 256 ? 256 : desc.Width, h = desc.Height < 256 ? 256 : desc.Height; // (the 32-bit game's placeholder of the card is 16 x 16: too small for a picture)
-	IDirect3DTexture9 *tex = NULL;
-	HRESULT hr = IDirect3DDevice9_CreateTexture(dev, w, h, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, NULL);
-	IDirect3DDevice9_Release(dev);
-	if (FAILED(hr)) {
+	IDirect3DTexture9 *tex = modtex_create(old, w, h, 1, D3DFMT_A8R8G8B8);
+	if (!tex) {
 		log_printf("padicon: cannot make the gamepad texture (%ux%u)", w, h);
 		return NULL;
 	}
 	D3DLOCKED_RECT r;
-	if (FAILED(IDirect3DTexture9_LockRect(tex, 0, &r, NULL, 0))) {
-		IDirect3DTexture9_Release(tex);
+	if (FAILED(modtex_lock(tex, 0, &r, 0))) {
+		modtex_release(tex);
 		return NULL;
 	}
 	// the picture is square; the keyboard and mouse in theirs span about 0.9 of its width and, vertically, 0.36 to 0.88 (measured on a
@@ -219,7 +217,7 @@ static void *build_material(void *keyboard_material, sample_fn fn, float width, 
 			row[px] = av << 24 | gv << 16 | gv << 8 | gv;
 		}
 	}
-	IDirect3DTexture9_UnlockRect(tex, 0);
+	modtex_unlock(tex, 0);
 	// the copies: the material with its own texture table and image (they are read a little over their ends, as menu copies are)
 	static uint8_t mats[2][0x100], tabs[2][0x40], imgs[2][0x80];
 	int slot = cache == &kb_material;

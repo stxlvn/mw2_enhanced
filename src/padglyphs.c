@@ -17,6 +17,7 @@
 #include "game.h"
 #include "hook.h"
 #include "log.h"
+#include "modtex.h"
 #include "padglyphs.h"
 
 #ifdef _WIN64
@@ -188,23 +189,21 @@ static void make_materials(void)
 	uint8_t *table = white ? *(uint8_t **)(white + MATERIAL_TABLE) : NULL;
 	uint8_t *image = table ? *(uint8_t **)(table + 8) : NULL;
 	IDirect3DTexture9 *tex0 = image ? *(IDirect3DTexture9 **)image : NULL;
-	IDirect3DDevice9 *dev = NULL;
-	if (!tex0 || FAILED(IDirect3DTexture9_GetDevice(tex0, &dev))) {
+	if (!tex0) {
 		failed++;
 		return;
 	}
 	static char names[BUTTONS][24];
 	for (int b = 0; b < BUTTONS; b++) {
-		IDirect3DTexture9 *tex = NULL;
+		IDirect3DTexture9 *tex = modtex_create(tex0, ICON, ICON, 1, D3DFMT_A8R8G8B8);
 		D3DLOCKED_RECT lr;
-		if (FAILED(IDirect3DDevice9_CreateTexture(dev, ICON, ICON, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, NULL)) ||
-		    FAILED(IDirect3DTexture9_LockRect(tex, 0, &lr, NULL, 0))) {
+		if (!tex || FAILED(modtex_lock(tex, 0, &lr, 0))) {
 			if (tex)
-				IDirect3DTexture9_Release(tex);
+				modtex_release(tex);
 			continue;
 		}
 		draw_icon(b, (uint8_t *)lr.pBits, lr.Pitch);
-		IDirect3DTexture9_UnlockRect(tex, 0);
+		modtex_unlock(tex, 0);
 		uint8_t *mat = HeapAlloc(GetProcessHeap(), 0, 0x100), *tab = HeapAlloc(GetProcessHeap(), 0, 0x40), *img = HeapAlloc(GetProcessHeap(), 0, 0x80);
 		memcpy(mat, white, 0x100); // (the copies read a little over the ends, as the menus' copies do)
 		memcpy(tab, table, 0x40);
@@ -220,7 +219,6 @@ static void make_materials(void)
 		*(const char **)mat = names[b];
 		materials[b] = mat;
 	}
-	IDirect3DDevice9_Release(dev);
 	log_printf("padglyphs: %d button pictures made", materials[0] ? BUTTONS : 0);
 }
 

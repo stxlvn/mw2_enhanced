@@ -11,6 +11,8 @@
 
 #include "d3dcap.h"
 #include "log.h"
+#include "modtex.h"
+#include "dx/natboot.h"
 #include "logo.h"
 
 #ifdef _WIN64
@@ -52,11 +54,11 @@ static void game_dir_file(const char *rel, char *out, size_t size)
 static uint32_t *read_texture(IDirect3DTexture9 *tex, int *w, int *h)
 {
 	D3DSURFACE_DESC d;
-	if (FAILED(IDirect3DTexture9_GetLevelDesc(tex, 0, &d)))
+	if (FAILED(modtex_get_level_desc(tex, 0, &d)))
 		return NULL;
 	log_printf("logo: texture %ux%u format %u pool %u usage 0x%x", d.Width, d.Height, (unsigned)d.Format, (unsigned)d.Pool, (unsigned)d.Usage);
 	D3DLOCKED_RECT lr;
-	if (FAILED(IDirect3DTexture9_LockRect(tex, 0, &lr, NULL, D3DLOCK_READONLY))) {
+	if (FAILED(modtex_lock(tex, 0, &lr, D3DLOCK_READONLY))) {
 		log_printf("logo: the texture cannot be locked (pool %u)", (unsigned)d.Pool);
 		return NULL;
 	}
@@ -119,7 +121,7 @@ static uint32_t *read_texture(IDirect3DTexture9 *tex, int *w, int *h)
 		free(px);
 		px = NULL;
 	}
-	IDirect3DTexture9_UnlockRect(tex, 0);
+	modtex_unlock(tex, 0);
 	*w = (int)d.Width;
 	*h = (int)d.Height;
 	return px;
@@ -192,7 +194,7 @@ static void composite(uint32_t *dst, const uint32_t *over, int n)
 // the result written into every mip level of the (managed, A8R8G8B8) texture; the lower levels by averaging 2 x 2 pixels of the one above
 static int write_texture(IDirect3DTexture9 *tex, const uint32_t *px, int w, int h)
 {
-	DWORD levels = IDirect3DTexture9_GetLevelCount(tex);
+	DWORD levels = modtex_levels(tex);
 	uint32_t *cur = malloc((size_t)w * h * 4);
 	if (!cur)
 		return 0;
@@ -200,13 +202,13 @@ static int write_texture(IDirect3DTexture9 *tex, const uint32_t *px, int w, int 
 	int cw = w, ch = h, ok = 1;
 	for (DWORD lv = 0; lv < levels; lv++) {
 		D3DLOCKED_RECT lr;
-		if (FAILED(IDirect3DTexture9_LockRect(tex, lv, &lr, NULL, 0))) {
+		if (FAILED(modtex_lock(tex, lv, &lr, 0))) {
 			ok = 0;
 			break;
 		}
 		for (int y = 0; y < ch; y++)
 			memcpy((uint8_t *)lr.pBits + (size_t)y * lr.Pitch, cur + (size_t)y * cw, (size_t)cw * 4);
-		IDirect3DTexture9_UnlockRect(tex, lv);
+		modtex_unlock(tex, lv);
 		if (lv + 1 < levels && cw > 1 && ch > 1) {
 			int nw = cw / 2, nh = ch / 2;
 			uint32_t *next = malloc((size_t)nw * nh * 4);
@@ -245,9 +247,8 @@ void logo_install(void *material, int dump_only)
 		return;
 	done = material;
 	uint8_t *image = material_image(material);
-	IDirect3DDevice9 *dev = d3dcap_device();
-	if (!image || !dev) {
-		log_printf("logo: no image (%p) or device (%p)", (void *)image, (void *)dev);
+	if (!image || !(natboot_active() || d3dcap_device())) {
+		log_printf("logo: no image (%p) or device", (void *)image);
 		return;
 	}
 	IDirect3DTexture9 *tex = *(IDirect3DTexture9 **)image;
@@ -268,7 +269,7 @@ void logo_install(void *material, int dump_only)
 		return;
 	}
 	D3DSURFACE_DESC d;
-	IDirect3DTexture9_GetLevelDesc(tex, 0, &d);
+	modtex_get_level_desc(tex, 0, &d);
 	int ow = 0, oh = 0;
 	game_dir_file("mw2coop\\logo-enhanced.tga", path, sizeof(path));
 	uint32_t *over = read_tga(path, &ow, &oh);
@@ -294,8 +295,7 @@ void *icons_material(void *template_material)
 		return NULL;
 	uint8_t *table = *(uint8_t **)(src + MATERIAL_TABLE);
 	uint8_t *image = table && readable(table, 0x40) ? *(uint8_t **)(table + DEF_IMAGE) : NULL;
-	IDirect3DDevice9 *dev = d3dcap_device();
-	if (!image || !readable(image, 0x80) || !dev)
+	if (!image || !readable(image, 0x80) || !(natboot_active() || d3dcap_device()))
 		return NULL;
 	char path[MAX_PATH];
 	game_dir_file("mw2coop\\about-icons.tga", path, sizeof(path));
@@ -305,20 +305,20 @@ void *icons_material(void *template_material)
 		log_printf("logo: %s is missing: no icons on the About page", path);
 		return NULL;
 	}
-	IDirect3DTexture9 *tex = NULL;
-	if (FAILED(IDirect3DDevice9_CreateTexture(dev, (UINT)w, (UINT)h, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, NULL)) || !tex) {
+	IDirect3DTexture9 *tex = modtex_create(*(void **)image, (UINT)w, (UINT)h, 1, D3DFMT_A8R8G8B8);
+	if (!tex) {
 		free(px);
 		return NULL;
 	}
 	D3DLOCKED_RECT lr;
-	if (FAILED(IDirect3DTexture9_LockRect(tex, 0, &lr, NULL, 0))) {
-		IDirect3DTexture9_Release(tex);
+	if (FAILED(modtex_lock(tex, 0, &lr, 0))) {
+		modtex_release(tex);
 		free(px);
 		return NULL;
 	}
 	for (int y = 0; y < h; y++)
 		memcpy((uint8_t *)lr.pBits + (size_t)y * lr.Pitch, px + (size_t)y * w, (size_t)w * 4);
-	IDirect3DTexture9_UnlockRect(tex, 0);
+	modtex_unlock(tex, 0);
 	free(px);
 	static uint8_t mat[0x100], tab[0x40], img[0x80];
 	memcpy(mat, src, 0x100);

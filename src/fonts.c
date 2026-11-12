@@ -33,6 +33,7 @@
 #include "localize.h"
 #include "dx/natboot.h"
 #include "log.h"
+#include "modtex.h"
 #include "settings.h"
 
 #ifdef _WIN64
@@ -862,19 +863,18 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 	qsort(unique, (size_t)nuniq, sizeof(int), cmp_height);
 	uint8_t *image = material_image(atlas_material);
 	IDirect3DTexture9 *old_tex = image ? *(IDirect3DTexture9 **)image : NULL;
-	IDirect3DDevice9 *caps_dev = NULL;
-	D3DCAPS9 caps;
-	if (!old_tex || FAILED(IDirect3DTexture9_GetDevice(old_tex, &caps_dev)) || !caps_dev || FAILED(IDirect3DDevice9_GetDeviceCaps(caps_dev, &caps))) {
-		if (caps_dev) IDirect3DDevice9_Release(caps_dev);
+	int tex_max_w = 0, tex_max_h = 0;
+	if (old_tex)
+		modtex_max_size(old_tex, &tex_max_w, &tex_max_h);
+	if (!old_tex || tex_max_w <= 0 || tex_max_h <= 0) {
 		log_printf("fonts: cannot query the renderer texture limits");
 		free(unique);
 		free_jobs(jobs, njobs);
 		free_bitmaps();
 		return;
 	}
-	IDirect3DDevice9_Release(caps_dev);
-	int max_width = caps.MaxTextureWidth < ATLAS_MAX_SIZE ? (int)caps.MaxTextureWidth : ATLAS_MAX_SIZE;
-	int max_height = caps.MaxTextureHeight < ATLAS_MAX_SIZE ? (int)caps.MaxTextureHeight : ATLAS_MAX_SIZE;
+	int max_width = tex_max_w < ATLAS_MAX_SIZE ? tex_max_w : ATLAS_MAX_SIZE;
+	int max_height = tex_max_h < ATLAS_MAX_SIZE ? tex_max_h : ATLAS_MAX_SIZE;
 	int widths[] = {ATLAS_MIN_WIDTH, 2048, ATLAS_MAX_SIZE};
 	int atlas_width = 0, atlas_h = 0, content_h = 0;
 	for (int i = 0; i < (int)(sizeof(widths) / sizeof(widths[0])); i++) {
@@ -914,19 +914,8 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 			memcpy(alpha + (size_t)(b->y + y) * atlas_width + b->x, b->alpha + (size_t)y * b->w, (size_t)b->w);
 	}
 	// Create the texture on the game's own device.
-	IDirect3DDevice9 *dev = NULL;
-	IDirect3DTexture9 *tex = NULL;
-	if (FAILED(IDirect3DTexture9_GetDevice(old_tex, &dev)) || !dev) {
-		if (dev) IDirect3DDevice9_Release(dev);
-		log_printf("fonts: cannot access the renderer device");
-		free(alpha);
-		free(unique);
-		free_jobs(jobs, njobs);
-		free_bitmaps();
-		return;
-	}
-	HRESULT hr = IDirect3DDevice9_CreateTexture(dev, atlas_width, atlas_h, ATLAS_MIPS, 0, D3DFMT_DXT5, D3DPOOL_MANAGED, &tex, NULL);
-	IDirect3DDevice9_Release(dev);
+	IDirect3DTexture9 *tex = modtex_create(old_tex, atlas_width, atlas_h, ATLAS_MIPS, D3DFMT_DXT5);
+	const HRESULT hr = tex ? S_OK : E_FAIL;
 	if (FAILED(hr) || !tex) {
 		log_printf("fonts: cannot create the replacement atlas texture (hr=0x%08lx); will retry on the next font asset", (unsigned long)hr);
 		free(alpha);
@@ -936,25 +925,25 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 		return;
 	}
 	D3DLOCKED_RECT r;
-	if (FAILED(IDirect3DTexture9_LockRect(tex, 0, &r, NULL, 0))) {
+	if (FAILED(modtex_lock(tex, 0, &r, 0))) {
 		log_printf("fonts: cannot lock the replacement atlas texture");
 		free(alpha);
 		free(unique);
 		free_jobs(jobs, njobs);
 		free_bitmaps();
-		IDirect3DTexture9_Release(tex);
+		modtex_release(tex);
 		return;
 	}
 	for (int by = 0; by < atlas_h / 4; by++)
 		for (int bx = 0; bx < atlas_width / 4; bx++)
 			encode_block(alpha + (size_t)(by * 4) * atlas_width + bx * 4, atlas_width, (uint8_t *)r.pBits + (size_t)by * r.Pitch + (size_t)bx * 16);
-	if (FAILED(IDirect3DTexture9_UnlockRect(tex, 0))) {
+	if (FAILED(modtex_unlock(tex, 0))) {
 		log_printf("fonts: cannot unlock the replacement atlas texture");
 		free(alpha);
 		free(unique);
 		free_jobs(jobs, njobs);
 		free_bitmaps();
-		IDirect3DTexture9_Release(tex);
+		modtex_release(tex);
 		return;
 	}
 	// The smaller levels: each texel the average of the 2 x 2 of the level above, encoded like level 0.
@@ -965,7 +954,7 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 			int nw = lw / 2, nh = lh / 2;
 			uint8_t *next = malloc((size_t)nw * nh);
 			D3DLOCKED_RECT mr;
-			if (!next || FAILED(IDirect3DTexture9_LockRect(tex, lvl, &mr, NULL, 0))) {
+			if (!next || FAILED(modtex_lock(tex, lvl, &mr, 0))) {
 				log_printf("fonts: cannot build mip level %d of the atlas; the text is drawn without it", lvl);
 				free(next);
 				break;
@@ -978,7 +967,7 @@ static void patch_all_impl(void *(*find)(int, const char *), const uint8_t *atla
 			for (int by = 0; by < nh / 4; by++)
 				for (int bx = 0; bx < nw / 4; bx++)
 					encode_block(next + (size_t)(by * 4) * nw + bx * 4, nw, (uint8_t *)mr.pBits + (size_t)by * mr.Pitch + (size_t)bx * 16);
-			IDirect3DTexture9_UnlockRect(tex, lvl);
+			modtex_unlock(tex, lvl);
 			if (prev != alpha)
 				free(prev);
 			prev = next;
@@ -1089,8 +1078,6 @@ static void run_patch(void *(*find)(int, const char *), const uint8_t *atlas_mat
 
 static void patch_all(void *(*find)(int, const char *), const uint8_t *atlas_material)
 {
-	if (natboot_active()) // the atlas patch reads the renderer's Direct3D 9 texture objects: not adapted to the native renderer yet
-		return;
 	if (InterlockedCompareExchange(&patch_state, 1, 0) != 0)
 		return;
 	run_patch(find, atlas_material);
@@ -1152,8 +1139,6 @@ static volatile LONG waiting_atlas_logged;
 
 void fonts_retry(void *(*find)(int, const char *))
 {
-	if (natboot_active()) // the atlas patch is off with the native renderer (patch_all)
-		return;
 	// Called for ordinary non-font asset lookups too. These cached-state reads are on a
 	// potentially very hot path; reserve locked operations for the occasional retry claim.
 	if (!find || !settings_fonts() || __atomic_load_n(&patch_state, __ATOMIC_ACQUIRE) != 0)
