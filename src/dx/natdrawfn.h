@@ -48,6 +48,11 @@ void ngf_draw_26840(ngf *f, void *ctx, const int *cmd);
 void ngf_draw_5cc10(ngf *f, void *ctx, uintptr_t *cursor);
 // 0x5fe50: the sky / probe draw loop: textures 1..3 from the arrays of the game's global at rva 0x410fd08, 44-byte vertices; cursor = {cur, end} of 32-byte commands
 void ngf_draw_5fe50(ngf *f, uintptr_t *cursor, void *ctx);
+// 0x5c960: batches of triangles with the same key: per-batch code constants copied from the scene data, indices from the ring; ctx = {input, state, pointer to the command}, cursor = {cur, end} of 24-byte commands
+void ngf_draw_5c960(ngf *f, void *ctx, uintptr_t *cursor);
+// 0x28ce0: the shader warm-up (draws one tiny triangle per technique of a material so that the driver compiles the shaders at load); Direct3D 11 compiles at shader creation, so nothing is drawn, only the
+// number of techniques that would have been drawn is returned (the caller adds them up). technique_slots = the material's array at +0x30 (8-byte entries; +0xa8 is the extra one), which = 0 for all
+int ngf_warmup_28ce0(const uint8_t *technique_set, int which);
 // 0x63850: one batch of particles / sprites (item = the 0x5f220 batch record); ctx = {input, state}
 void ngf_draw_63850(ngf *f, const uint8_t *item, void *ctx);
 // 0x5f220: sprite / particle batches; ctx = {input, state, mode pointer}, cursor = {base, current} (see natdrawfn.c)

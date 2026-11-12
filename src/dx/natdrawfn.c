@@ -440,3 +440,59 @@ void ngf_draw_5f220(ngf *f, void *ctx, uintptr_t *cursor)
 		}
 	}
 }
+
+void ngf_draw_5c960(ngf *f, void *ctx, uintptr_t *cursor)
+{
+	void *input = ((void **)ctx)[0], *state = ((void **)ctx)[1];
+	const int which = RD_I32(((void **)ctx)[2], 0x24);
+	uint8_t *pass = RD_PTR(state, NG_ST_PASS);
+	if (RD_U8(pass, 0x1a))
+		ng_apply_ps_stable(f->g, f->ops, input, state);
+	uint8_t *cmd = (uint8_t *)cursor[0];
+	const int key = RD_I32(cmd, 0);
+	if (f->fn_5c8d0)
+		f->fn_5c8d0(input);
+	RD_I32(state, NG_ST_VTYPE) = 1;
+	ng_apply_decl_shader(f->g, f->ops, state);
+	ngf_depth_range(f, state, (RD_I32(input, 0x16dc) != 0) - 1);
+	uint8_t *scene = RD_PTR(input, 0x13b8);
+	ngf_set_streams(f, state, RD_PTR(scene, 0x1658 + (size_t)which * 0x30), 0, RD_I32(scene, 0x1668 + (size_t)which * 0x30));
+	const void *indices = NULL;
+	int tris = 0;
+	do {
+		unsigned n_consts = RD_U16(cmd, 0x12);
+		if (n_consts != 0 || (const uint8_t *)indices + (size_t)tris * 6 != (const uint8_t *)RD_PTR(cmd, 8)) {
+			if (tris != 0) {
+				const int start = ngf_ring_indices(f, state, indices, tris);
+				nd_draw_indexed(f->d, f->g, 0, (unsigned)start, (unsigned)tris);
+				n_consts = RD_U16(cmd, 0x12);
+				tris = 0;
+			}
+			indices = RD_PTR(cmd, 8);
+			const unsigned first = RD_U16(cmd, 0x10);
+			if (n_consts != 0) {
+				for (unsigned r = 0x4a, k = 0; k < n_consts; k++, r++) {
+					const uint8_t *src = scene + 0x62980 + (size_t)(r + (which != 0 ? 0u - 0x4au : 0xb6u) + first) * 0x10;
+					memcpy(AT(input, (r + 0xe0) * 0x10), src, 16);
+					RD_U16(input, 0x156c + r * 2) = (uint16_t)(RD_U16(input, 0x156c + r * 2) + 1);
+				}
+			}
+			ng_apply_object(f->g, f->ops, input, state);
+			ng_apply_prim(f->g, f->ops, input, state);
+		}
+		tris += RD_I32(cmd, 4);
+		cmd += 0x18;
+		cursor[0] = (uintptr_t)cmd;
+	} while (cmd != (uint8_t *)cursor[1] && RD_I32(cmd, 0) == key);
+	if (tris != 0) {
+		const int start = ngf_ring_indices(f, state, indices, tris);
+		nd_draw_indexed(f->d, f->g, 0, (unsigned)start, (unsigned)tris);
+	}
+}
+
+int ngf_warmup_28ce0(const uint8_t *technique_set, int which)
+{
+	if (which == 0)
+		return (RD_PTR(technique_set, 0x30) != NULL) + (RD_PTR(technique_set, 0x38) != NULL) + (RD_PTR(technique_set, 0x40) != NULL) + (RD_PTR(technique_set, 0xa8) != NULL);
+	return RD_PTR(technique_set, 0x30 + (size_t)which * 8) != NULL;
+}
