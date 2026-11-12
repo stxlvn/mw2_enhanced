@@ -19,6 +19,8 @@ typedef struct {
 	nd *d;
 	uint8_t *exe;                                             // the game's image base (tables and globals by rva)
 	int (*fn_rand)(void);                                     // 0x2f715c: the engine's random number
+	void (*fn_1fa40)(const uint8_t *entry);                  // 0x1fa40: the game's own writer of one model-lighting block (reads the lock globals)
+	int (*fn_bink_rects)(void *bink);                         // BinkGetRects(bink, 0): the number of rectangles the decoder changed
 	void (*fn_qsort)(void *base, size_t num, size_t size, void *cmp); // 0x2f6ab0: the engine's qsort (the particle buffer set-up sorts with the comparator at rva 0x25280)
 } ngr;
 
@@ -53,3 +55,11 @@ ngr_staged *ngr_stage(unsigned size, int is_index);
 nat_buffer *ngr_commit(ngr *r, ngr_staged *s); // creates the buffer from the block and frees the stage
 // 0x252e0: the particle cloud vertex / index buffers, filled with the engine's random numbers; the four buffers are stored at rva 0x4359468, 0x4359470, 0x4359478, 0x4359480
 void ngr_particle_buffers(ngr *r);
+
+// 0x2a0a0: writes `count` lighting blocks (entries of 0x34 bytes: +0 u16 position code, +3 flag, +4 colour) into the volume image `volume_image` through a CPU shadow laid out like a lock (the game's globals at rva 0x488a370 /
+// 0x489a400 / 0x481b734 are set for 0x1fa40), then uploads the volume
+void ngr_model_lighting(ngr *r, uint8_t *volume_image, const uint8_t *entries, unsigned count);
+// 0x2b7840: "locks" the film planes: points the locked-plane fields of every frame record at CPU memory (the decoder writes there); 0x2b7980: clears them and uploads the current frame's planes to the real
+// plane images (film +0x148 ..) when the decoder reports changed rectangles
+void ngr_film_lock(ngr *r, uint8_t *film);
+void ngr_film_unlock(ngr *r, uint8_t *film, void *bink);
