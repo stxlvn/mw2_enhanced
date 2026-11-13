@@ -362,8 +362,8 @@ void guards_install(void)
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	if (!settings_hotguards()) {
 		log_printf("guards: [native] hotguards=0: the entity table and weapon definition lookups are not guarded");
-	} else if (!memcmp(base + 0x2a70, table_entry_bytes, sizeof(table_entry_bytes))) {
-		hook_jump(base + 0x2a70, sizeof(table_entry_bytes), (const void *)table_entry_guarded, 0xcc);
+	} else if (!memcmp(base + XR(0x2a70), table_entry_bytes, sizeof(table_entry_bytes))) {
+		hook_jump(base + XR(0x2a70), sizeof(table_entry_bytes), (const void *)table_entry_guarded, 0xcc);
 		log_printf("guards: the entity table lookup at 0x2a70 is guarded");
 	} else
 		log_printf("guards: the entity table lookup at 0x2a70 is not as expected, not guarded");

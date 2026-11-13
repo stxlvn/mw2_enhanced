@@ -64,11 +64,20 @@ were found, the build has the reference build's layout: the same addresses with 
 the same number on a known build, the resolved one on this build, and for an address that was not found the offset of a private block (a block of `ret` bytes for code, zeros for
 data; `# code <rva> <rva>` lines of the signature file give the reference build's code ranges) so a hook sees the wrong bytes and refuses, a read gives zeros and a call returns.
 The player-method table of mirror.c is found by the method names instead of by address. Tried on the iw4x-sp 1.0.159 exe: 213 of 241 found, no crash, most hooks refused (that exe's
-code differs from the official one: the iw4x profile build is for it). The 64-bit code goes through `XR()` the same way since 2026-11-10 (the `RVA_` macros, every `base + XR(0x...)`, the tables of ranges, call sites and hook sites; 295 addresses in
-`addresses-x64.txt`, 281 of them found with signatures on the reference exe, all themselves; the other 14 are renderer and dvar globals that no signature reaches, the neighbour
+code differs from the official one: the iw4x profile build is for it). The 64-bit code goes through `XR()` the same way since 2026-11-10 (the `RVA_` macros, every `base + XR(0x...)`, the tables of ranges, call sites and hook sites; 304 addresses in
+`addresses-x64.txt` (2026-11-13), 290 of them found with signatures on the reference exe, all themselves; the other 14 are renderer and dvar globals that no signature reaches, the neighbour
 rule may place them). Not covered: diagnostics that are off by default (the `scenescan`, `npcsnap` and other test switches read raw addresses) and `crash.c`'s check of one place of
 the known build. **The 64-bit moved-build path has only been proven on the reference exe** (every address resolves to itself; the compiled code of the 64-bit DLL was byte-identical
 before `XR()` became the resolver): no second 64-bit build exists here to run it on.
+
+## The native renderers need the known build (2026-11-13)
+
+`natboot_install()` runs from DllMain, before `game_init()` has looked at the build, and the native Direct3D 11 / 12 renderers replace the engine's back end function by function with
+hundreds of addresses and structure layouts of the reference exe (`src/dx/`, no byte check at the hook sites, outside the signature file). On another 64-bit build they would patch the wrong
+bytes, so `install_all()` now requires the reference exe's timestamp (`IW4SP_TIMESTAMP`) and otherwise logs "is not the build the native renderer was written against", stays off and leaves the game
+on its own Direct3D 9. The other 64-bit hooks that still used a raw offset (`crash.c`, `guards.c`, the DObj add hook of `native.c`, the QA IWNet switch of `menus.c`) go through `XR()` now.
+The new XR addresses of the sign-in hooks (issues 21 and the LAN case) are in both signature files; `tools/gen_addr159.py` collected the 64-bit `XR()` literals of shared code since the 64-bit
+routing (it now reads only the lines the 32-bit build compiles, plus the `REF_` macros, and skips 30 known 64-bit literals) and the iw4x table has the four new 32-bit addresses.
 
 ## What is not done
 

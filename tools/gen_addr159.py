@@ -46,6 +46,28 @@ def w32_lines(text):
     return out
 
 
+def w32_compiled_lines(text):
+    """The lines the 32-bit build compiles: everything except what only the 64-bit build compiles (the #ifdef _WIN64 branch, the #else of #ifndef _WIN64), comments stripped. The 64-bit code
+    goes through XR() too since 2026-11-10, with the 64-bit build's addresses: those must not be looked up in the 32-bit image."""
+    out, stack = [], []
+    for line in text.split('\n'):
+        m = re.match(r'\s*#\s*(ifdef|ifndef|if|elif|else|endif)\b(.*)', line)
+        if m:
+            k, rest = m.group(1), m.group(2)
+            if k in ('ifdef', 'ifndef', 'if'):
+                neg = k == 'ifndef' or '!defined(_WIN64)' in rest
+                stack.append(['_WIN64' in rest, neg, False])
+            elif k in ('elif', 'else'):
+                stack[-1][2] = True
+            elif k == 'endif':
+                stack.pop()
+            out.append('')
+            continue
+        only64 = any(is64 and ((not els) != neg) for is64, neg, els in stack)
+        out.append('' if only64 else strip_comments(line))
+    return out
+
+
 def collect():
     items = {}  # official rva -> where
 
@@ -57,11 +79,13 @@ def collect():
         if not os.path.exists(path):
             continue
         text = open(path, encoding='utf-8', errors='replace').read()
-        code = strip_comments(text)
+        code = '\n'.join(w32_compiled_lines(text))
         for m in re.finditer(r'\bXR\((%s)\)' % HEX, code):
             add(int(m.group(1), 16), f)
         for m in re.finditer(r'\bXV\((%s)\)' % HEX, code):
             add(int(m.group(1), 16) - 0x400000, f)
+        for m in re.finditer(r'#define\s+REF_\w+\s+(%s)' % HEX, code):  # the RVA macros of menus.c (REF_x, used as XR(REF_x)): the 32-bit values
+            add(int(m.group(1), 16), f)
         if f != 'native.c':
             continue
         w32 = '\n'.join(w32_lines(text))
@@ -84,7 +108,15 @@ def collect():
         m = re.search(r'\} sites\[\] = \{(.*?)\n\t\};', w32, re.S)
         for e in re.finditer(r'\{\s*(%s)\s*,' % HEX, m.group(1)):
             add(int(e.group(1), 16), 'context hooks')
+    for rva in SKIP_64:
+        items.pop(rva, None)
     return items
+
+
+# 64-bit addresses that stand in code both builds compile (diagnostics and the video-size code of native.c): they are not 32-bit addresses, the 32-bit build never gets to use them.
+SKIP_64 = (0x52bfc0, 0x533d18, 0x1bc0a30, 0x410fd20, 0x4113724, 0x411372c, 0x4358e84,
+           0x1fece0, 0x1fee30, 0x3c3eb0, 0x40caa0, 0x40cac0, 0x40cac8, 0x40cad0, 0x40cad8, 0x42242c, 0x422430, 0x422434, 0x422440, 0x42245c, 0x422460, 0x43c200, 0x51b078, 0x51b080,
+           0x51dca8, 0x51dcb0, 0x5c010, 0x5c5bf, 0xd9e070, 0xf50ec0)
 
 
 def manual():

@@ -336,7 +336,7 @@ void crash_install(void)
 	AddVectoredExceptionHandler(1, on_exception);
 #ifdef _WIN64
 	{ // sub rsp,28h; call; test rax,rax; jz short: 14 bytes, the jump's size (the retail exe only)
-		uint8_t *ab = (uint8_t *)image_base + 0x303a64;
+		uint8_t *ab = (uint8_t *)image_base + XR(0x303a64);
 		static const uint8_t head[] = {0x48, 0x83, 0xec, 0x28, 0xe8};
 		if (image_end - image_base > 0x303a80 && !memcmp(ab, head, sizeof(head)) && ab[9] == 0x48 && ab[10] == 0x85 && ab[11] == 0xc0 && ab[12] == 0x74)
 			hook_jump(ab, 14, abort_hook, 0xcc);
@@ -345,7 +345,7 @@ void crash_install(void)
 #ifdef _WIN64
 	{ // mov [rsp+10h],rdx; mov [rsp+18h],r8; mov [rsp+20h],r9: 15 bytes, three whole instructions (the retail exe only)
 		static const uint8_t head[] = {0x48, 0x89, 0x54, 0x24, 0x10, 0x4c, 0x89, 0x44, 0x24, 0x18, 0x4c, 0x89, 0x4c, 0x24, 0x20};
-		if (image_end - image_base > 0x1fb700 && hook_function((uint8_t *)image_base + 0x1fb5f0, head, sizeof(head), (void *)com_error_logged, (void **)&com_error_original))
+		if (image_end - image_base > 0x1fb700 && hook_function((uint8_t *)image_base + XR(0x1fb5f0), head, sizeof(head), (void *)com_error_logged, (void **)&com_error_original))
 			log_printf("crash: the engine's error function logs its messages");
 	}
 #endif

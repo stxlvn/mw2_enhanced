@@ -8281,7 +8281,7 @@ static void contexts_install(void)
 			log_printf("native: no call at the foot adjustment");
 		if (!jhook_function(base + XR(0x29a120), xfer_bytes, sizeof(xfer_bytes), xfer_hook, (void **)&xfer_original))
 			log_printf("native: DObj transfer bytes differ");
-		if (!jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
+		if (!jhook_function(base + XR(0x2bb0), dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 			log_printf("native: dobj add bytes differ");
 		if (!jhook_function(base + XR(0xb28b0), own_write_bytes, sizeof(own_write_bytes), own_write_hook, (void **)&own_write_original))
 			log_printf("native: own entity write bytes differ");
@@ -8638,7 +8638,7 @@ void native_install(void)
 	if (cfg("readlog", 0))
 		readlog_start();
 	vid_restart_install();
-	if (cfg("treelog", 0) && cfg("players", 0) < 2 && !jhook_function(base + 0x2bb0, dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
+	if (cfg("treelog", 0) && cfg("players", 0) < 2 && !jhook_function(base + XR(0x2bb0), dobj_add_bytes, sizeof(dobj_add_bytes), dobj_add_hook, (void **)&dobj_add_original))
 		log_printf("native: dobj add bytes differ (treelog in the plain game)");
 #endif
 	if (cfg("smoothlog", 0) && cfg("players", 0) < 2 && cfg("experiment", 0) < 2) { // plain game, for comparison: only the hooks, no session

@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../game.h"
 #include "../hook.h"
 #include "../log.h"
 #include "../settings.h"
@@ -986,6 +987,12 @@ static void install_all(void)
 	IMAGE_NT_HEADERS64 *nt = (IMAGE_NT_HEADERS64 *)(exe + ((IMAGE_DOS_HEADER *)exe)->e_lfanew);
 	if (nt->OptionalHeader.SizeOfImage < 0x4585400) {
 		log_printf("native11: not the retail exe, off");
+		return;
+	}
+	// The renderer replaces the engine's back end function by function (hundreds of addresses and structure layouts of this one build, no byte check at the hook sites), and DllMain starts it
+	// before game_init has looked at the build: on any other build (an update, a different exe) it would patch the wrong bytes. It needs the exe it was written against.
+	if (nt->FileHeader.TimeDateStamp != IW4SP_TIMESTAMP) {
+		log_printf("native11: this exe (timestamp 0x%08x) is not the build the native renderer was written against (0x%08x): it stays off and the game's own Direct3D 9 is used", (unsigned)nt->FileHeader.TimeDateStamp, (unsigned)IW4SP_TIMESTAMP);
 		return;
 	}
 	memset(&N, 0, sizeof(N));

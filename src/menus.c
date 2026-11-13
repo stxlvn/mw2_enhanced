@@ -1569,7 +1569,7 @@ static void fake_iwnet_off_install(void)
 	if (done || !getenv("MW2COOP_FAKE_IWNET_OFF"))
 		return;
 	done = 1;
-	hook_jump(base + 0x1bab60, 14, (const void *)fake_iwnet_off_query, 0xcc);
+	hook_jump(base + XR(0x1bab60), 14, (const void *)fake_iwnet_off_query, 0xcc);
 	log_printf("menus: QA: the game is told it is not connected to IWNet (MW2COOP_FAKE_IWNET_OFF)");
 }
 #else
