@@ -320,6 +320,7 @@ regroup_after_start()
 	wait 0.1;
 	restore_checkpoint_spot();
 	thread restore_ally_positions();
+	thread restore_weapons();
 	for ( waited = 0; waited < 120; waited += 0.25 )
 	{
 		if ( level.player2 IsLinked() )
@@ -705,6 +706,12 @@ sync_weapons()
 	{
 		wait 0.25;
 		sync_viewmodel();
+		if ( isdefined( level.mw2coop_sync_hold ) && level.mw2coop_sync_hold > GetTime() )	// the checkpoint's weapons are being put back (restore_weapons): not a change of player 1's
+		{
+			prev1 = level.player GetWeaponsListAll();
+			prev2 = level.player2 GetWeaponsListAll();
+			continue;
+		}
 		now1 = level.player GetWeaponsListAll();
 		now2 = level.player2 GetWeaponsListAll();
 		// the revive system takes and returns weapons of a downed player: leave it alone
@@ -852,6 +859,7 @@ checkpoint_wait( index, cp )
 	SetDvar( "start", cp.start );
 	state( "checkpoint " + cp.start );
 	snapshot_allies();
+	snapshot_weapons( cp.start );
 	request( "checkpoint " + level.script + " " + cp.start );	// the host saves it for mw2coop_continue
 	foreach ( player in level.players )
 		player thread checkpoint_hud();
@@ -943,6 +951,7 @@ section_reached( name, leader, by_table )
 	SetDvar( "mw2coop_cp_start", name );
 	SetDvar( "mw2coop_cp_pos", spot );
 	snapshot_allies();
+	snapshot_weapons( name );
 	request( "checkpoint " + level.script + " " + name + " " + spot );	// the host saves it for mw2coop_continue
 	foreach ( player in level.players )
 		player thread checkpoint_hud();
@@ -953,6 +962,79 @@ section_reached( name, leader, by_table )
 	}
 	level.mw2coop.cp_spots[ rank ] = checkpoint_spot_origin( leader );
 	bring_partner_to( leader, rank );
+}
+
+// --------------------------------------------------------------------------------------------
+// The weapons and their ammo when a checkpoint was reached. A restart at a checkpoint runs the level's start function, which hands out that start's loadout with full ammunition (owner's
+// report, 2026-11-14: after a restart both players' weapons were the level's default loadout again, with full ammo, not what they had at the checkpoint). Like a game's own autosave, the
+// checkpoint keeps them: dvars mw2coop_cp_w0 (player 1) and mw2coop_cp_w1 (player 2) hold "current;weapon:clip:stock;..." and mw2coop_cp_wname the checkpoint they belong to; a few
+// seconds after a restart at that checkpoint the loadout is replaced by them (restore_weapons). Weapons a player does not have at the checkpoint are taken, the ones he has come back
+// with the ammunition he had. Grenades are weapons too (GetWeaponsListAll lists them with their count in the ammo).
+snapshot_weapons( name )
+{
+	players = [];
+	players[ 0 ] = level.player;
+	players[ 1 ] = level.player2;
+	SetDvar( "mw2coop_cp_wname", name );
+	foreach ( n, player in players )
+	{
+		text = "";
+		if ( isdefined( player ) && IsAlive( player ) )
+		{
+			text = player GetCurrentWeapon();
+			foreach ( weapon in player GetWeaponsListAll() )
+				text += ";" + weapon + ":" + player GetWeaponAmmoClip( weapon ) + ":" + player GetWeaponAmmoStock( weapon );
+		}
+		SetDvar( "mw2coop_cp_w" + n, text );
+	}
+}
+
+restore_weapons()
+{
+	level endon( "mw2coop_level_end" );
+	if ( !isdefined( level.player2 ) || !isdefined( level.start_point ) || level.start_point == "default" || GetDvar( "mw2coop_cp_wname" ) != level.start_point )
+		return;
+	wait 1;	// after the start's loadout and the first copy of sync_weapons
+	level.mw2coop_sync_hold = GetTime() + 1500;
+	players = [];
+	players[ 0 ] = level.player;
+	players[ 1 ] = level.player2;
+	restored = 0;
+	foreach ( n, player in players )
+	{
+		text = GetDvar( "mw2coop_cp_w" + n );
+		parts = StrTok( text, ";" );
+		if ( parts.size < 2 || is_downed( player ) )
+			continue;
+		keep = [];
+		for ( i = 1; i < parts.size; i++ )
+		{
+			fields = StrTok( parts[ i ], ":" );
+			if ( fields.size == 3 )
+				keep[ keep.size ] = fields;
+		}
+		foreach ( weapon in player GetWeaponsListAll() )
+		{
+			found = false;
+			foreach ( fields in keep )
+				if ( fields[ 0 ] == weapon )
+					found = true;
+			if ( !found )
+				player TakeWeapon( weapon );
+		}
+		foreach ( fields in keep )
+		{
+			if ( !player HasWeapon( fields[ 0 ] ) )
+				player GiveWeapon( fields[ 0 ] );
+			player SetWeaponAmmoClip( fields[ 0 ], int( fields[ 1 ] ) );
+			player SetWeaponAmmoStock( fields[ 0 ], int( fields[ 2 ] ) );
+		}
+		if ( parts[ 0 ] != "none" && player HasWeapon( parts[ 0 ] ) )
+			player SwitchToWeapon( parts[ 0 ] );
+		restored++;
+	}
+	level.mw2coop_sync_hold = GetTime() + 1500;
+	state( "the weapons and ammunition of checkpoint " + level.start_point + " are back for " + restored + " player(s)" );
 }
 
 // --------------------------------------------------------------------------------------------
