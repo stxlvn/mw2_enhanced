@@ -388,9 +388,10 @@ static void append_on_close(uint8_t *menu, const char *script)
 }
 
 // The sharpening row (control, label, number) is drawn dimmed while the upscaler is Off or FSR 1: it only does something for FSR 3 and DLSS (Vlad, 2026-11-13)
-static uint8_t *grey_items[3];
-static float grey_alpha[3];
-static int grey_saved[3];
+// The same for the rows that only the native DirectX 11 / 12 renderers read (MSAA, anisotropy, HDR, low frame delay): dimmed while the DirectX version is 9, 9Ex or 9 on 12, where they do nothing.
+static uint8_t *grey_items[OPTS][3];
+static float grey_alpha[OPTS][3];
+static int grey_saved[OPTS][3];
 
 // The page: the Look page's backgrounds, title and Back items, then the rows 20 units apart from y 28, in groups by what a row applies to (GROUP_*), each group under its name.
 static void add_page(void)
@@ -486,10 +487,8 @@ static void add_page(void)
 			*(const char **)(text + ITEM_TEXT) = t->label;
 			list[n++] = control;
 			list[n++] = text;
-			if (t->live == LIVE_SHARP) {
-				grey_items[0] = control;
-				grey_items[1] = text;
-			}
+			grey_items[o][0] = control;
+			grey_items[o][1] = text;
 			if (t->kind == K_SLIDER) { // the slider's number, right of the bar: a text item without a text that shows the dvar's value (the game's sliders show none)
 				uint8_t *tag = ui_clone_item(label, menu);
 				*(const char **)(tag + ITEM_TEXT) = NULL;
@@ -505,8 +504,7 @@ static void add_page(void)
 				*(float *)(tag + ITEM_TEXT_ALIGN_X) = 0;
 				place(tag, y);
 				list[n++] = tag;
-				if (t->live == LIVE_SHARP)
-					grey_items[2] = tag;
+				grey_items[o][2] = tag;
 			}
 			rows++;
 			y += rh;
@@ -631,22 +629,33 @@ static void patch_options(void)
 	}
 }
 
-// dims the sharpening row when the upscaler is Off or FSR 1 (its alpha goes to 40 %); the row works again the moment FSR 3 or DLSS is chosen
-static void dim_sharpness_row(void)
+// dims a row that does nothing with the current choices (its alpha goes to 40 %); it works again the moment they change: the sharpening row needs FSR 3 or DLSS (not Off or FSR 1), the
+// native renderers' rows need the DirectX version 11 or 12 (not 9, 9Ex, 9 on 12)
+static void dim_rows(void)
 {
-	const int iu = opt_index("mw2coop_opt_upscaler");
-	if (iu < 0 || !dvars[iu])
-		return;
-	const int dim = value_of(iu) < 1.5f;
-	for (int i = 0; i < 3; i++) {
-		if (!grey_items[i])
-			continue;
-		float *color = (float *)(grey_items[i] + ITEM_DYNAMIC_FLAGS + 8); // windowDef_t: dynamicFlags, nextTime, foreColor[4]
-		if (!grey_saved[i]) {
-			grey_alpha[i] = color[3];
-			grey_saved[i] = 1;
+	const int iu = opt_index("mw2coop_opt_upscaler"), id = opt_index("mw2coop_opt_directx");
+	for (int o = 0; o < OPTS; o++) {
+		int dim = 0, known = 0;
+		const char *d = opts[o].dvar;
+		if (!strcmp(d, "mw2coop_opt_sharp")) {
+			known = iu >= 0 && dvars[iu];
+			dim = known && value_of(iu) < 1.5f;
+		} else if (!strcmp(d, "mw2coop_opt_msaa") || !strcmp(d, "mw2coop_opt_aniso") || !strcmp(d, "mw2coop_opt_hdr") || !strcmp(d, "mw2coop_opt_lowlat")) {
+			known = id >= 0 && dvars[id];
+			dim = known && value_of(id) < 2.5f;
 		}
-		color[3] = dim ? grey_alpha[i] * 0.4f : grey_alpha[i];
+		if (!known)
+			continue;
+		for (int i = 0; i < 3; i++) {
+			if (!grey_items[o][i])
+				continue;
+			float *color = (float *)(grey_items[o][i] + ITEM_DYNAMIC_FLAGS + 8); // windowDef_t: dynamicFlags, nextTime, foreColor[4]
+			if (!grey_saved[o][i]) {
+				grey_alpha[o][i] = color[3];
+				grey_saved[o][i] = 1;
+			}
+			color[3] = dim ? grey_alpha[o][i] * 0.4f : grey_alpha[o][i];
+		}
 	}
 }
 
@@ -661,7 +670,7 @@ static void follow_all(void)
 	add_popup();
 	patch_options();
 	follow_changes();
-	dim_sharpness_row();
+	dim_rows();
 	hold_fov();
 	// the page was left (its onClose set mw2coop_enh_left): a row that waits for the next start now differs from what the running game uses -> the pop-up
 	char left[8];
