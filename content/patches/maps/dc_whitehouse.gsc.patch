@@ -34,3 +34,20 @@ is_default_start()
 @@@ to
 maps\_mw2coop::ending_goes_on()
 @@@ end
+
+4. A restart at the "oval_office" checkpoint (maps\_mw2coop_checkpoints: the entrance is clear) runs the dev start
+   start_oval_office, which starts the radio and the oval office scene but not whitehouse_entrance(): that function
+   waits for the breach and then starts whitehouse_interior() (the hammer-down jets, whitehouse_flare(): the roof
+   flares, Foley's flare calls), which only whitehouse_main() called. After such a restart the breach changed nothing and
+   the flares never came (owner's report, 2026-11-14, Whiskey Hotel). It is started here too, in a co-op campaign.
+@@@ replace
+	level thread whitehouse_radio_loop();
+	level thread oval_office();
+}
+@@@ with
+	level thread whitehouse_radio_loop();
+	level thread oval_office();
+	if ( maps\_mw2coop::is_campaign_coop() )
+		level thread whitehouse_entrance();
+}
+@@@ end
