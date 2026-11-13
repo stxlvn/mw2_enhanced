@@ -89,7 +89,7 @@ static const opt_t opts[] = {
 #endif
     {"mw2coop_opt_falldmg", "@MW2COOP_ENH_FALLDMG", K_YESNO, 0, 1, 0, "gameplay", "fall_damage", 1, LIVE_FALL, 0, "Enhanced: fall damage in a co-op session", GROUP_COOP},
 #ifdef _WIN64
-    {"mw2coop_opt_directx", "@MW2COOP_ENH_DIRECTX", K_DIRECTX, 0, 4, 0, "display", NULL, 1, LIVE_NONE, 1, "Enhanced: DirectX version, 0 = 9 (the game's own), 1 = 9Ex ([display] d3d9ex), 2 = 12 (Direct3D 9 on the Direct3D 12 layer, [display] d3d9on12; FSR 3 and DLSS need it), 3 = 11 (the mod's own Direct3D 11 renderer, experimental: [display] directx11; no console overlay, screenshots or upscalers yet) (next start)", GROUP_WINDOW},
+    {"mw2coop_opt_directx", "@MW2COOP_ENH_DIRECTX", K_DIRECTX, 0, 3, 0, "display", NULL, 1, LIVE_NONE, 1, "Enhanced: DirectX version, 0 = 9 (the game's own), 1 = 9Ex ([display] d3d9ex), 2 = 11 and 3 = 12 (the mod's own Direct3D 11 / 12 renderers, experimental: [display] directx11 / directx12; MSAA, anisotropy, HDR, low frame delay and FSR 3 / DLSS need 11 or 12) (next start)", GROUP_WINDOW},
 #endif
 #ifdef _WIN64
     {"mw2coop_opt_msaa", "@MW2COOP_ENH_MSAA", K_SLIDER, 1, 8, 1, "display", "msaa", 1, LIVE_NONE, 1, "Enhanced: native DirectX 11 / 12 anti-aliasing samples: 1 = the game's own setting (settings.ini msaa=0), 2 / 4 / 8 = that many (next start)", GROUP_WINDOW},
@@ -174,7 +174,7 @@ static void register_dvars(void)
 		if (t->kind == K_UPSCALER)
 			v = (float)upscaler_read(path);
 		else if (t->kind == K_DIRECTX)
-			v = settings_directx12() ? 4.0f : settings_directx11() ? 3.0f : settings_d3d9on12() ? 2.0f : settings_d3d9ex() ? 1.0f : 0.0f; // in effect: FSR 3 and DLSS switch the layer on whatever the key says (settings.c)
+			v = settings_directx12() ? 3.0f : settings_directx11() ? 2.0f : settings_d3d9ex() && !settings_d3d9on12() ? 1.0f : 0.0f; // (the Direct3D 9 on 12 layer, [display] d3d9on12, has no row: it shows as 9; FSR 3 and DLSS pick 12)
 		else if (t->section) { // the file's value, else the default
 			int iv = (int)GetPrivateProfileIntA(t->section, t->key, (int)t->def, path);
 			if ((float)iv >= t->lo && (float)iv <= t->hi)
@@ -227,13 +227,13 @@ static void keep_upscaler_and_directx(int changed_upscaler, int changed_directx)
 	const int iu = opt_index("mw2coop_opt_upscaler"), id = opt_index("mw2coop_opt_directx");
 	if ((!changed_upscaler && !changed_directx) || iu < 0 || id < 0 || !dvars[iu] || !dvars[id])
 		return;
-	if (value_of(iu) < 1.5f || (value_of(id) > 1.5f && value_of(id) < 2.5f)) // (12 is what FSR 3 and DLSS need; 9, 9Ex and the native 11 have no layer for them)
+	if (value_of(iu) < 1.5f || value_of(id) > 2.5f) // (12 is what FSR 3 and DLSS need: with 9, 9Ex or 11 chosen the two rows disagree)
 		return;
 	if (changed_directx && !changed_upscaler) {
 		game_cbuf_addtext("set mw2coop_opt_upscaler 0\n");
 		log_printf("enhopts: DirectX 9 / 9Ex / 11 chosen while FSR 3 / DLSS is on: the upscaler is turned off (they need DirectX 12)");
 	} else {
-		game_cbuf_addtext("set mw2coop_opt_directx 2\n");
+		game_cbuf_addtext("set mw2coop_opt_directx 3\n");
 		log_printf("enhopts: FSR 3 / DLSS needs DirectX 12: the DirectX row is set to 12");
 	}
 }
@@ -265,9 +265,9 @@ static void follow_changes(void)
 		changed_directx |= t->kind == K_DIRECTX;
 		if (t->kind == K_UPSCALER)
 			upscaler_write(path, (int)v);
-		else if (t->kind == K_DIRECTX) { // two keys: 9Ex is d3d9ex, 12 is d3d9on12 (which makes the Ex device itself)
-			const int ok = WritePrivateProfileStringA("display", "d3d9ex", (int)v == 1 ? "1" : "0", path) & WritePrivateProfileStringA("display", "d3d9on12", (int)v == 2 ? "1" : "0", path) & WritePrivateProfileStringA("display", "directx11", (int)v == 3 ? "1" : "0", path) & WritePrivateProfileStringA("display", "directx12", (int)v == 4 ? "1" : "0", path);
-			log_printf("enhopts: settings.ini [display] d3d9ex=%d d3d9on12=%d directx11=%d (DirectX %s)%s", (int)v == 1, (int)v == 2, (int)v == 3, (int)v == 4 ? "12 native" : (int)v == 3 ? "11 native" : (int)v == 2 ? "12 (9 on 12)" : (int)v == 1 ? "9Ex" : "9", ok ? "" : ", NOT written");
+		else if (t->kind == K_DIRECTX) { // 9Ex is d3d9ex, 11 is directx11, 12 is directx12; the Direct3D 9 on 12 layer (d3d9on12) is switched off by a choice made here
+			const int ok = WritePrivateProfileStringA("display", "d3d9ex", (int)v == 1 ? "1" : "0", path) & WritePrivateProfileStringA("display", "d3d9on12", "0", path) & WritePrivateProfileStringA("display", "directx11", (int)v == 2 ? "1" : "0", path) & WritePrivateProfileStringA("display", "directx12", (int)v == 3 ? "1" : "0", path);
+			log_printf("enhopts: settings.ini [display] d3d9ex=%d directx11=%d directx12=%d (DirectX %s)%s", (int)v == 1, (int)v == 2, (int)v == 3, (int)v == 3 ? "12" : (int)v == 2 ? "11" : (int)v == 1 ? "9Ex" : "9", ok ? "" : ", NOT written");
 		} else if (t->section) {
 			snprintf(text, sizeof(text), "%d", !strcmp(t->key, "msaa") && (int)v == 1 ? 0 : (int)v); // (the MSAA row starts at 1x: the game's own setting, which the file keeps as 0)
 			if (WritePrivateProfileStringA(t->section, t->key, text, path))
@@ -388,7 +388,7 @@ static void append_on_close(uint8_t *menu, const char *script)
 }
 
 // The sharpening row (control, label, number) is drawn dimmed while the upscaler is Off or FSR 1: it only does something for FSR 3 and DLSS (Vlad, 2026-11-13)
-// The same for the rows that only the native DirectX 11 / 12 renderers read (MSAA, anisotropy, HDR, low frame delay): dimmed while the DirectX version is 9, 9Ex or 9 on 12, where they do nothing.
+// The same for the rows that only the native DirectX 11 / 12 renderers read (MSAA, anisotropy, HDR, low frame delay): dimmed while the DirectX version is 9 or 9Ex, where they do nothing.
 static uint8_t *grey_items[OPTS][3];
 static float grey_alpha[OPTS][3];
 static int grey_saved[OPTS][3];
@@ -455,8 +455,8 @@ static void add_page(void)
 			} else {
 				if (t->kind == K_UPSCALER || t->kind == K_DIRECTX) {
 					static const char *const upscaler_names[4] = {"@MW2COOP_ENH_OFF", "FSR 1", "FSR 3", "DLSS"};
-					static const char *const directx_names[5] = {"DirectX 9", "DirectX 9Ex", "DirectX 12 (9 on 12)", "DirectX 11", "DirectX 12"};
-					control = t->kind == K_UPSCALER ? choice_item(menu, upscaler_names, UPSCALERS) : choice_item(menu, directx_names, 5);
+					static const char *const directx_names[4] = {"DirectX 9", "DirectX 9Ex", "DirectX 11", "DirectX 12"};
+					control = t->kind == K_UPSCALER ? choice_item(menu, upscaler_names, UPSCALERS) : choice_item(menu, directx_names, 4);
 					if (!control) {
 						log_printf("enhopts: no choice row to copy from the advanced video page: no %s row", t->kind == K_UPSCALER ? "Upscaler" : "DirectX");
 						continue;
@@ -630,7 +630,7 @@ static void patch_options(void)
 }
 
 // dims a row that does nothing with the current choices (its alpha goes to 40 %); it works again the moment they change: the sharpening row needs FSR 3 or DLSS (not Off or FSR 1), the
-// native renderers' rows need the DirectX version 11 or 12 (not 9, 9Ex, 9 on 12)
+// native renderers' rows need the DirectX version 11 or 12 (not 9 or 9Ex)
 static void dim_rows(void)
 {
 	const int iu = opt_index("mw2coop_opt_upscaler"), id = opt_index("mw2coop_opt_directx");
@@ -642,7 +642,7 @@ static void dim_rows(void)
 			dim = known && value_of(iu) < 1.5f;
 		} else if (!strcmp(d, "mw2coop_opt_msaa") || !strcmp(d, "mw2coop_opt_aniso") || !strcmp(d, "mw2coop_opt_hdr") || !strcmp(d, "mw2coop_opt_lowlat")) {
 			known = id >= 0 && dvars[id];
-			dim = known && value_of(id) < 2.5f;
+			dim = known && value_of(id) < 1.5f;
 		}
 		if (!known)
 			continue;
