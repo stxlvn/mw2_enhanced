@@ -169,7 +169,7 @@ def check_changelog(base):
 
 # 5. generated headers --------------------------------------------------------------------------------------------
 def check_generated():
-    for tool in ('gen_menus.py', 'gen_settings_template.py'):
+    for tool in ('gen_menus.py', 'gen_settings_template.py', 'gen_natsites.py'):
         r = subprocess.run([sys.executable, '-I', os.path.join('tools', tool), '--check'], capture_output=True, text=True)
         if r.returncode != 0:
             fail('tools/' + tool, 1, (r.stdout + r.stderr).strip() or 'the generated header is out of date')

@@ -14,6 +14,7 @@
 #include "../settings.h"
 #include "../console.h"
 #include "natbring.h"
+#include "natsites_gen.h"
 
 static volatile LONG hits[48];
 static const char *const hit_names[48] = {"w_54a10","w_54940","w_54070","w_543b0","w_53d00","w_53f10","w_54220","w_50a20","w_50b10","w_50c60","w_3cc00","w_50ec0","w_515a0","w_26730","w_54820","w_54b30","w_504d0","w_51070","w_26840","w_399f0","w_5c960","w_5cc10","w_5f220","w_5fe50","w_63850","w_3ec20","w_5da10","w_5dde0","w_63f50","w_266a0","w_267b0","w_267e0","w_26810","w_492d0","w_49170","w_23920","w_8f60","w_258a0","w_24f00","w_44d00","w_453c0","w_10410","w_45010","w_2f800","w_10de0","w_4f380","w_39420","w_45060"};
@@ -921,6 +922,20 @@ static void patch_sites(void)
 
 static void install_all(void);
 
+// FNV-1a 64 over the functions the renderer replaces (tools/gen_natsites.py made the list and the hash from the reference exe): the first 14 bytes of each, the bytes hook_jump overwrites
+static uint64_t nat_sites_hash(void)
+{
+	uint64_t h = 0xcbf29ce484222325ull;
+	for (int i = 0; i < NAT_SITE_COUNT; i++) {
+		const unsigned rva = nat_site_rva[i];
+		for (int k = 0; k < 4; k++)
+			h = (h ^ ((rva >> (8 * k)) & 0xff)) * 0x100000001b3ull;
+		for (int k = 0; k < 14; k++)
+			h = (h ^ exe[rva + k]) * 0x100000001b3ull;
+	}
+	return h;
+}
+
 // the exe is packed (SteamStub) when this DLL loads: the code can only be patched after the stub has unpacked it, which is when the first bytes of a known function look right
 static DWORD WINAPI waiter(LPVOID arg)
 {
@@ -994,6 +1009,13 @@ static void install_all(void)
 	if (nt->FileHeader.TimeDateStamp != IW4SP_TIMESTAMP) {
 		log_printf("native11: this exe (timestamp 0x%08x) is not the build the native renderer was written against (0x%08x): it stays off and the game's own Direct3D 9 is used", (unsigned)nt->FileHeader.TimeDateStamp, (unsigned)IW4SP_TIMESTAMP);
 		return;
+	}
+	{ // the same exe by its timestamp, but the code the renderer is about to overwrite must be the reference build's too (a patched or unpacked copy): nothing is patched otherwise
+		const uint64_t got = nat_sites_hash();
+		if (got != NAT_SITE_HASH) {
+			log_printf("native11: the engine code at the %d hook sites differs from the reference exe (hash %016llx, expected %016llx): the native renderer stays off and the game's own Direct3D 9 is used", NAT_SITE_COUNT, (unsigned long long)got, (unsigned long long)NAT_SITE_HASH);
+			return;
+		}
 	}
 	memset(&N, 0, sizeof(N));
 	nbr_bind(&N, exe);

@@ -75,7 +75,8 @@ before `XR()` became the resolver): no second 64-bit build exists here to run it
 `natboot_install()` runs from DllMain, before `game_init()` has looked at the build, and the native Direct3D 11 / 12 renderers replace the engine's back end function by function with
 hundreds of addresses and structure layouts of the reference exe (`src/dx/`, no byte check at the hook sites, outside the signature file). On another 64-bit build they would patch the wrong
 bytes, so `install_all()` now requires the reference exe's timestamp (`IW4SP_TIMESTAMP`) and otherwise logs "is not the build the native renderer was written against", stays off and leaves the game
-on its own Direct3D 9. The other 64-bit hooks that still used a raw offset (`crash.c`, `guards.c`, the DObj add hook of `native.c`, the QA IWNet switch of `menus.c`) go through `XR()` now.
+on its own Direct3D 9. The same timestamp is not enough (a patched or unpacked copy): the first 14 bytes of each of the 67 functions `install()` replaces are hashed and compared with `NAT_SITE_HASH`
+(`tools/gen_natsites.py <reference exe>` makes `src/dx/natsites_gen.h`; `--check` in `pr_checks.py` keeps its list equal to the `install()` calls); a mismatch also leaves the game on Direct3D 9. The other 64-bit hooks that still used a raw offset (`crash.c`, `guards.c`, the DObj add hook of `native.c`, the QA IWNet switch of `menus.c`) go through `XR()` now.
 The new XR addresses of the sign-in hooks (issues 21 and the LAN case) are in both signature files; `tools/gen_addr159.py` collected the 64-bit `XR()` literals of shared code since the 64-bit
 routing (it now reads only the lines the 32-bit build compiles, plus the `REF_` macros, and skips 30 known 64-bit literals) and the iw4x table has the four new 32-bit addresses.
 
