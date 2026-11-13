@@ -55,6 +55,7 @@ static float g_jit_x, g_jit_y;     // this frame's jitter in render pixels (what
 static float g_pjit_x, g_pjit_y;   // the previous frame's
 static unsigned g_frame_count;
 static float g_cam_a, g_cam_bw;
+extern float nd_lod_bias; // natdraw11.c: the world pass's texture LOD bias
 
 static const char depth_cs_ms[] =
 	"cbuffer C : register(b0) { float4 P; };\n"
@@ -782,10 +783,16 @@ objects:
 		if (S.query(&S.ctx, &qp.header) == FFX_API_RETURN_OK && count > 0)
 			S.phase_count = count;
 	}
+	{ // the textures of the world pass are sampled for the output size (AMD: log2(render / output) - 1; settings fsr3_lodbias overrides)
+		float set_bias = 0.0f;
+		nd_lod_bias = settings_fsr3_lodbias(&set_bias) ? set_bias : log2f((float)iw / (float)w) - 1.0f;
+		if (iw == w)
+			nd_lod_bias = 0.0f;
+	}
 	next_jitter();
 	ng_vp_hook = vp_hook;
 	ng_draw_hook = draw_hook;
-	log_printf("natfsr3: ready: render %ux%u -> output %ux%u (the game's depth, camera motion vectors, jitter phases %d)", iw, ih, w, h, S.phase_count);
+	log_printf("natfsr3: ready: render %ux%u -> output %ux%u (the game's depth, camera motion vectors, jitter phases %d, texture LOD bias %.2f)", iw, ih, w, h, S.phase_count, nd_lod_bias);
 	return 1;
 }
 

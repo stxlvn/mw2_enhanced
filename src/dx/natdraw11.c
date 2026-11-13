@@ -132,6 +132,7 @@ int nd_layer_mode;
 float nd_hud_scale[2];
 int nd_atoc = 1;
 int nd_aniso_override; // [display] aniso: 0 = the game's own, 2..16 = forced for mipmapped textures
+float nd_lod_bias;     // the texture LOD bias of the world pass with FSR 3 / DLSS (natfsr3.c sets it: AMD's log2(render / output) - 1); not applied to the 2D passes (they draw while nd_hud_scale is set)
 int nd_trace; // QA (MW2COOP_TRACEFRAME): while set, every draw / clear / stretch is logged with its target, textures and first constants
 
 struct nd_shader {

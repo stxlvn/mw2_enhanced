@@ -371,4 +371,5 @@ All in the DirectX 11 and 12 back ends; settings.ini `[display]` (documented in 
 - **DLSS (`dlss=1`)**: the same passes, evaluated through `mw2coop_dlss.dll` (`src/dlss`, NVIDIA's SDK is not in the repo). **Not tested: no NVIDIA files or GPU on the dev machine.** A failure falls back to the plain picture with a log line.
 - **MSAA / alpha to coverage**: `msaa=0|1|2|4|8` overrides the game's anti-aliasing setting (lowered to what the card supports), `atoc=1` draws alpha-tested things (foliage, fences, hair) with alpha to coverage into multisampled targets (`st.a2c`, an alpha-test constant in the pixel shader). MSAA scene images are resolved when read as a texture and as the stretch source of the final passes.
 - **Enhanced page rows** for msaa, aniso, hdr, lowlatency (the row distance shrinks to fit `PAGE_H`); `atoc` is in settings.ini only.
-- **Open**: texture LOD bias with an upscaler, split-screen dedupe and perf diagnostics, Alt+Tab, DLSS on real hardware.
+- **Texture LOD bias** with FSR 3 / DLSS: the world pass's mipmapped samplers get AMD's log2(render / output) - 1 (`nd_lod_bias`, set in natfsr3.c setup; settings `fsr3_lodbias` overrides; the 2D passes are excluded because they draw while `nd_hud_scale` is set; sampler cache key includes it).
+- **Open**: split-screen dedupe and perf diagnostics, Alt+Tab, DLSS on real hardware.

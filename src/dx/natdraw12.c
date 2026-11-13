@@ -584,6 +584,8 @@ static int sampler_cpu(nd *d, uint32_t word, int compare, D3D12_CPU_DESCRIPTOR_H
 	uint32_t key[KW] = {0};
 	key[0] = word & ~0x4000000u; // the sRGB bit belongs to the view, not the sampler
 	key[1] = (uint32_t)compare;
+	const float bias = (nd_lod_bias != 0.0f && !(nd_hud_scale[0] > 0) && !compare) ? nd_lod_bias : 0.0f; // the world pass only: the textures are sampled for the output size, as upscalers ask
+	memcpy(&key[2], &bias, sizeof(bias));
 	int found;
 	void *o = kc_get(&d->sampler, key, &found);
 	if (found) {
@@ -614,6 +616,8 @@ static int sampler_cpu(nd *d, uint32_t word, int compare, D3D12_CPU_DESCRIPTOR_H
 		desc.MaxAnisotropy = 1;
 	}
 	desc.MaxLOD = sd.mip == 0 ? 0 : D3D12_FLOAT32_MAX;
+	if (sd.mip >= 1)
+		desc.MipLODBias = bias;
 	D3D12_CPU_DESCRIPTOR_HANDLE h;
 	if (!nat12_sampler_create(d->dev, &desc, &h)) {
 		kc_put(&d->sampler, key, NULL);
