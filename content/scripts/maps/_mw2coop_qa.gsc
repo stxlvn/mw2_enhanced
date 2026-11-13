@@ -254,6 +254,15 @@ main()
 		case "flares":
 			flares();
 			break;
+		case "whbreach":
+			whbreach();
+			break;
+		case "weapdrop":
+			weapdrop();
+			break;
+		case "cpweapons":
+			cpweapons();
+			break;
 		case "swaphint":
 			swaphint();
 			break;
@@ -1267,11 +1276,28 @@ downaudio()
 	level.forcedgameskill = 0;
 	maps\_gameskill::setSkill( true );
 	wait 3;
+	victim = level.player2; // downp1: the host is the one who is downed (the video of 2026-11-12 showed the near-death filter, which player 2 never gets in this check)
+	if ( GetDvar( "mw2coop_qa_variant" ) == "downp1" )
+		victim = level.player;
 	report( "downaudio: player 2 goes down" );
-	level.player2 DoDamage( level.player2.health + 500, level.player2.origin );
+	if ( GetDvar( "mw2coop_qa_variant" ) != "nodown" ) // nodown: the control run, nobody is downed
+		victim DoDamage( victim.health + 500, victim.origin );
+	// mw2coop_qa_variant (audio checks): nobreath = no hurt breathing for player 2, noshock = no shellshock on him, noeq = no near-death EQ/reverb on him
+	variant = GetDvar( "mw2coop_qa_variant" );
+	if ( variant == "nobreath" )
+		level.player2.gs.healthOverlayCutoff = -1;
 	for ( i = 0; i < 20; i++ )
 	{
 		wait 1;
+		if ( i == 4 && variant != "nodown" ) // a hit on the downed player: the stock scripts then start the dying effect (shellshock "default" for 60 s) on him
+			victim DoDamage( 1, victim.origin );
+		if ( variant == "noshock" )
+			level.player2 StopShellShock();
+		if ( variant == "noeq" )
+		{
+			level.player2 maps\_ambient::deactivate_index( level.eq_main_track );
+			level.player2 maps\_ambient::deactivate_reverb();
+		}
 		report( "downaudio " + i + ": p1 red " + level.player ent_flag( "player_has_red_flashing_overlay" ) + " hp " + level.player.health + ", p2 red " + level.player2 ent_flag( "player_has_red_flashing_overlay" ) + " down " + level.player2 ent_flag( "coop_downed" ) + " hp " + level.player2.health );
 	}
 	level.player2 notify( "revive_success" );
@@ -1481,6 +1507,136 @@ swaphint()
 // Whiskey Hotel's roof (start point "flare", maps\_mw2coop_whitehouse): on "Use your flares!"
 // each player holds a flare of his own; player 2 pops his with a real Attack press and player 1
 // keeps his; then player 1 pops his.
+// weapdrop (any level): a weapon player 2 dropped must not come back. Both players hold an AK-47 and an M1014 (player 1's, copied); player 2 drops the M1014 (TakeWeapon, as a pickup swap does);
+// then player 1 picks up a new weapon, then a level script refills his ammo (GiveMaxAmmo on all his weapons: the mod mirrors it on player 2). Owner's report 2026-11-14: a client's dropped weapon
+// came back whenever he picked up a new one.
+weapdrop()
+{
+	common_checks();
+	level.player GiveWeapon( "ak47" );
+	level.player GiveWeapon( "m1014" );
+	wait 2;
+	report( "weapdrop: player 2 has " + weapdrop_text( level.player2 ) );
+	check( level.player2 HasWeapon( "m1014" ), "player 2 got the M1014 from player 1" );
+	level.player2 TakeWeapon( "m1014" );
+	wait 1.5;
+	check( !level.player2 HasWeapon( "m1014" ), "the dropped M1014 stays dropped for 1.5 s" );
+	level.player GiveWeapon( "famas" );
+	wait 2;
+	report( "weapdrop: after player 1's new weapon, player 2 has " + weapdrop_text( level.player2 ) );
+	check( level.player2 HasWeapon( "famas" ), "player 2 got the new weapon" );
+	check( !level.player2 HasWeapon( "m1014" ), "the dropped M1014 did not come back with the new weapon" );
+	foreach ( weapon in level.player GetWeaponsListAll() )
+		level.player GiveMaxAmmo( weapon );
+	wait 2;
+	report( "weapdrop: after a refill of player 1's ammo, player 2 has " + weapdrop_text( level.player2 ) );
+	check( !level.player2 HasWeapon( "m1014" ), "the dropped M1014 did not come back with a refill" );
+	report( "done" );
+}
+
+weapdrop_text( player )
+{
+	text = "";
+	foreach ( weapon in player GetWeaponsListAll() )
+		text += weapon + "(" + player GetWeaponAmmoClip( weapon ) + "/" + player GetWeaponAmmoStock( weapon ) + ") ";
+	return text;
+}
+
+// cpweapons (run with MW2COOP_MENU=1 MW2COOP_START=oval_office on dc_whitehouse: a start point that is not the default): weapons and ammunition survive a restart at a checkpoint. First run: player 1
+// holds an AK-47 with 7 in the clip and 33 in stock plus the M1014, player 2 an AK-47 with 11 and 22 and no M1014; the checkpoint's weapons are saved (what the checkpoint code does), the ammo is spent
+// (30/200), the mission fails. After the restart both must hold what they held at the checkpoint, not the level's loadout with full ammunition (owner's report 2026-11-14).
+cpweapons()
+{
+	common_checks();
+	if ( GetDvar( "mw2coop_qa_failed" ) == "1" )
+	{
+		wait 8;
+		report( "cpweapons after the restart: player 1 ak47 " + level.player GetWeaponAmmoClip( "ak47" ) + "/" + level.player GetWeaponAmmoStock( "ak47" ) + " m1014 " + level.player HasWeapon( "m1014" ) + ", player 2 ak47 " + level.player2 GetWeaponAmmoClip( "ak47" ) + "/" + level.player2 GetWeaponAmmoStock( "ak47" ) + " m1014 " + level.player2 HasWeapon( "m1014" ) );
+		check( level.player HasWeapon( "ak47" ) && level.player GetWeaponAmmoClip( "ak47" ) == 7 && level.player GetWeaponAmmoStock( "ak47" ) == 33, "player 1's AK-47 is back with 7/33" );
+		check( level.player HasWeapon( "m1014" ), "player 1 still has the M1014" );
+		check( level.player2 HasWeapon( "ak47" ) && level.player2 GetWeaponAmmoClip( "ak47" ) == 11 && level.player2 GetWeaponAmmoStock( "ak47" ) == 22, "player 2's AK-47 is back with 11/22" );
+		check( !level.player2 HasWeapon( "m1014" ), "player 2 still does not have the M1014" );
+		report( "done" );
+		return;
+	}
+	wait 4;
+	level.player GiveWeapon( "ak47" );
+	level.player GiveWeapon( "m1014" );
+	wait 2;
+	level.player2 TakeWeapon( "m1014" );
+	level.player SetWeaponAmmoClip( "ak47", 7 );
+	level.player SetWeaponAmmoStock( "ak47", 33 );
+	level.player2 SetWeaponAmmoClip( "ak47", 11 );
+	level.player2 SetWeaponAmmoStock( "ak47", 22 );
+	wait 1;
+	maps\_mw2coop::snapshot_weapons( level.start_point );
+	report( "cpweapons: saved " + GetDvar( "mw2coop_cp_w0" ) );
+	report( "cpweapons: saved " + GetDvar( "mw2coop_cp_w1" ) );
+	level.player SetWeaponAmmoClip( "ak47", 30 );
+	level.player SetWeaponAmmoStock( "ak47", 200 );
+	level.player2 SetWeaponAmmoClip( "ak47", 30 );
+	level.player2 SetWeaponAmmoStock( "ak47", 200 );
+	wait 1;
+	SetDvar( "mw2coop_qa_failed", "1" );
+	report( "cpweapons: failing the mission" );
+	level thread maps\_mw2coop::mission_failed();
+	wait 30;
+}
+
+// whbreach (dc_whitehouse, run with MW2COOP_PRE "set start oval_office" for a restart there, or without it): the breach and the countdown. Reports the level's flags every 2 s for 16 s, then
+// both players walk to the trigger of each flag in the level's order and the flags are reported again: after a restart at a checkpoint the breach scripts (whitehouse_entrance(), which starts the
+// interior, the hammer-down jets and the flares) must run too (owner's report 2026-11-14: after a restart the countdown and the flares did not start).
+whbreach()
+{
+	common_checks();
+	names = strtok( "whitehouse_entrance_moveup whitehouse_entrance_init countdown_start whitehouse_breached whitehouse_kitchen_open whitehouse_interior whitehouse_hammerdown_jets whitehouse_flare_run", " " );
+	report( "whbreach: start point '" + level.start_point + "'" );
+	for ( t = 0; t < 16; t += 2 )
+	{
+		text = "";
+		foreach ( name in names )
+			text += name + "=" + flag( name ) + " ";
+		report( "whbreach flags: " + text );
+		wait 2;
+	}
+	friendly_before = GetDvar( "ai_friendlysuppression" );
+	foreach ( name in strtok( "whitehouse_init whitehouse_moveout whitehouse_spotlight whitehouse_entrance_moveup whitehouse_entrance_init countdown_start whitehouse_breached whitehouse_kitchen_open", " " ) )
+	{
+		trigger = getEntWithFlag( name );
+		if ( !isdefined( trigger ) )
+		{
+			report( "whbreach: no trigger sets " + name );
+			continue;
+		}
+		if ( flag( name ) )
+		{
+			report( "whbreach: " + name + " is set already (trigger at " + trigger.origin + ")" );
+			continue;
+		}
+		level.player SetOrigin( trigger.origin );
+		level.player2 SetOrigin( trigger.origin + ( 40, 0, 0 ) );
+		for ( t = 0; !flag( name ) && t < 6; t += 0.5 )
+			wait 0.5;
+		report( "whbreach: both moved to the trigger of " + name + " at " + trigger.origin + ": flag " + flag( name ) );
+		wait 2;
+	}
+	wait 6;
+	// test shortcut: Foley's kick of the kitchen door takes long with the bots; the interior part (whitehouse_interior(), started by whitehouse_entrance() after the door) follows it
+	if ( !flag( "whitehouse_kitchen_open" ) )
+		flag_set( "whitehouse_kitchen_open" );
+	wait 3;
+	report( "whbreach: ai_friendlysuppression " + friendly_before + " -> " + GetDvar( "ai_friendlysuppression" ) + " (whitehouse_interior() sets it to 0)" );
+	text = "";
+	foreach ( name in names )
+		text += name + "=" + flag( name ) + " ";
+	report( "whbreach final flags: " + text );
+	check( GetDvar( "ai_friendlysuppression" ) == "0", "the interior part ran after the breach: the hammer-down jets and the flares are started by it (whitehouse_entrance -> whitehouse_interior -> whitehouse_flare)" );
+	check( flag( "countdown_start" ), "the countdown started" );
+	check( flag( "whitehouse_interior" ), "the interior part of the level started (whitehouse_radio sets it with the countdown)" );
+	check( isdefined( level.hammerdown_time ), "the hammer-down timer runs (whitehouse_interior ran)" );
+	report( "done" );
+}
+
 flares()
 {
 	common_checks();
