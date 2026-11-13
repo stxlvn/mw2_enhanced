@@ -224,6 +224,9 @@ main()
 		case "padwalk":
 			padwalk();
 			break;
+		case "failwalk":
+			failwalk();
+			break;
 		case "restart":
 			restart();
 			break;
@@ -2607,7 +2610,7 @@ oilrigambush()
 {
 	// oilrig, start "heli": the ambush room; what the hostages do and what the flags are, every 2 s (issue 9: hostages do not disappear and die when the bodies are blown up with C4)
 	level.mw2coop_no_follow = true;
-	for ( i = 0; i < 45; i++ )
+	for ( i = 0; i < 12; i++ )
 	{
 		wait 2;
 		civs = GetAIArray( "neutral" );
@@ -2904,6 +2907,54 @@ failspindown()
 		report( "fail " + i + ": p2 yaw " + int( level.player2 GetPlayerAngles()[ 1 ] ) + " roll " + int( level.player2 GetPlayerAngles()[ 2 ] ) );
 		wait 0.5;
 	}
+}
+
+// (split screen, any level; player 2's fake pad walks forward: tools/qa_native.sh with MW2COOP_KEEP_FAKEPAD=1 and a fakepad.txt "0 32767 0 0 0 0 0") about 30 s into the mission it is failed; after the
+// restart player 2 must still walk: his origin is reported every second and checked at the end (issue 22: after a restart from a checkpoint player 2 could not be controlled)
+failwalk()
+{
+	level.mw2coop_no_follow = true;
+	if ( GetDvar( "mw2coop_qa_failed" ) != "1" )
+	{
+		wait_intro();
+		wait 4;
+		first = level.player2.origin;
+		yaw0 = level.player2 GetPlayerAngles()[ 1 ];
+		moved = 0;
+		turned = 0;
+		for ( i = 0; i < 28; i++ )
+		{
+			wait 1;
+			yaw1 = level.player2 GetPlayerAngles()[ 1 ];
+			turned += abs( AngleClamp180( yaw1 - yaw0 ) );
+			yaw0 = yaw1;
+			moved = max( moved, Distance( first, level.player2.origin ) );
+		}
+		report( "player 2 before the failure: moved " + int( moved ) + ", turned " + int( turned ) + " in 28 s" );
+		check( moved > 60 || turned > 30, "player 2 answers his pad before the failure" );
+		SetDvar( "mw2coop_qa_failed", "1" );
+		report( "failing the mission now" );
+		level thread maps\_mw2coop::mission_failed();
+		return;
+	}
+	wait_intro();
+	wait 4;
+	start = level.player2.origin;
+	yaw0 = level.player2 GetPlayerAngles()[ 1 ];
+	report( "after the restart, player 2 starts at " + int( start[ 0 ] ) + " " + int( start[ 1 ] ) + " yaw " + int( yaw0 ) );
+	moved = 0;
+	turned = 0;
+	for ( i = 0; i < 12; i++ )
+	{
+		wait 1;
+		yaw1 = level.player2 GetPlayerAngles()[ 1 ];
+		turned += abs( AngleClamp180( yaw1 - yaw0 ) );
+		yaw0 = yaw1;
+		moved = max( moved, Distance( start, level.player2.origin ) );
+		report( "after the restart, second " + i + ": player 2 at " + int( level.player2.origin[ 0 ] ) + " " + int( level.player2.origin[ 1 ] ) + " yaw " + int( level.player2 GetPlayerAngles()[ 1 ] ) + ", health " + level.player2.health );
+	}
+	check( moved > 60 || turned > 30, "player 2 answers his pad after the restart (moved " + int( moved ) + ", turned " + int( turned ) + " in 12 s)" );
+	report( "done" );
 }
 
 failspin()

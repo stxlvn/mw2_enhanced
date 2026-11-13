@@ -4661,9 +4661,30 @@ static void ctx_after_draw(void)
 // The server's copy of a local player's playerstate into the cl block (rva RVA_CL_PS is +0x2018 into the block at 0x533d20): for client 1 straight into context 1's copy, so no other thread
 // ever sees a swapped block for it.
 #define PS_SIZE 0xaca4
+// Issue 22 (v1.0.0: after a restart from a checkpoint player 2 could not be controlled for as long as the failed run had lasted). The engine restores player 1 from the checkpoint's saved
+// game, but player 2's server playerstate is not part of it: its commandTime (the first dword; the server ignores a usercmd that is not newer than it) kept the time of the failed run
+// (28.7 s in the test), so every command of the new level, which starts again near 0, was ignored until the new clock passed that time (the QA scenario failwalk: player 2 moved after 28 s).
+// A command time more than 2 s ahead of the last command the server took from client 1 can only be from the old run (the two are within a frame of each other while playing): it is set
+// to just before that command. [native] p2cmdtime=0 turns it off.
+static void p2_stale_command_time(void *ps)
+{
+	if (!CFG_ONCE("p2cmdtime", 1))
+		return;
+	int *command_time = (int *)ps;
+	const int last = *(const int *)(base + RVA_SV_CLIENTS + SV_CLIENT_STRIDE + 0x1630);
+	if (last > 0 && *command_time > last + 2000) {
+		static unsigned fixed;
+		if (fixed++ < 8)
+			log_printf("native: player 2's server command time %d is ahead of his last command %d (a restart from a checkpoint): set back", *command_time, last);
+		*command_time = last - 1;
+	}
+}
+
 static void ps_publish_hook(unsigned lc, const void *ps)
 {
 	hook_counts[1]++;
+	if (lc == 1 && native_active)
+		p2_stale_command_time((void *)ps);
 	if (lc == 0 && ctx_current == 0)
 		return ps_publish_original(0, ps);
 	ctx_ensure();
