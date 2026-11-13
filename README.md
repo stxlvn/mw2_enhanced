@@ -20,10 +20,6 @@
   <a href="https://github.com/stxlvn/mw2_enhanced/releases/latest"><b>⬇ Download the latest release</b></a> · <a href="https://www.nexusmods.com/codmw2/mods/99">Nexus Mods</a> · <a href="#install">Install</a> · <a href="#known-issues">Known issues</a>
 </p>
 
-<p align="center">
-  <a href="https://discord.gg/q882kMMEY"><img alt="Join our Discord server" src="https://img.shields.io/badge/Join_our_Discord_server-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="52"></a>
-</p>
-
 ---
 
 ## ✨ Features
