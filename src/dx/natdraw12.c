@@ -689,7 +689,7 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 			nat_image_size(d->rt, &rw, &rh, &rs);
 		else
 			rs = nat_scene_samples(d->dev);
-		st.a2c = rs > 1;
+		st.a2c = rs > 1 && !st.blend_enable; // (a blended alpha test, such as the menu's smoke, keeps its blend: coverage masks would make it hard-edged with 2 samples)
 	}
 	nat_image *rt = rt_image(d), *ds = ds_image(d);
 	if ((!rt || !nat12_image_has_rtv(rt)) && (!ds || !nat12_image_has_dsv(ds))) {

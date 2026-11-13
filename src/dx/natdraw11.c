@@ -629,6 +629,69 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 		}
 		nat_log_hook("trace: draw %s vp %.0f,%.0f %.0fx%.0f prims %u ps %p%s | ps c0 %.3f %.3f %.3f %.3f c1 %.3f %.3f %.3f %.3f", t, d->vp[0], d->vp[1], d->vp[2], d->vp[3], prim_count, (void *)g->ps, tx, g->ps_c[0][0], g->ps_c[0][1], g->ps_c[0][2], g->ps_c[0][3], g->ps_c[1][0], g->ps_c[1][1], g->ps_c[1][2], g->ps_c[1][3]);
 	}
+	{ // QA: MW2COOP_SKIPTEX=512x512[,1024x256..]: draws whose first texture has one of these sizes are not drawn (which draw makes a wrong detail)
+		static char list[128];
+		static int read;
+		if (!read) {
+			const char *e = getenv("MW2COOP_SKIPTEX");
+			snprintf(list, sizeof(list), "%s", e ? e : "");
+			read = 1;
+		}
+		if (list[0] && g->tex[0]) {
+			nat_image *im0 = d->ops.image(g->tex[0]);
+			if (im0) {
+				unsigned w, h, sm;
+				nat_image_size(im0, &w, &h, &sm);
+				char want[24];
+				snprintf(want, sizeof(want), "%ux%u", w, h);
+				const char *q = strstr(list, want);
+				if (q && (q == list || q[-1] == ',') && (q[strlen(want)] == 0 || q[strlen(want)] == ','))
+					return 1;
+			}
+		}
+	}
+	if (nd_trace && getenv("MW2COOP_DUMPTEX")) { // QA: the first texture of each traced draw as mw2coop/native11/tex-<draw>.bmp (32-bit formats only)
+		static unsigned n_dump;
+		nat_image *im = g->tex[0] ? d->ops.image(g->tex[0]) : NULL;
+		if (im && n_dump < 40) {
+			unsigned w, h, sm;
+			nat_image_size(im, &w, &h, &sm);
+			void *px = NULL;
+			unsigned pitch = 0, rows = 0;
+			if (w >= 64 && sm <= 1 && nat_image_download(im, 0, &px, &pitch, &rows) && px) {
+				char path[64];
+				snprintf(path, sizeof(path), "mw2coop/native11/tex-%02u.bmp", n_dump);
+				FILE *f = fopen(path, "wb");
+				if (f && pitch >= w * 4) {
+					uint8_t hdr[54] = {'B', 'M'};
+					const uint32_t size = 54 + w * rows * 4, off = 54, dib = 40, pb = 1 | 32u << 16;
+					const int32_t nh = -(int32_t)rows;
+					memcpy(hdr + 2, &size, 4);
+					memcpy(hdr + 10, &off, 4);
+					memcpy(hdr + 14, &dib, 4);
+					memcpy(hdr + 18, &w, 4);
+					memcpy(hdr + 22, &nh, 4);
+					memcpy(hdr + 26, &pb, 4);
+					fwrite(hdr, 1, 54, f);
+					for (unsigned y = 0; y < rows; y++)
+						fwrite((uint8_t *)px + (size_t)y * pitch, 4, w, f);
+				}
+				if (f)
+					fclose(f);
+				if (nat_log_hook)
+					nat_log_hook("trace: dumped tex-%02u: %ux%u d3d9 format %u pitch %u rows %u", n_dump, w, h, nat_image_d3d9_format(im), pitch, rows);
+				n_dump++;
+				free(px);
+			}
+		}
+	}
+	if (nd_trace && nat_log_hook && g->words_valid) { // the render state of the traced draw: blend, alpha test, write mask, depth, the first sampler's filter
+		state11_t ts;
+		state11_decode(g->word0, g->word1, &ts);
+		state11_sampler_t sd;
+		state11_sampler_decode(g->sampler_word[0], &sd);
+		nat_log_hook("trace:   state blend %d (%d,%d op %d / a %d,%d op %d) atest %d func %d ref %d wmask %x z %d/%d cull %d srgbw %d | sampler0 min %d mag %d mip %d addr %d,%d aniso %d", ts.blend_enable, ts.src, ts.dst, ts.op, ts.src_a, ts.dst_a, ts.op_a, ts.alpha_test_enable, ts.alpha_func, ts.alpha_ref, ts.write_mask, ts.z_enable, ts.z_write, ts.cull, ts.srgb_write, sd.min, sd.mag, sd.mip, sd.addr_u, sd.addr_v, sd.aniso);
+	}
 	nd_shader *vsg = g->vs ? d->ops.shader(g->vs) : NULL, *psg = g->ps ? d->ops.shader(g->ps) : NULL;
 	nd_decl *decl = g->decl ? d->ops.decl(g->decl) : NULL;
 	if (!vsg || !decl || !g->words_valid) {
@@ -665,7 +728,7 @@ static int nd_draw_indexed_impl(nd *d, ng_state *g, int base_vertex, unsigned st
 			nat_image_size(d->rt, &rw, &rh, &rs);
 		else
 			rs = nat_scene_samples(d->dev);
-		st.a2c = rs > 1;
+		st.a2c = rs > 1 && !st.blend_enable; // (a blended alpha test, such as the menu's smoke, keeps its blend: coverage masks would make it hard-edged with 2 samples)
 	}
 	ID3D11RenderTargetView *rtv;
 	ID3D11DepthStencilView *dsv;
