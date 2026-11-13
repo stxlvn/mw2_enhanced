@@ -1594,7 +1594,9 @@ static void host_lobby(const char *map)
 		snprintf(online, sizeof(online), "mw2coop_online %s\n", map ? map : "");
 	// xrequirelivesignin: the game wants to be signed in to IWNet, and without a connection to it (a PC without internet) it opens "Connecting to IWNet..." and waits for ever (issue 21).
 	// A split screen lobby needs no IWNet (nor Steam lobby, see above), so it does not ask for it; a network lobby keeps the game's own check.
-	const int split_now = split_pending != 0;
+	// Without a connection to IWNet or Steam (a LAN or direct IP lobby, issue 23: the "Connecting to IWNet..." pop-up of this command stayed over the lobby on a PC behind a VPN) the command
+	// is not sent either: listen and connect pass their own check by the hooks above, so nothing else asks for the sign-in. With the connection the game's own check runs as before.
+	const int split_now = split_pending != 0 || !iwnet_would_pass();
 	snprintf(cmd, sizeof(cmd),
 		 "set arcademode 0\nset arcademode_full 0\nset solo_play 0\nset ui_skip_level_select 1\n"
 		 "set so_ophud_player0 0\nset so_ophud_player1 0\n%s"
