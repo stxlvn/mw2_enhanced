@@ -454,7 +454,7 @@ static void add_page(void)
 			} else {
 				if (t->kind == K_UPSCALER || t->kind == K_DIRECTX) {
 					static const char *const upscaler_names[4] = {"@MW2COOP_ENH_OFF", "FSR 1", "FSR 3", "DLSS"};
-					static const char *const directx_names[5] = {"DirectX 9", "DirectX 9Ex", "DirectX 12 (9 on 12)", "DirectX 11 (native)", "DirectX 12 (native)"};
+					static const char *const directx_names[5] = {"DirectX 9", "DirectX 9Ex", "DirectX 12 (9 on 12)", "DirectX 11", "DirectX 12"};
 					control = t->kind == K_UPSCALER ? choice_item(menu, upscaler_names, UPSCALERS) : choice_item(menu, directx_names, 5);
 					if (!control) {
 						log_printf("enhopts: no choice row to copy from the advanced video page: no %s row", t->kind == K_UPSCALER ? "Upscaler" : "DirectX");
