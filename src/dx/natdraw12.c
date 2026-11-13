@@ -381,6 +381,21 @@ static nat_image *ds_image(nd *d) { return d->ds == ND_NO_DEPTH ? NULL : d->ds ?
 
 static void set_targets(nd *d, nat_image *rt, nat_image *ds, int srgb)
 {
+	{ // QA (MW2COOP_GPUTIME=1): a new segment when the target changes
+		static nat_image *last_rt;
+		static unsigned last_gen;
+		if (nat12_gpu_active(d->dev) && (rt != last_rt || last_gen != nat12_list_generation(d->dev))) {
+			unsigned w = 0, h = 0, s = 0;
+			char key[40] = "(no target)";
+			if (rt) {
+				nat_image_size(rt, &w, &h, &s);
+				snprintf(key, sizeof(key), "%ux%u s%u", w, h, s);
+			}
+			nat12_gpu_mark(d->dev, key);
+			last_rt = rt;
+			last_gen = nat12_list_generation(d->dev);
+		}
+	}
 	D3D12_CPU_DESCRIPTOR_HANDLE rtv = {0}, dsv = {0};
 	if (rt && nat12_image_has_rtv(rt)) {
 		nat12_image_transition(d->dev, rt, D3D12_RESOURCE_STATE_RENDER_TARGET);

@@ -276,6 +276,145 @@ void nat12_set_heaps(nat_device *d)
 	d->heaps_set = 1;
 }
 
+// ------------------------------------------------------------------------------------------------------------------------------------------------------------------ GPU timing (QA)
+// MW2COOP_GPUTIME=1: a timestamp is written on the GPU every time the render target changes (nat12_gpu_mark, from set_targets and the stretch), the list's timestamps are resolved when it
+// is submitted, and a few frames later (the fence) the time between two marks is added to the key of the first ("1920x1080 s2": the target's size and samples). Every 600 lists the biggest
+// keys are logged: milliseconds per list. It shows where the GPU time of a frame goes (docs/native-dx-plan.md).
+static ID3D12Resource *make_buffer(nat_device *d, UINT64 size, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_STATES state);
+#define TS_MAX 512
+#define TS_SLOTS 8
+static struct {
+	int state; // 0 not asked yet, 1 on, -1 off
+	ID3D12QueryHeap *heap;
+	ID3D12Resource *rb[TS_SLOTS];
+	UINT64 freq;
+	unsigned n;
+	char key[TS_MAX][28];
+	struct {
+		unsigned n;
+		UINT64 fence;
+		int used;
+		char key[TS_MAX][28];
+	} slot[TS_SLOTS];
+	unsigned next;
+	struct {
+		char key[28];
+		double ms;
+		unsigned count;
+	} agg[64];
+	unsigned nagg, lists;
+	double wait_ms; // the CPU time spent waiting for the GPU in submit(wait_idle) (a flush in the middle of a frame)
+	unsigned waits;
+	double present_call_ms, submit_ms, frame_ms;
+	LARGE_INTEGER last_present;
+	double present_ms, alloc_ms; // the CPU time in the swap chain's frame latency wait and in the wait for the frame that used this allocator
+} TS;
+
+static int ts_active(nat_device *d)
+{
+	if (TS.state)
+		return TS.state > 0;
+	TS.state = -1;
+	if (!getenv("MW2COOP_GPUTIME"))
+		return 0;
+	D3D12_QUERY_HEAP_DESC qd = {D3D12_QUERY_HEAP_TYPE_TIMESTAMP, TS_MAX, 0};
+	if (FAILED(ID3D12Device_CreateQueryHeap(d->dev, &qd, &IID_ID3D12QueryHeap, (void **)&TS.heap)))
+		return 0;
+	for (int i = 0; i < TS_SLOTS; i++) {
+		TS.rb[i] = make_buffer(d, TS_MAX * 8, D3D12_HEAP_TYPE_READBACK, D3D12_RESOURCE_STATE_COPY_DEST);
+		if (!TS.rb[i])
+			return 0;
+	}
+	ID3D12CommandQueue_GetTimestampFrequency(d->queue, &TS.freq);
+	TS.state = 1;
+	log_printf("native12: GPU timing on (MW2COOP_GPUTIME): the time between render target changes, logged every 600 lists");
+	return 1;
+}
+
+int nat12_gpu_active(nat_device *d) { return ts_active(d); }
+
+void nat12_gpu_mark(nat_device *d, const char *key)
+{
+	if (!ts_active(d) || TS.n >= TS_MAX - 1)
+		return;
+	ID3D12GraphicsCommandList_EndQuery(d->list, TS.heap, D3D12_QUERY_TYPE_TIMESTAMP, TS.n);
+	snprintf(TS.key[TS.n], sizeof(TS.key[0]), "%s", key);
+	TS.n++;
+}
+
+static void ts_collect(nat_device *d)
+{
+	if (TS.state <= 0)
+		return;
+	const UINT64 done = ID3D12Fence_GetCompletedValue(d->fence);
+	for (int i = 0; i < TS_SLOTS; i++) {
+		if (!TS.slot[i].used || TS.slot[i].fence > done)
+			continue;
+		D3D12_RANGE rr = {0, TS.slot[i].n * 8};
+		UINT64 *t = NULL;
+		if (SUCCEEDED(ID3D12Resource_Map(TS.rb[i], 0, &rr, (void **)&t)) && t) {
+			for (unsigned k = 0; k + 1 < TS.slot[i].n; k++) {
+				const double ms = (double)(t[k + 1] - t[k]) * 1000.0 / (double)TS.freq;
+				unsigned a = 0;
+				while (a < TS.nagg && strcmp(TS.agg[a].key, TS.slot[i].key[k]))
+					a++;
+				if (a == TS.nagg && a < 64) {
+					snprintf(TS.agg[a].key, sizeof(TS.agg[a].key), "%s", TS.slot[i].key[k]);
+					TS.nagg++;
+				}
+				if (a < 64) {
+					TS.agg[a].ms += ms;
+					TS.agg[a].count++;
+				}
+			}
+			D3D12_RANGE none = {0, 0};
+			ID3D12Resource_Unmap(TS.rb[i], 0, &none);
+		}
+		TS.slot[i].used = 0;
+		if (++TS.lists % 600 == 0) {
+			double total = 0;
+			for (unsigned a = 0; a < TS.nagg; a++)
+				total += TS.agg[a].ms;
+			log_printf("native12: GPU time per list over 600 lists: %.2f ms in all; flushes that waited for the GPU: %.2f per list, %.2f ms of waiting per list; present wait %.2f ms, allocator wait %.2f ms; Present call %.2f ms, submit call %.2f ms, time between presents %.2f ms per list", total / 600.0, TS.waits / 600.0, TS.wait_ms / 600.0, TS.present_ms / 600.0, TS.alloc_ms / 600.0, TS.present_call_ms / 600.0, TS.submit_ms / 600.0, TS.frame_ms / 600.0);
+			TS.present_ms = TS.alloc_ms = TS.present_call_ms = TS.submit_ms = TS.frame_ms = 0;
+			TS.waits = 0;
+			TS.wait_ms = 0;
+			for (int r = 0; r < 8; r++) {
+				int best = -1;
+				for (unsigned a = 0; a < TS.nagg; a++)
+					if (TS.agg[a].ms > 0 && (best < 0 || TS.agg[a].ms > TS.agg[best].ms))
+						best = (int)a;
+				if (best < 0)
+					break;
+				log_printf("native12:   %-26s %6.2f ms per list, %u segments per list", TS.agg[best].key, TS.agg[best].ms / 600.0, TS.agg[best].count / 600);
+				TS.agg[best].ms = 0;
+			}
+			memset(TS.agg, 0, sizeof(TS.agg));
+			TS.nagg = 0;
+		}
+	}
+}
+
+// at the end of a list: the last mark, the resolve of the list's timestamps into a readback slot
+static void ts_submit(nat_device *d)
+{
+	ts_collect(d);
+	if (TS.state <= 0 || !TS.n)
+		return;
+	nat12_gpu_mark(d, "end");
+	const int s = (int)(TS.next++ % TS_SLOTS);
+	if (TS.slot[s].used) { // the slot is still waiting for its results: this list is not measured
+		TS.n = 0;
+		return;
+	}
+	ID3D12GraphicsCommandList_ResolveQueryData(d->list, TS.heap, D3D12_QUERY_TYPE_TIMESTAMP, 0, TS.n, TS.rb[s], 0);
+	TS.slot[s].n = TS.n;
+	TS.slot[s].fence = d->pending;
+	memcpy(TS.slot[s].key, TS.key, sizeof(TS.key[0]) * TS.n);
+	TS.slot[s].used = 1;
+	TS.n = 0;
+}
+
 static void upload_gpu_wait(nat_device *d);
 static void submit(nat_device *d, int wait_idle)
 {
@@ -286,6 +425,7 @@ static void submit(nat_device *d, int wait_idle)
 		nat12_query_resolve(d, q);
 	}
 	d->qended_n = 0;
+	ts_submit(d);
 	ID3D12GraphicsCommandList_Close(d->list);
 	upload_gpu_wait(d); // the textures this list draws with: their copies are submitted, and the queue waits for them on the GPU
 	ID3D12CommandList *l[1] = {(ID3D12CommandList *)d->list};
@@ -293,8 +433,18 @@ static void submit(nat_device *d, int wait_idle)
 	ID3D12CommandQueue_Signal(d->queue, d->fence, d->pending);
 	d->alloc_value[d->fidx] = d->pending;
 	d->pending++;
-	if (wait_idle)
+	if (wait_idle) {
+		LARGE_INTEGER w0, w1, wf;
+		if (TS.state > 0)
+			QueryPerformanceCounter(&w0);
 		wait_value(d, d->pending - 1);
+		if (TS.state > 0) {
+			QueryPerformanceCounter(&w1);
+			QueryPerformanceFrequency(&wf);
+			TS.wait_ms += (double)(w1.QuadPart - w0.QuadPart) * 1000.0 / (double)wf.QuadPart;
+			TS.waits++;
+		}
+	}
 }
 
 void nat12_note_commands(nat_device *d) { d->cmds = 1; }
@@ -1487,15 +1637,36 @@ int nat_present(nat_device *d)
 		ID3D12GraphicsCommandList_CopyResource(d->list, back, d->scene->res);
 		barrier_res(d, back, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
 	}
+	LARGE_INTEGER ts0, ts1, ts2, tsf;
+	QueryPerformanceCounter(&ts0);
 	submit(d, 0);
+	QueryPerformanceCounter(&ts1);
 	d->up_done = 0;
 	if (natfsr3_wanted())
 		natfsr3_frame_end();
 	HRESULT hr = IDXGISwapChain3_Present(d->swap, d->p.vsync ? 1 : 0, ns_present_flags(d->tearing, d->p.vsync, d->fullscreen_set));
+	QueryPerformanceCounter(&ts2);
+	if (TS.state > 0) {
+		QueryPerformanceFrequency(&tsf);
+		TS.submit_ms += (double)(ts1.QuadPart - ts0.QuadPart) * 1000.0 / (double)tsf.QuadPart;
+		TS.present_call_ms += (double)(ts2.QuadPart - ts1.QuadPart) * 1000.0 / (double)tsf.QuadPart;
+		if (TS.last_present.QuadPart)
+			TS.frame_ms += (double)(ts2.QuadPart - TS.last_present.QuadPart) * 1000.0 / (double)tsf.QuadPart;
+		TS.last_present = ts2;
+	}
+	LARGE_INTEGER tq0, tq1, tq2, tqf;
+	QueryPerformanceCounter(&tq0);
 	if (d->waitable) // the next frame starts when the swap chain can take it (lower input latency)
 		WaitForSingleObjectEx(d->waitable, 100, TRUE);
+	QueryPerformanceCounter(&tq1);
 	d->fidx = (d->fidx + 1) % NAT12_FRAMES;
 	wait_value(d, d->alloc_value[d->fidx]);
+	QueryPerformanceCounter(&tq2);
+	if (TS.state > 0) {
+		QueryPerformanceFrequency(&tqf);
+		TS.present_ms += (double)(tq1.QuadPart - tq0.QuadPart) * 1000.0 / (double)tqf.QuadPart;
+		TS.alloc_ms += (double)(tq2.QuadPart - tq1.QuadPart) * 1000.0 / (double)tqf.QuadPart;
+	}
 	gc_collect(d, 0);
 	begin_list(d);
 	if (hr == DXGI_STATUS_OCCLUDED)

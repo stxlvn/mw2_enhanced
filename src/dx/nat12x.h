@@ -22,6 +22,8 @@ unsigned long long nat12_completed_value(nat_device *d);
 void nat12_flush(nat_device *d);
 // commands were recorded in the list (an event query issued before any is complete with the submissions already made)
 void nat12_note_commands(nat_device *d);
+int nat12_gpu_active(nat_device *d);
+void nat12_gpu_mark(nat_device *d, const char *key); // QA (MW2COOP_GPUTIME=1): a GPU timestamp for the segment that starts here
 // the frame's upload memory for constants and the like: 256-byte aligned, valid until the GPU is done with the frame; NULL when the frame's ring is full (nat12_flush and ask again)
 void *nat12_upload_alloc(nat_device *d, unsigned size, D3D12_GPU_VIRTUAL_ADDRESS *gpu);
 // shader-visible descriptor rings of the frame (count descriptors, contiguous): NULL when full. The heaps are set on the list by nat12_set_heaps.
