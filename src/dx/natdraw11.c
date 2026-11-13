@@ -144,7 +144,7 @@ struct nd_shader {
 	struct {
 		unsigned sig;
 		nat_shader *s;
-	} var[8];
+	} var[32]; // the variants of one shader: a vertex shader per vertex declaration, a pixel shader per set of samplers that hold depth textures (hardware shadow maps)
 	int nvar;
 	int failed;
 };
@@ -408,8 +408,11 @@ static nat_shader *variant(nd *d, nd_shader *s, const nd_decl *decl, unsigned sh
 	for (int i = 0; i < s->nvar; i++)
 		if (s->var[i].sig == sig)
 			return s->var[i].s;
-	if (s->nvar >= 8 || s->failed)
+	if (s->nvar >= 32 || s->failed) {
+		if (!s->failed)
+			snprintf(d->err, sizeof(d->err), "shader: more than 32 variants (depth sampler sets or vertex declarations)"); // (the limit was 8 and the refusal silent: owner's log 2026-11-13, 41595 refused draws, black and white picture)
 		return NULL;
+	}
 	char err[160] = "";
 	nat_shader *n = nat_shader_from_sm3(d->dev, s->code, s->dwords, 1 | (s->is_vs ? 0 : (int)((shadow_mask & 0xffffu) << 8)), s->is_vs && decl ? (const void *)decl->ints : NULL, s->is_vs && decl ? decl->nints : 0, err, sizeof(err));
 	if (!n) {
