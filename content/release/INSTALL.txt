@@ -4,7 +4,7 @@ https://github.com/stxlvn/mw2_enhanced
 === По-русски ===
 
 Что это: кооператив на двоих для кампании MW2 (2009) в актуальной 64-битной Steam-версии.
-Бета: все сцены кампании переделаны на двоих, играть можно; известные проблемы — в README.md на GitHub.
+Релиз 1.0: все сцены кампании переделаны на двоих, играть можно; известные проблемы — в README.md на GitHub.
 
 Нужно:
 - Windows 10/11, MW2 (2009) в Steam (appid 10180), 64-битная сборка (обновление сентября
@@ -62,7 +62,7 @@ mw2coop-<версия>-x86.zip (он же для клиента iw4x-sp). Есл
 
 === English ===
 
-Two-player co-op for the MW2 (2009) campaign on the current 64-bit Steam build. Beta: every set
+Two-player co-op for the MW2 (2009) campaign on the current 64-bit Steam build. Release 1.0: every set
 piece is reworked for two and it is playable; known issues are in README.md on GitHub.
 
 Needs: Windows 10/11; MW2 (2009) on Steam (appid 10180), the 64-bit build (September 2026
