@@ -466,7 +466,7 @@ static LONG CALLBACK watchw_veh(EXCEPTION_POINTERS *ep)
 		const uintptr_t *st = (const uintptr_t *)sp;
 		for (int i = 0; i < 400 && n < 1400; i++) {
 			uintptr_t v = st[i];
-			if (v > (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a00000 && !IsBadReadPtr((void *)(v - 5), 5) && (((uint8_t *)v)[-5] == 0xe8 || ((uint8_t *)v)[-2] == 0xff || ((uint8_t *)v)[-6] == 0xff))
+			if (v > (uintptr_t)base + 0x1000 && v < (uintptr_t)base + 0x2a00000 && !IsBadReadPtr((void *)(v - 5), 5) && (((uint8_t *)v)[-5] == 0xe8 || ((uint8_t *)v)[-2] == 0xff || ((uint8_t *)v)[-6] == 0xff)) // raw-ok: the exe's code range as a plausibility test of a return address, not a game address
 				n += snprintf(line + n, sizeof(line) - n, " %x", (unsigned)(v - (uintptr_t)base));
 		}
 		log_printf("%s", line);

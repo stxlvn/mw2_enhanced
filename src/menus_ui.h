@@ -77,6 +77,11 @@ int ui_menu_instances(const char *name, uint8_t **out, int max);
 int ui_item_index(uint8_t *menu, const char *name);
 // A handler set running one menu script (the zone's parsed form: quoted tokens, ';' ends a command).
 void *ui_script_set(const char *script);
+// the UI scripts every button of the mod's own pages repeats (the game's menu script syntax: the quotes belong to it)
+#define UI_S_CLICK "\"play\" \"mouse_click\" ; "
+#define UI_S_CLICK_CLOSE "\"play\" \"mouse_click\" ; \"close\" \"self\" ; "
+#define UI_S_HOVER "\"play\" \"mouse_over\" ; \"setItemColor\" \"self\" \"backcolor\" 0 0 0 1 ; "
+#define UI_S_LEAVE "\"setItemColor\" \"self\" \"backcolor\" 0 0 0 \"0.0\" ; "
 // A copy of menu <from> named <name>, every item copied too; not yet in the UI's list.
 uint8_t *ui_clone_menu(uint8_t *from, const char *name);
 // Add a menu to the UI's list (Menus_FindByName and "openmenu" find it then); 0 if the list is full.

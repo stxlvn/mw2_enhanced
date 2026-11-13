@@ -154,7 +154,7 @@ static void add_page(int pl)
 		list[n++] = items[i];
 	*(const char **)(title + ITEM_TEXT) = pl ? "@MW2COOP_PAD_MENU_2" : "@MW2COOP_PAD_MENU_1";
 	const float slider_dy = *(float *)(slider + ITEM_RECT_Y) - *(float *)(slider_label + ITEM_RECT_Y);
-	void *click = ui_script_set("\"play\" \"mouse_click\" ; ");
+	void *click = ui_script_set(UI_S_CLICK);
 	for (int o = 0; o < OPTS; o++) {
 		float y = 28.0f + 20.0f * o + (o >= 3 ? 20.0f : 0); // the separator's line between the third and the fourth row
 		uint8_t *control = o == OPT_SENS ? slider : o == OPT_INVERT ? yesno : ui_clone_item(yesno, menu);

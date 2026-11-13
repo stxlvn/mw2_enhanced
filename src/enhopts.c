@@ -422,7 +422,7 @@ static void add_page(void)
 		list[n++] = items[i];
 	*(const char **)(title + ITEM_TEXT) = "@MW2COOP_ENH_MENU";
 	const float slider_dy = *(float *)(slider + ITEM_RECT_Y) - *(float *)(slider_label + ITEM_RECT_Y);
-	void *click = ui_script_set("\"play\" \"mouse_click\" ; ");
+	void *click = ui_script_set(UI_S_CLICK);
 	int used_slider = 0, used_yesno = 0, used_label = 0, rows = 0;
 	int lines = 0, groups_used = 0; // the rows and group names the page will have: the row distance is chosen from them
 	for (int g = 0; g < GROUPS; g++) {
@@ -541,7 +541,7 @@ static void add_popup(void)
 	*(const char **)(items[yes - 1] + ITEM_TEXT) = "@MW2COOP_ENH_RESTART_TEXT"; // the question, just above Yes
 	*(void **)(items[yes - 1] + ITEM_TEXT_EXP) = NULL;
 	*(void **)(items[yes] + ITEM_ACTION) = ui_script_set("\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"quit\" ; ");
-	*(void **)(items[ui_item_index(src, "no")] + ITEM_ACTION) = ui_script_set("\"play\" \"mouse_click\" ; \"close\" \"self\" ; ");
+	*(void **)(items[ui_item_index(src, "no")] + ITEM_ACTION) = ui_script_set(UI_S_CLICK_CLOSE);
 	if (ui_register_menu(menu))
 		log_printf("enhopts: restart pop-up added");
 }

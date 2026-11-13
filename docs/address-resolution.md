@@ -80,6 +80,21 @@ on its own Direct3D 9. The same timestamp is not enough (a patched or unpacked c
 The new XR addresses of the sign-in hooks (issues 21 and the LAN case) are in both signature files; `tools/gen_addr159.py` collected the 64-bit `XR()` literals of shared code since the 64-bit
 routing (it now reads only the lines the 32-bit build compiles, plus the `REF_` macros, and skips 30 known 64-bit literals) and the iw4x table has the four new 32-bit addresses.
 
+## Audit of 2026-11-13 (independence, second round)
+
+* **64-bit literals in shared code.** About 60 uses of 64-bit addresses stood in code that the 32-bit build compiles too (diagnostics, the 64-bit compositor, hooks the 32-bit build never installs). They are `XR64()` now
+  (`game.h`: `XR()` on 64-bit; on 32-bit a private block of zeros, `addr_dead_block()`, so a stray use reads zeros instead of an address far outside the image); `tools/gen_addr159.py` no longer needs a skip list.
+* **A check for raw offsets.** `tools/check_raw_addresses.py` (run by `pr_checks.py`) fails when 64-bit code of `src/*.c` / `src/*.h` uses `base + 0x....` instead of `XR()` (four scan windows and image bounds carry
+  `raw-ok:`). This is the static stand-in for running on a second 64-bit exe, which does not exist here: a moved build is only handled if every address goes through the resolver.
+* **Unresolved addresses (14 on 64-bit).** Every consumer was read. Harmless on the zero block: diagnostics (`loadprof`, the dobj tree log, video mode 9), the Enhanced options' reads, the briefing wait (`brief_addresses_ok`,
+  already gated), the screenshot and console device lookups (they test for NULL). Fixed: **the entity table guard** read the renderer's device pointer (0x4115920): unresolved it read as NULL and the guard handed out empty entries for every lookup
+  of the game, so it is not installed then; **the split screen** swaps ranges of the game's memory (two of them, 0x4812878 and 0x45851b0, are among the unresolved) and draws through the device pointer (0x410fd20): `activate()`
+  now refuses with a log line listing what was not found (`split_addresses_ok`), and the rest of the mod runs. Tried on the known build (split works) and with the resolver's tables forced (`MW2COOP_FORCE_UNKNOWN=1`, refused as designed).
+* **iw4x-sp.** The 1.0.159 table is static and complete for what the mod uses (316 addresses mapped, `gen_addr159.py`); a different iw4x exe goes through the signature path like any unknown build (277 of 316 found on 1.0.159;
+  the split screen is refused when a range is missing), and `python -I tools/gen_addr159.py <image32.bin> <new iw4sp.exe>` makes a new table.
+* **Hard-coded UI scripts.** The scripts every button repeated (`click`, `click and close`, `hover`, `leave`) are `UI_S_*` constants in `menus_ui.h`; the other `ui_script_set` strings are single-use. The texts, the mission list, the console
+  texts, the menu button tables and the settings reference are files (`.str`, `.csv`, `.menu`) since 2026-11-09 and 11-13.
+
 ## What is not done
 
 * A 64-bit build whose addresses moved runs only with `movedbuilds=1` and only if 85% of the addresses are found; it has never been run (no such build to try). A 64-bit

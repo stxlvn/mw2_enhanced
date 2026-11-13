@@ -362,6 +362,8 @@ void guards_install(void)
 	base = (uint8_t *)GetModuleHandleA(NULL);
 	if (!settings_hotguards()) {
 		log_printf("guards: [native] hotguards=0: the entity table and weapon definition lookups are not guarded");
+	} else if (!addr_resolved(0x4115920)) { // the renderer's device data pointer the guard reads: unresolved it reads as NULL and the guard would hand out empty entries for every lookup
+		log_printf("guards: the entity table guard needs the renderer's device pointer (reference rva 0x4115920), which was not found in this build: not installed");
 	} else if (!memcmp(base + XR(0x2a70), table_entry_bytes, sizeof(table_entry_bytes))) {
 		hook_jump(base + XR(0x2a70), sizeof(table_entry_bytes), (const void *)table_entry_guarded, 0xcc);
 		log_printf("guards: the entity table lookup at 0x2a70 is guarded");

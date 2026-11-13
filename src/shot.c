@@ -18,7 +18,7 @@
 #include "shot.h"
 #include "game.h"
 
-#define RVA_D3D_DEVICE XR(0x410fd20)
+#define RVA_D3D_DEVICE XR64(0x410fd20)
 #define VT_END_SCENE   42 // IDirect3DDevice9::EndScene
 
 typedef HRESULT(STDMETHODCALLTYPE *end_scene_t)(IDirect3DDevice9 *);

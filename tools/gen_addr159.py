@@ -108,15 +108,7 @@ def collect():
         m = re.search(r'\} sites\[\] = \{(.*?)\n\t\};', w32, re.S)
         for e in re.finditer(r'\{\s*(%s)\s*,' % HEX, m.group(1)):
             add(int(e.group(1), 16), 'context hooks')
-    for rva in SKIP_64:
-        items.pop(rva, None)
     return items
-
-
-# 64-bit addresses that stand in code both builds compile (diagnostics and the video-size code of native.c): they are not 32-bit addresses, the 32-bit build never gets to use them.
-SKIP_64 = (0x52bfc0, 0x533d18, 0x1bc0a30, 0x410fd20, 0x4113724, 0x411372c, 0x4358e84,
-           0x1fece0, 0x1fee30, 0x3c3eb0, 0x40caa0, 0x40cac0, 0x40cac8, 0x40cad0, 0x40cad8, 0x42242c, 0x422430, 0x422434, 0x422440, 0x42245c, 0x422460, 0x43c200, 0x51b078, 0x51b080,
-           0x51dca8, 0x51dcb0, 0x5c010, 0x5c5bf, 0xd9e070, 0xf50ec0)
 
 
 def manual():

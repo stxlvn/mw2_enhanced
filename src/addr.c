@@ -471,7 +471,7 @@ static void scratch_make(void)
 		uint8_t *p = NULL;
 #ifdef _WIN64
 		// the RVA must fit in 32 bits: a block within 4 GB above the image
-		for (uintptr_t at = (uintptr_t)base + 0x20000000u; !p && at < (uintptr_t)base + 0xf0000000u; at += 0x01000000u)
+		for (uintptr_t at = (uintptr_t)base + 0x20000000u; !p && at < (uintptr_t)base + 0xf0000000u; at += 0x01000000u) // raw-ok: a window of the address space for the private blocks, no game address
 			p = VirtualAlloc((void *)at, SCRATCH_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 #else
 		p = VirtualAlloc(NULL, SCRATCH_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
@@ -628,5 +628,19 @@ int addr_resolve_running(int *total)
 	mode = (layout_same && !getenv("MW2COOP_FORCE_RESOLVED")) ? 0 : 1; // the same layout: the addresses are used as they are (QA: MW2COOP_FORCE_RESOLVED=1 runs the table lookups on the known layout)
 	addr_result_free(&res);
 	return n;
+}
+#endif
+
+// 32-bit: the stand-in for the 64-bit game's addresses in shared code (XR64 in game.h): the offset, from the exe's base, of a private zeroed read-write block (64 KB, made once)
+#ifndef _WIN64
+unsigned addr_dead_block(void)
+{
+	static unsigned off;
+	if (!off) {
+		void *blk = VirtualAlloc(NULL, 0x10000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+		off = blk ? (unsigned)((uintptr_t)blk - (uintptr_t)GetModuleHandleA(NULL)) : 0;
+		log_printf("addr: a 64-bit-only address was used in the 32-bit build: it reads a private block of zeros instead");
+	}
+	return off;
 }
 #endif

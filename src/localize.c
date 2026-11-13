@@ -606,7 +606,7 @@ static void *find_header(int type, const char *name)
 		int ln = 0;
 		const uintptr_t base = (uintptr_t)GetModuleHandleA(NULL);
 		for (USHORT k = 0; k < nb && ln < (int)sizeof(line) - 20; k++)
-			if ((uintptr_t)bt[k] > base && (uintptr_t)bt[k] < base + 0x4900000)
+			if ((uintptr_t)bt[k] > base && (uintptr_t)bt[k] < base + 0x4900000) // raw-ok: the exe's image range for a caller list, not a game address
 				ln += snprintf(line + ln, sizeof(line) - ln, " exe+%llx", (unsigned long long)((uintptr_t)bt[k] - base));
 		log_printf("dblog: %ld stack:%s", (long)dbk, line);
 	}

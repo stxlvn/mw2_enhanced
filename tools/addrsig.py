@@ -460,7 +460,7 @@ def x64_addresses():
             continue
         text = open(os.path.join(HERE, "..", "src", fn), encoding="utf-8", errors="replace").read().replace("\r\n", "\n")
         code = _code64(text)
-        for m in re.finditer(r"\bXR\((0x[0-9a-fA-F]+)\)", code):
+        for m in re.finditer(r"\bXR(?:64)?\((0x[0-9a-fA-F]+)\)", code):
             out.setdefault(int(m.group(1), 16), fn)
         for m in re.finditer(r"#define\s+(?:RVA|REF)_[A-Z0-9_]+\s+(0x[0-9a-fA-F]+)", code):
             out.setdefault(int(m.group(1), 16), fn)

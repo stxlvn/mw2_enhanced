@@ -128,7 +128,7 @@ static void add_edit_menu(void)
 		} else if (strcmp(name, "ok") == 0) {
 			*(void **)(it + ITEM_ACTION) = ui_script_set(ok);
 		} else if (strcmp(name, "cancel") == 0) {
-			*(void **)(it + ITEM_ACTION) = ui_script_set("\"play\" \"mouse_click\" ; \"close\" \"self\" ; ");
+			*(void **)(it + ITEM_ACTION) = ui_script_set(UI_S_CLICK_CLOSE);
 		}
 	}
 	if (ui_register_menu(menu))
@@ -261,8 +261,8 @@ static uint8_t *lobby_row(uint8_t *from, uint8_t *menu, const char *name, const 
 	*(const char **)(row + ITEM_TEXT) = text;
 	*(void **)(row + ITEM_ACTION) = ui_script_set(action);
 	*(void **)(row + ITEM_ON_FOCUS) =
-		ui_script_set("\"play\" \"mouse_over\" ; \"setItemColor\" \"self\" \"backcolor\" 0 0 0 1 ; ");
-	*(void **)(row + ITEM_LEAVE_FOCUS) = ui_script_set("\"setItemColor\" \"self\" \"backcolor\" 0 0 0 \"0.0\" ; ");
+		ui_script_set(UI_S_HOVER);
+	*(void **)(row + ITEM_LEAVE_FOCUS) = ui_script_set(UI_S_LEAVE);
 	*(float *)(row + ITEM_RECT_Y) = y;
 	*(float *)(row + ITEM_RECT_CLIENT_Y) = y;
 	return row;

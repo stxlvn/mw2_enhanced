@@ -655,7 +655,7 @@ static void add_about_page(uint8_t *main_menu, int count, uint8_t *button)
 	*(const char **)back = "mw2coop_about_back";
 	*(const char **)(back + ITEM_TEXT) = "@PLATFORM_BACK_CAPS";
 	*(void **)(back + ITEM_TEXT_EXP) = NULL;
-	*(MenuEventHandlerSet **)(back + ITEM_ACTION) = ui_script_set("\"play\" \"mouse_click\" ; \"close\" \"self\" ; ");
+	*(MenuEventHandlerSet **)(back + ITEM_ACTION) = ui_script_set(UI_S_CLICK_CLOSE);
 	set_rect(back, -100 + TEXT_DX, 420, 200, 20, 2, 1);
 	*(int *)(back + ITEM_TEXT_ALIGN) = ALIGN_MIDDLE_CENTER;
 	*(float *)(back + ITEM_TEXT_ALIGN_X) = 0;
@@ -762,7 +762,7 @@ static void patch_main_menu(void)
 			}
 			*(const char **)back = "mw2coop_campaign_back";
 			*(const char **)(back + ITEM_TEXT) = "@PLATFORM_BACK_CAPS";
-			*(MenuEventHandlerSet **)(back + ITEM_ACTION) = ui_script_set("\"play\" \"mouse_click\" ; \"close\" \"self\" ; ");
+			*(MenuEventHandlerSet **)(back + ITEM_ACTION) = ui_script_set(UI_S_CLICK_CLOSE);
 			*(float *)(back + ITEM_RECT_Y) = y;
 			*(float *)(back + ITEM_RECT_CLIENT_Y) = y;
 			cl[n++] = back;
@@ -855,7 +855,7 @@ static void patch_main_menu(void)
 // Esc on a page of the mod closes it (the pages are copies of the main menu, whose Esc would ask whether to quit). onESC follows onClose in the menu (onOpen, onCloseRequest, onClose, onESC).
 static void set_page_esc(uint8_t *page)
 {
-	*(void **)(page + MENU_ON_CLOSE + sizeof(void *)) = ui_script_set("\"play\" \"mouse_click\" ; \"close\" \"self\" ; ");
+	*(void **)(page + MENU_ON_CLOSE + sizeof(void *)) = ui_script_set(UI_S_CLICK_CLOSE);
 }
 
 // One more handler (a menu script) at the end of a menu's onOpen.
@@ -1240,9 +1240,9 @@ static uint8_t *rows_popup(const char *name, const char *title, const char *cons
 		*(const char **)(it + ITEM_TEXT) = row_texts[r];
 		*(void **)(it + ITEM_ACTION) = ui_script_set(row_actions[r]);
 		*(void **)(it + ITEM_ON_FOCUS) =
-			ui_script_set("\"play\" \"mouse_over\" ; \"setItemColor\" \"self\" \"backcolor\" 0 0 0 1 ; ");
+			ui_script_set(UI_S_HOVER);
 		*(void **)(it + ITEM_LEAVE_FOCUS) =
-			ui_script_set("\"setItemColor\" \"self\" \"backcolor\" 0 0 0 \"0.0\" ; ");
+			ui_script_set(UI_S_LEAVE);
 	}
 	return ui_register_menu(menu) ? menu : NULL;
 }

@@ -222,6 +222,14 @@ const char *game_sv_cmd_argv(int i);
 // The 32-bit native code (native.c, rumble.c, padopts.c, padglyphs.c) is written with the official 32-bit build's addresses. In the iw4x-sp profile (1.0.159) XR() turns an
 // official RVA into the 159 RVA through a table that tools/gen_addr159.py builds from the source (tools/map159.py maps by byte signatures); XV() does the same for a VA.
 #define XR(r) addr_xr(r) // (64-bit too: the number as it is on the reference build, the resolved one on a build whose addresses moved)
+// An address of the 64-bit game in code that both builds compile (diagnostics, the 64-bit compositor, hooks the 32-bit build never installs). 64-bit: XR(). 32-bit: such code is never reached, and if
+// it ever were, it would read or write a private block of zeros (addr_dead_block) instead of an address far outside the 32-bit image.
+#ifdef _WIN64
+#define XR64(r) XR(r)
+#else
+unsigned addr_dead_block(void);
+#define XR64(r) ((void)(r), addr_dead_block())
+#endif
 #ifndef _WIN64
 #define XV(va) (0x400000u + addr_xr((va) - 0x400000u))
 #else

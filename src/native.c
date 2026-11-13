@@ -332,7 +332,7 @@ static float *subwindow(void)
 // ---- the compositor (mode 2): one scene per frame, the two halves kept between frames
 // Each frame the cgame draws one player's view into one half of the picture (r_subwindow). The frame's end (EndScene of the game's device, on the render thread)
 // copies that half into a texture of its own and fills the other half from the other texture, so the picture always has both views whole.
-#define RVA_D3D_DEVICE XR(0x410fd20)
+#define RVA_D3D_DEVICE XR64(0x410fd20)
 static volatile LONG ring[8];
 static volatile DWORD render_tid;
 static volatile LONG ring_head, ring_tail; // frames queued by the main thread, and the halves they were drawn into, in order
@@ -2223,7 +2223,7 @@ static void scene2d_hook(void *vp)
 		if (armed < 0)
 			armed = cfg("scenescan", 0);
 		if (armed && split_on && ++n >= 200 && n < 206) {
-			int t = *(int *)(base + XR(0x422434));
+			int t = *(int *)(base + XR64(0x422434));
 			char line[900];
 			int len = snprintf(line, sizeof(line), "native: scenescan %p t=%d half %d:", vp, t, ring_head != ring_tail ? (int)ring[ring_tail & 7] : -1);
 			const int *d = (const int *)vp;
@@ -2394,14 +2394,14 @@ void native_final2d_entry(void *vp)
 	{ extern int nd_trace; if (nd_trace) log_printf("trace: ==== final2d begin"); }
 #endif
 	if (!(mode == 10 && native_active && split_on) && natboot_hud_begin()) { // upscaled picture: the 2D list (fades, texts) is drawn at the output resolution
-		((void (*)(void *))(base + XR(0x5c010)))(vp);
+		((void (*)(void *))(base + XR64(0x5c010)))(vp);
 		natboot_hud_end();
 		return;
 	}
 	if (final2d_original)
 		final2d_hook(vp);
 	else
-		((void (*)(void *))(base + XR(0x5c010)))(vp);
+		((void (*)(void *))(base + XR64(0x5c010)))(vp);
 }
 
 // the native renderers' movie letterboxing (src/dx/natfilm.h): the size of the Bink movie being played
@@ -2423,7 +2423,7 @@ void native_hud_install(void)
 	done = 1;
 	if (scene2d_original)
 		return;
-	if (*(base + XR(0x5c5bf)) == 0xe8 && jhook_call(base + XR(0x5c5bf), (void *)scene2d_hook, (void **)&scene2d_original))
+	if (*(base + XR64(0x5c5bf)) == 0xe8 && jhook_call(base + XR64(0x5c5bf), (void *)scene2d_hook, (void **)&scene2d_original))
 		log_printf("native: the scene's 2D pass is hooked (the HUD is drawn after the upscale)");
 	else
 		log_printf("native: unexpected code at the scene's 2D pass: the HUD is upscaled with the picture");
@@ -3394,7 +3394,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		if (++p0cnt_draws >= 100) {
 			const float *e = (const float *)(base + RVA_CENT);
 			log_printf("native: p0cnt ctx1 draws %u adds of entity 0 %u | slot0 pos %.1f %.1f %.1f | cg.ps (p2) %.1f %.1f | last add: arg5 %.1f %.1f %.1f pose %.1f %.1f %.1f | flags ctx1 ent0 %08x ctx0 ent1 %08x", p0cnt_draws, p0cnt_adds, (double)e[63], (double)e[64], (double)e[65],
-				   (double)*(const float *)(base + XR(0x42245c)), (double)*(const float *)(base + XR(0x422460)), (double)p0cnt_draw_org[0], (double)p0cnt_draw_org[1], (double)p0cnt_draw_org[2],
+				   (double)*(const float *)(base + XR64(0x42245c)), (double)*(const float *)(base + XR64(0x422460)), (double)p0cnt_draw_org[0], (double)p0cnt_draw_org[1], (double)p0cnt_draw_org[2],
 				   (double)p0cnt_draw_org_b[0], (double)p0cnt_draw_org_b[1], (double)p0cnt_draw_org_b[2], p0cnt_flags1, p0cnt_flags0);
 			p0cnt_draws = p0cnt_adds = 0;
 			{
@@ -3505,7 +3505,7 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			const float *s = (const float *)(base + XR(0x204a260));
 #endif
 			log_printf("native: sunlog ctx %d state %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f cg.time %d", ctx_current, (double)s[0], (double)s[1], (double)s[2], (double)s[3], (double)s[4], (double)s[5],
-				   (double)s[6], (double)s[7], (double)s[8], (double)s[9], *(int *)(base + XR(0x422434)));
+				   (double)s[6], (double)s[7], (double)s[8], (double)s[9], *(int *)(base + XR64(0x422434)));
 		}
 	}
 	if (CFG_ONCE("viewlog", 0) >= 2 && ctx_on) {
@@ -3555,16 +3555,16 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			QueryPerformanceCounter(&pc);
 			QueryPerformanceFrequency(&hz);
 			log_printf("native: timelog #%u wall %.1f ctx %d cg.time %d frametime %d interp %.3f cl.serverTime %d frac %.3f", seq, (double)pc.QuadPart * 1000.0 / (double)hz.QuadPart,
-				   ctx_current, *(int *)(base + XR(0x422434)), *(int *)(base + XR(0x422430)), (double)*(float *)(base + XR(0x42242c)), *(int *)(base + XR(0x51dca8)), (double)*(float *)(base + XR(0x51dcb0)));
+				   ctx_current, *(int *)(base + XR64(0x422434)), *(int *)(base + XR64(0x422430)), (double)*(float *)(base + XR64(0x42242c)), *(int *)(base + XR64(0x51dca8)), (double)*(float *)(base + XR64(0x51dcb0)));
 			if (CFG_ONCE("timelog", 0) > 1) {
 				// "as on ice": where player 2 is by his own context's playerState (cg.ps origin, rva 0x42245c, live in context 1) and where context 0's cgame has his entity (slot 1,
 				// interpolated origin floats 63..65); both on the same cg.time scale
-				const float *ps = (const float *)(base + XR(0x42245c));
+				const float *ps = (const float *)(base + XR64(0x42245c));
 				const float *e1 = (const float *)(base + RVA_CENT + CENT_SIZE);
 				if (ctx_current == 1)
-					log_printf("native: timelog p2ps cg.time %d pos %.1f %.1f %.1f", *(int *)(base + XR(0x422434)), (double)ps[0], (double)ps[1], (double)ps[2]);
+					log_printf("native: timelog p2ps cg.time %d pos %.1f %.1f %.1f", *(int *)(base + XR64(0x422434)), (double)ps[0], (double)ps[1], (double)ps[2]);
 				else
-					log_printf("native: timelog p2ent cg.time %d pos %.1f %.1f %.1f", *(int *)(base + XR(0x422434)), (double)e1[63], (double)e1[64], (double)e1[65]);
+					log_printf("native: timelog p2ent cg.time %d pos %.1f %.1f %.1f", *(int *)(base + XR64(0x422434)), (double)e1[63], (double)e1[64], (double)e1[65]);
 			}
 		}
 		seq++;
@@ -4173,7 +4173,7 @@ static void (*usercmd_step_original)(int);
 static void (*snapshot_msg_original)(void *, int);
 static void (*cg_init_all_original)(void);
 static void (*snapshot_take_original)(void);
-#define RVA_LOCAL_PLAYERS_N XR(0x3c3eb0)
+#define RVA_LOCAL_PLAYERS_N XR64(0x3c3eb0)
 
 // A client-side function that loops over the local clients (and calls others that touch the client statics without a client number): run for context 0 and, once context 1
 // exists, for context 1, each time with the number of local players set to 1 so that every loop sees only client 0, which in context 1 is client 1.
@@ -4344,7 +4344,7 @@ static DWORD WINAPI hang_watch_thread(LPVOID unused)
 
 static void cg_init_all_hook(void)
 {
-	log_printf("native: cgame init (context 0; context 1 follows after the first frames), dvar ptr 0x52bfc0 = %p", *(void **)(base + XR(0x52bfc0)));
+	log_printf("native: cgame init (context 0; context 1 follows after the first frames), dvar ptr 0x52bfc0 = %p", *(void **)(base + XR64(0x52bfc0)));
 	{
 		static int started;
 		if (!started && cfg("hangwatch", 1)) {
@@ -4371,7 +4371,7 @@ static void cg_init_all_hook(void)
 		// came up, in the render thread (rva 0x11b6f6) and the main thread (0x1bdef0), in 1 of 2 v0.6.0 runs of QA scenario hop (Trainer to Roadkill).
 		ctx_seeded = 0;
 	}
-	log_printf("native: cgame init done, dvar ptr 0x52bfc0 = %p", *(void **)(base + XR(0x52bfc0)));
+	log_printf("native: cgame init done, dvar ptr 0x52bfc0 = %p", *(void **)(base + XR64(0x52bfc0)));
 }
 
 static void snapshot_take_hook(void)
@@ -4411,7 +4411,7 @@ static void ctx_jitter_log(void)
 		return;
 	char line[1200];
 	int n = snprintf(line, sizeof(line), "native: ctx1 ps frame %u:", seen);
-	const float *f = (const float *)(base + XR(0x422440));
+	const float *f = (const float *)(base + XR64(0x422440));
 	for (int i = 0; i < 70; i++) {
 		float v = f[i];
 		if (v > -100000.0f && v < 100000.0f && (v > 0.0001f || v < -0.0001f))
@@ -4429,7 +4429,7 @@ static void ctx_entity_log(void)
 	if (++seen[ctx_current] != 600)
 		return;
 	{
-		const float *f = (const float *)(base + XR(0x422440));
+		const float *f = (const float *)(base + XR64(0x422440));
 		char line[1500];
 		int n = snprintf(line, sizeof(line), "native: ctx %d cg ps floats:", ctx_current);
 		for (int i = 0; i < 100; i++)
@@ -4438,7 +4438,7 @@ static void ctx_entity_log(void)
 		log_printf("%s", line);
 	}
 	{
-		const float *f = (const float *)(base + XR(0x43c200));
+		const float *f = (const float *)(base + XR64(0x43c200));
 		char line[1500];
 		int n = snprintf(line, sizeof(line), "native: ctx %d refdef-ish floats @43c200:", ctx_current);
 		for (int i = 0; i < 90; i++)
@@ -4446,8 +4446,8 @@ static void ctx_entity_log(void)
 				n += snprintf(line + n, sizeof(line) - n, " %x=%.2f", i * 4, f[i]);
 		log_printf("%s", line);
 	}
-	const float *cam = (const float *)(base + XR(0x42245c));
-	log_printf("native: ctx %d camera %.0f %.0f %.0f, clientNum %d", ctx_current, cam[0], cam[1], cam[2], *(int *)(base + XR(0x40caa0)));
+	const float *cam = (const float *)(base + XR64(0x42245c));
+	log_printf("native: ctx %d camera %.0f %.0f %.0f, clientNum %d", ctx_current, cam[0], cam[1], cam[2], *(int *)(base + XR64(0x40caa0)));
 	for (int i = 0; i < 1024; i++) {
 		const uint8_t *e = base + RVA_CENT + (size_t)i * CENT_SIZE;
 		const float *o = (const float *)(e + 0x18);
@@ -4484,7 +4484,7 @@ static void npc_log(void)
 		int n = snprintf(line, sizeof(line), "native: npcsnap ctx %d:", ctx_current);
 		for (int off = 0x404450; off < 0x44f000; off += 8) {
 			uintptr_t v = *(const uintptr_t *)(base + off);
-			if (v >= (uintptr_t)base + XR(0x51b078) && v < (uintptr_t)base + XR(0x51dcb0) + 0x100)
+			if (v >= (uintptr_t)base + XR64(0x51b078) && v < (uintptr_t)base + XR64(0x51dcb0) + 0x100)
 			{
 				n += snprintf(line + n, sizeof(line) - n, " [%x]=snap+%x:", off, (unsigned)(v - (uintptr_t)base - 0x51b078));
 				for (int k = 0; k < 12; k++)
@@ -4563,7 +4563,7 @@ static void npc_log(void)
 	}
 	if (CFG_ONCE("npcptr", 0) >= 2 && c == 0) { // the head of the next snapshot structure, to find numEntities
 		static int last_t = -1, dumps;
-		const uintptr_t ns = *(const uintptr_t *)(base + XR(0x40cac8));
+		const uintptr_t ns = *(const uintptr_t *)(base + XR64(0x40cac8));
 		const int tm = ns ? *(const int *)(ns + 4) : -1;
 		if (tm != last_t && dumps < 12) {
 			last_t = tm;
@@ -4574,17 +4574,17 @@ static void npc_log(void)
 		}
 	}
 	if (pick >= 0 && logged[c] < 9000 && CFG_ONCE("npcptr", 0)) { // the snapshot pointers and the fraction the pose interpolation (rva 0x9da90) reads: 0x51b078 / 0x51b080 -> snapshot, +4 = serverTime; 0x51dcb0
-		const uintptr_t pa = *(const uintptr_t *)(base + XR(0x51b078)), pb = *(const uintptr_t *)(base + XR(0x51b080));
+		const uintptr_t pa = *(const uintptr_t *)(base + XR64(0x51b078)), pb = *(const uintptr_t *)(base + XR64(0x51b080));
 		log_printf("native: npcptr ctx %d ent %d poseA %d poseB %d frac %.3f | cg.snap %d cg.next %d | cg.time %d", ctx_current, pick, pa ? *(const int *)(pa + 4) : -1, pb ? *(const int *)(pb + 4) : -1,
-			   (double)*(const float *)(base + XR(0x51dcb0)), *(const int *)(*(const uintptr_t *)(base + XR(0x40cac0)) + 4), *(const int *)(*(const uintptr_t *)(base + XR(0x40cac8)) + 4), *(const int *)(base + XR(0x422434)));
+			   (double)*(const float *)(base + XR64(0x51dcb0)), *(const int *)(*(const uintptr_t *)(base + XR64(0x40cac0)) + 4), *(const int *)(*(const uintptr_t *)(base + XR64(0x40cac8)) + 4), *(const int *)(base + XR64(0x422434)));
 	}
 	if (pick >= 0 && logged[c] < 9000) {
 		const uint8_t *e = base + RVA_CENT + (size_t)pick * CENT_SIZE;
 		const float *o = (const float *)(e + 0x18), *n2 = (const float *)(e + 0xfc), *c2 = (const float *)(e + 0x80);
 		logged[c]++;
-		log_printf("native: npc ctx %d ent %d wall %.2f cg.time %d interp %.3f snap %d frac %.3f pos %.2f %.2f next %.2f %.2f cur %.2f %.2f type %u flags %08x s0 %d s1 %d srv %.2f %.2f", ctx_current, pick, wall_now * 1000.0, *(int *)(base + XR(0x422434)),
-			   (double)*(float *)(base + XR(0x42242c)), *(int *)(base + XR(0x51dca8)), (double)*(float *)(base + XR(0x51dcb0)), (double)o[0], (double)o[1], (double)n2[0], (double)n2[1], (double)c2[0], (double)c2[1], (unsigned)e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS),
-			   *(const int *)(*(const uintptr_t *)(base + XR(0x40cac0)) + 4), *(const int *)(*(const uintptr_t *)(base + XR(0x40cac8)) + 4), (double)gx, (double)gy);
+		log_printf("native: npc ctx %d ent %d wall %.2f cg.time %d interp %.3f snap %d frac %.3f pos %.2f %.2f next %.2f %.2f cur %.2f %.2f type %u flags %08x s0 %d s1 %d srv %.2f %.2f", ctx_current, pick, wall_now * 1000.0, *(int *)(base + XR64(0x422434)),
+			   (double)*(float *)(base + XR64(0x42242c)), *(int *)(base + XR64(0x51dca8)), (double)*(float *)(base + XR64(0x51dcb0)), (double)o[0], (double)o[1], (double)n2[0], (double)n2[1], (double)c2[0], (double)c2[1], (unsigned)e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS),
+			   *(const int *)(*(const uintptr_t *)(base + XR64(0x40cac0)) + 4), *(const int *)(*(const uintptr_t *)(base + XR64(0x40cac8)) + 4), (double)gx, (double)gy);
 	}
 }
 
@@ -4600,7 +4600,7 @@ static void time_log(void)
 		return;
 	if (++n < 3000 || n >= 3040)
 		return;
-	len += snprintf(line + len, sizeof(line) - len, " %d:%d", ctx_current, *(int *)(base + XR(0x422434)));
+	len += snprintf(line + len, sizeof(line) - len, " %d:%d", ctx_current, *(int *)(base + XR64(0x422434)));
 	if (n == 3039)
 		log_printf("native: cg.time per drawn frame (context:time):%s", line);
 }
@@ -4797,7 +4797,7 @@ static void snapshot_msg_hook(void *msg, int time)
 		QueryPerformanceFrequency(&hz);
 		if (++sn > (unsigned)CFG_ONCE("snaplog", 0) && sn < (unsigned)CFG_ONCE("snaplog", 0) + 400)
 			log_printf("native: snapmsg #%u wall %.1f time %d ctx %d msg ints %d %d %d %d %d %d cg.time %d", sn, (double)pc.QuadPart * 1000.0 / (double)hz.QuadPart, time, ctx_current, ((int *)msg)[0], ((int *)msg)[1], ((int *)msg)[2],
-				   ((int *)msg)[3], ((int *)msg)[4], ((int *)msg)[5], *(int *)(base + XR(0x422434)));
+				   ((int *)msg)[3], ((int *)msg)[4], ((int *)msg)[5], *(int *)(base + XR64(0x422434)));
 	}
 	int was = ctx_current;
 	if (was)
@@ -5088,7 +5088,7 @@ static void xfer_hook(void *src, void *dest, unsigned t)
 			calls[0] = calls[1] = 0;
 			sum[0] = sum[1] = 0;
 		}
-		if (ctx_current == 1 && CFG_ONCE("xferskip", 0) && dest != (void *)((const uint8_t *(*)(int))(base + XR(0x1fece0)))(0)) {
+		if (ctx_current == 1 && CFG_ONCE("xferskip", 0) && dest != (void *)((const uint8_t *(*)(int))(base + XR64(0x1fece0)))(0)) {
 			skipped++;
 			return;
 		}
@@ -5861,7 +5861,7 @@ static void video_push(void)
 	}
 	if (mode != 9 || !comp_w || !comp_h)
 		return;
-	int *h1 = (int *)(base + XR(0x4113724)), *h2 = (int *)(base + XR(0x411372c)), *h3 = (int *)(base + XR(0x4358e84));
+	int *h1 = (int *)(base + XR64(0x4113724)), *h2 = (int *)(base + XR64(0x411372c)), *h3 = (int *)(base + XR64(0x4358e84));
 	float *a = (float *)(base + RVA_VIDEO_ASPECT), *pa = (float *)(base + RVA_PIXEL_ASPECT), *ca = (float *)(base + RVA_CG_ASPECT);
 	int half = (int)(comp_h / 2);
 	if (!video_pushed) { // the first time: what the engine had, to give back when the picture is not split any more
@@ -5883,9 +5883,9 @@ static void video_pop(void)
 	place_pop();
 	if (!video_pushed)
 		return;
-	*(int *)(base + XR(0x4113724)) = video_saved_i[0];
-	*(int *)(base + XR(0x411372c)) = video_saved_i[1];
-	*(int *)(base + XR(0x4358e84)) = video_saved_i[2];
+	*(int *)(base + XR64(0x4113724)) = video_saved_i[0];
+	*(int *)(base + XR64(0x411372c)) = video_saved_i[1];
+	*(int *)(base + XR64(0x4358e84)) = video_saved_i[2];
 	*(float *)(base + RVA_VIDEO_ASPECT) = video_saved_f[0];
 	*(float *)(base + RVA_PIXEL_ASPECT) = video_saved_f[1];
 	*(float *)(base + RVA_CG_ASPECT) = video_saved_f[2];
@@ -7077,7 +7077,7 @@ static void pass2_hook(unsigned lc)
 		if (tl < 0)
 			tl = cfg("timelog2", 0);
 		if (tl && (ctx_current == 0 || ctx_current == 1)) {
-			int t = *(const int *)(base + XR(0x422434));
+			int t = *(const int *)(base + XR64(0x422434));
 			int was = last_t[ctx_current];
 			last_t[ctx_current] = t;
 			if (ctx_current == 1 && last_t[0] && abs(t - last_t[0]) > 50 && logged < 200)
@@ -7127,7 +7127,7 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			}
 			log_printf("%s", line);
 			for (int h = 0; h < 2; h++) { // the engine's own DObj of entity h, and the slot's client number the draw looked it up by
-				const uint8_t *pool = ((const uint8_t *(*)(int))(base + XR(0x1fece0)))(h);
+				const uint8_t *pool = ((const uint8_t *(*)(int))(base + XR64(0x1fece0)))(h);
 				int nm = pool ? pool[0xd] : -1;
 				const uint8_t *const *mm = pool ? *(const uint8_t *const **)(pool + 0xa8) : NULL;
 				char names[300] = "";
@@ -7163,13 +7163,13 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 				sscanf(v, "%d %d %f", &n, &script_len, &rate);
 			if (at && ent >= 0)
 			{
-				const uint8_t *cd = ((const uint8_t *(*)(int))(base + XR(0x1fece0)))(ent), *sd = ((const uint8_t *(*)(int))(base + XR(0x1fee30)))(ent);
+				const uint8_t *cd = ((const uint8_t *(*)(int))(base + XR64(0x1fece0)))(ent), *sd = ((const uint8_t *(*)(int))(base + XR64(0x1fee30)))(ent);
 				int pool = 0;
 				for (int k = 0; k < 0x70; k++)
-					pool += base[XR(0xf50ec0) + k] != 0;
+					pool += base[XR64(0xf50ec0) + k] != 0;
 				log_printf("native: speed entity %d: drawn path ctx0 %.0f ctx1 %.0f units per second, script %d units per second (playback rate %.2f), client DObj %p (%d models), server DObj %p (%d models), actor DObj pool %d of 112 in use, flags150 %08x",
 					   ent, path[0], path[1], script_len, rate, (const void *)cd, cd ? cd[0xd] : -1, (const void *)sd, sd ? sd[0xd] : -1, pool,
-					   ent >= 0 && ent < 2048 ? *(const unsigned *)(base + XR(0xd9e070) + (size_t)ent * 0x2a0 + 0x150) : 0u);
+					   ent >= 0 && ent < 2048 ? *(const unsigned *)(base + XR64(0xd9e070) + (size_t)ent * 0x2a0 + 0x150) : 0u);
 			}
 			ent = n;
 			path[0] = path[1] = 0;
@@ -7204,7 +7204,7 @@ static void *dobj_add_hook(void *a, void *b, unsigned c, unsigned d, void *e, vo
 			const float *org = (const float *)e;
 			int len = snprintf(line, sizeof(line), "native: tree t=%lu ent %d idx %d pos %.1f %.1f:", (unsigned long)GetTickCount(), ent, idx, e ? org[0] : 0.0f, e ? org[1] : 0.0f);
 			for (int k = 0; idx > 0 && k < 5 && len < (int)sizeof(line) - 200; k++) {
-				const uint8_t *node = base + XR(0x1bc0a30) + (size_t)idx * 0x40;
+				const uint8_t *node = base + XR64(0x1bc0a30) + (size_t)idx * 0x40;
 				const float *f = (const float *)node;
 				len += snprintf(line + len, sizeof(line) - len, " [n%d", idx);
 				for (int j = 0; j < 16; j++) {
@@ -7371,12 +7371,12 @@ static void own_write_hook(unsigned lc)
 	if (ctx_current == 1 && CFG_ONCE("pslog", 0)) {
 		static unsigned seen;
 		if (++seen % 60 == 1 && seen < 4000) {
-			const uint8_t *nps = *(const uint8_t **)(base + XR(0x40cad8)), *pps = *(const uint8_t **)(base + XR(0x40cad0));
+			const uint8_t *nps = *(const uint8_t **)(base + XR64(0x40cad8)), *pps = *(const uint8_t **)(base + XR64(0x40cad0));
 			const float *f0 = (const float *)(base + RVA_CENT), *f1 = (const float *)(base + RVA_CENT + CENT_SIZE);
 			{
 				const float *q1 = (const float *)(base + RVA_CL_PS), *q0 = ctx_store[0][5] ? (const float *)(ctx_store[0][5] + CL_BLOCK_PS) : NULL;
 				log_printf("native: ps1(live) +0x100..: %d %.1f %.1f %.1f %.1f %.1f %.1f | ps0(store) %d %.1f %.1f %.1f %.1f %.1f %.1f | acc1 %.1f", *(const int *)(q1 + 64), q1[65], q1[66], q1[67], q1[68], q1[69], q1[70],
-					   q0 ? *(const int *)(q0 + 64) : -9, q0 ? q0[65] : 0, q0 ? q0[66] : 0, q0 ? q0[67] : 0, q0 ? q0[68] : 0, q0 ? q0[69] : 0, q0 ? q0[70] : 0, *(const float *)(base + XR(0x533d18)));
+					   q0 ? *(const int *)(q0 + 64) : -9, q0 ? q0[65] : 0, q0 ? q0[66] : 0, q0 ? q0[67] : 0, q0 ? q0[68] : 0, q0 ? q0[69] : 0, q0 ? q0[70] : 0, *(const float *)(base + XR64(0x533d18)));
 			}
 			log_printf("native: ctx1 b28b0 lc %u: nextPs clientNum %d prevPs clientNum %d | slot0 %.1f %.1f valid %x | slot1 %.1f %.1f valid %x", lc, nps ? *(const int *)(nps + 0x100) : -9,
 				   pps ? *(const int *)(pps + 0x100) : -9, f0[6], f0[7], *(const uint32_t *)((const uint8_t *)f0 + CENT_VALID), f1[6], f1[7], *(const uint32_t *)((const uint8_t *)f1 + CENT_VALID));
@@ -7495,7 +7495,7 @@ static void add_entity_hook(int n)
 				const uint8_t *e = base + RVA_CENT;
 				if (++pl % 10 == 0 && pl < 30000)
 					log_printf("native: p0log ctx1 draws entity0: ok %d copied %d pos %.1f %.1f %.1f yaw %.1f type %d flags %08x valid %08x | own p2 pos %.1f %.1f", p0_ent_ok, p0copy, (double)((const float *)e)[CF_ORG2], (double)((const float *)e)[CF_ORG2 + 1], (double)((const float *)e)[CF_ORG2 + 2],
-						   (double)((const float *)e)[CF_YAW2], e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS), *(const unsigned *)(e + CENT_VALID), (double)*(const float *)(base + XR(0x42245c)), (double)*(const float *)(base + XR(0x422460)));
+						   (double)((const float *)e)[CF_YAW2], e[CENT_TYPE], *(const unsigned *)(e + CENT_FLAGS), *(const unsigned *)(e + CENT_VALID), (double)*(const float *)(base + XR64(0x42245c)), (double)*(const float *)(base + XR64(0x422460)));
 			}
 			if (n == 0 && lag_history_needed())
 				lag_record();
@@ -8491,11 +8491,37 @@ static void session_reset(void)
 	video_pop();
 }
 
+// The split screen swaps whole ranges of the game's memory between two client contexts and draws through the game's device pointer. On a build whose addresses were looked up (addr.c), an address
+// that was not found stands in as a private block of zeros: a swap of such a range would silently copy nothing, and the compositor would find no device. The split screen is refused instead
+// (docs/address-resolution.md). Nothing changes on the known build or a build with its layout (addr_mode() 0: every address resolves to itself).
+static int split_addresses_ok(void)
+{
+	if (!addr_mode())
+		return 1;
+	int bad = 0;
+	for (size_t i = 0; i < NRANGES; i++)
+		if (!addr_resolved(ranges[i].rva)) {
+			if (bad++ < 6)
+				log_printf("native: the split screen needs the range at reference rva 0x%x, which was not found in this build", ranges[i].rva);
+		}
+#ifdef _WIN64
+	if (!addr_resolved(0x410fd20)) { // the game's device pointer (RVA_D3D_DEVICE): the compositor draws through it
+		bad++;
+		log_printf("native: the split screen needs the game's device pointer (reference rva 0x410fd20), which was not found in this build");
+	}
+#endif
+	if (bad)
+		log_printf("native: split screen refused on this build: %d address(es) it needs were not found (the rest of the mod runs)", bad);
+	return bad == 0;
+}
+
 static int activate(int players)
 {
 	if (native_active)
 		return 1;
 	if (players < 2 || players > 4)
+		return 0;
+	if (!split_addresses_ok())
 		return 0;
 	cfg_gen++;
 	mode = cfg("experiment", 10);
