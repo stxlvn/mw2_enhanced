@@ -620,14 +620,17 @@ static int draw_hook(const float (*in)[4], float (*out)[4])
 		return 0;
 	{
 		static unsigned calls, vp_ok, tr_ok;
+		static int fsr3log = -1; // (read once: getenv on every draw was half of the render thread's time)
+		if (fsr3log < 0)
+			fsr3log = getenv("MW2COOP_FSR3LOG") != NULL;
 		const float *dd = &in[0][0];
 		calls++;
 		vp_ok += (UINT)(g_vp_w + 0.5f) == S.iw && (UINT)(g_vp_h + 0.5f) == S.ih;
 		tr_ok += fabsf(dd[12]) + fabsf(dd[13]) + fabsf(dd[14]) > 1e-3f;
-		if (getenv("MW2COOP_FSR3LOG") && S.frame > 3000 && S.frame < 3003 && calls % 40 == 0) {
+		if (fsr3log && S.frame > 3000 && S.frame < 3003 && calls % 40 == 0) {
 			log_printf("natfsr3: draw %u frame %u c0: %.4f %.4f %.4f %.4f | c1 %.4f %.4f %.4f %.4f | c2 %.4f %.4f %.4f %.4f | c3 %.4f %.4f %.4f %.4f | c4 %.4f %.4f %.4f %.4f | c5 %.4f %.4f %.4f %.4f | c7 %.4f %.4f %.4f %.4f", calls, S.frame, dd[0], dd[1], dd[2], dd[3], dd[4], dd[5], dd[6], dd[7], dd[8], dd[9], dd[10], dd[11], dd[12], dd[13], dd[14], dd[15], dd[16], dd[17], dd[18], dd[19], dd[20], dd[21], dd[22], dd[23], dd[28], dd[29], dd[30], dd[31]);
 		}
-		if (getenv("MW2COOP_FSR3LOG") && calls % 50000 == 0)
+		if (fsr3log && calls % 50000 == 0)
 			log_printf("natfsr3: %u draws: viewport size ok %u, matrix with a view direction %u (last viewport %.0fx%.0f depth %.4f..%.4f)", calls, vp_ok, tr_ok, g_vp_w, g_vp_h, g_vp_min, g_vp_max);
 	}
 	if ((UINT)(g_vp_w + 0.5f) != S.iw || (UINT)(g_vp_h + 0.5f) != S.ih)
