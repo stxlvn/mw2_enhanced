@@ -52,7 +52,7 @@ static const char settings_template[] =
 	"directx11=0\n"
 	"; Experimental, 0 (off) by default (64-bit build only): the same with the mod's own Direct3D 12 renderer (nothing creates or calls a Direct3D 9 or 11 object). The same gaps as directx11. If both are 1, 12 is used.\n"
 	"directx12=0\n"
-	"; 0 (default) or 1, the native DirectX 11 / 12 renderers: 1 queues one frame for the display instead of two (lower input latency; a little less smooth when the graphics card is the limit). Both always use the\n"
+	"; 0 (default) or 1, the native DirectX 11 / 12 renderers: 1 queues one frame for the display instead of two: a finished picture waits less before it is shown, so the time from a key press or a mouse move to the screen is about one frame shorter (the game's input handling itself is not touched; a little less smooth when the graphics card is the limit). Settings > Enhanced calls it \"Low frame delay\". Both always use the\n"
 	"; flip model swap chain; with vsync off they present with tearing (variable refresh rate, uncapped in a window) when the system allows it.\n"
 	"lowlatency=0\n"
 	"; 0 (default: the game's own texture filtering setting) or 2 / 4 / 8 / 16: forces anisotropic filtering of that level on every mipmapped texture (native DirectX 11 / 12): sharper ground and walls at a distance.\n"

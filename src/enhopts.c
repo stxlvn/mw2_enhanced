@@ -92,10 +92,10 @@ static const opt_t opts[] = {
     {"mw2coop_opt_directx", "@MW2COOP_ENH_DIRECTX", K_DIRECTX, 0, 4, 0, "display", NULL, 1, LIVE_NONE, 1, "Enhanced: DirectX version, 0 = 9 (the game's own), 1 = 9Ex ([display] d3d9ex), 2 = 12 (Direct3D 9 on the Direct3D 12 layer, [display] d3d9on12; FSR 3 and DLSS need it), 3 = 11 (the mod's own Direct3D 11 renderer, experimental: [display] directx11; no console overlay, screenshots or upscalers yet) (next start)", GROUP_WINDOW},
 #endif
 #ifdef _WIN64
-    {"mw2coop_opt_msaa", "@MW2COOP_ENH_MSAA", K_SLIDER, 0, 8, 0, "display", "msaa", 1, LIVE_NONE, 1, "Enhanced: native DirectX 11 / 12 anti-aliasing samples, 0 = the game's own setting, 1 = off, 2 / 4 / 8 (next start)", GROUP_WINDOW},
+    {"mw2coop_opt_msaa", "@MW2COOP_ENH_MSAA", K_SLIDER, 1, 8, 1, "display", "msaa", 1, LIVE_NONE, 1, "Enhanced: native DirectX 11 / 12 anti-aliasing samples: 1 = the game's own setting (settings.ini msaa=0), 2 / 4 / 8 = that many (next start)", GROUP_WINDOW},
     {"mw2coop_opt_aniso", "@MW2COOP_ENH_ANISO", K_SLIDER, 0, 16, 0, "display", "aniso", 1, LIVE_NONE, 1, "Enhanced: native DirectX 11 / 12 anisotropic filtering, 0 = the game's own setting, 2-16 = that level (next start)", GROUP_WINDOW},
     {"mw2coop_opt_hdr", "@MW2COOP_ENH_HDR", K_YESNO, 0, 1, 0, "display", "hdr", 1, LIVE_NONE, 1, "Enhanced: HDR output (native DirectX 11 / 12, a monitor with HDR on in Windows) (next start)", GROUP_WINDOW},
-    {"mw2coop_opt_lowlat", "@MW2COOP_ENH_LOWLAT", K_YESNO, 0, 1, 0, "display", "lowlatency", 1, LIVE_NONE, 1, "Enhanced: low latency presenting (native DirectX 11 / 12) (next start)", GROUP_WINDOW},
+    {"mw2coop_opt_lowlat", "@MW2COOP_ENH_LOWLAT", K_YESNO, 0, 1, 0, "display", "lowlatency", 1, LIVE_NONE, 1, "Enhanced: low frame delay (native DirectX 11 / 12): one frame waits in the queue instead of two, so the picture reaches the screen sooner (next start)", GROUP_WINDOW},
 #endif
     {"mw2coop_opt_borderless", "@MW2COOP_ENH_BORDERLESS", K_YESNO, 0, 1, 1, "display", "borderless", 1, LIVE_NONE, 1, "Enhanced: full screen as a borderless window (next start)", GROUP_WINDOW},
     {"mw2coop_opt_darktitle", "@MW2COOP_ENH_DARKTITLE", K_YESNO, 0, 1, 1, "display", "darktitle", 1, LIVE_NONE, 1, "Enhanced: dark title bar (next start)", GROUP_WINDOW},
@@ -269,7 +269,7 @@ static void follow_changes(void)
 			const int ok = WritePrivateProfileStringA("display", "d3d9ex", (int)v == 1 ? "1" : "0", path) & WritePrivateProfileStringA("display", "d3d9on12", (int)v == 2 ? "1" : "0", path) & WritePrivateProfileStringA("display", "directx11", (int)v == 3 ? "1" : "0", path) & WritePrivateProfileStringA("display", "directx12", (int)v == 4 ? "1" : "0", path);
 			log_printf("enhopts: settings.ini [display] d3d9ex=%d d3d9on12=%d directx11=%d (DirectX %s)%s", (int)v == 1, (int)v == 2, (int)v == 3, (int)v == 4 ? "12 native" : (int)v == 3 ? "11 native" : (int)v == 2 ? "12 (9 on 12)" : (int)v == 1 ? "9Ex" : "9", ok ? "" : ", NOT written");
 		} else if (t->section) {
-			snprintf(text, sizeof(text), "%d", (int)v);
+			snprintf(text, sizeof(text), "%d", !strcmp(t->key, "msaa") && (int)v == 1 ? 0 : (int)v); // (the MSAA row starts at 1x: the game's own setting, which the file keeps as 0)
 			if (WritePrivateProfileStringA(t->section, t->key, text, path))
 				log_printf("enhopts: settings.ini [%s] %s=%s", t->section, t->key, text);
 			else
@@ -387,6 +387,11 @@ static void append_on_close(uint8_t *menu, const char *script)
 	*(ev_set_t **)(menu + MENU_ON_CLOSE) = set;
 }
 
+// The sharpening row (control, label, number) is drawn dimmed while the upscaler is Off or FSR 1: it only does something for FSR 3 and DLSS (Vlad, 2026-11-13)
+static uint8_t *grey_items[3];
+static float grey_alpha[3];
+static int grey_saved[3];
+
 // The page: the Look page's backgrounds, title and Back items, then the rows 20 units apart from y 28, in groups by what a row applies to (GROUP_*), each group under its name.
 static void add_page(void)
 {
@@ -405,6 +410,8 @@ static void add_page(void)
 		log_printf("enhopts: the Look page is not as expected, no Enhanced page");
 		return;
 	}
+	memset(grey_items, 0, sizeof(grey_items));
+	memset(grey_saved, 0, sizeof(grey_saved));
 	int title_at = 0;
 	while (items[title_at] != title)
 		title_at++;
@@ -479,6 +486,10 @@ static void add_page(void)
 			*(const char **)(text + ITEM_TEXT) = t->label;
 			list[n++] = control;
 			list[n++] = text;
+			if (t->live == LIVE_SHARP) {
+				grey_items[0] = control;
+				grey_items[1] = text;
+			}
 			if (t->kind == K_SLIDER) { // the slider's number, right of the bar: a text item without a text that shows the dvar's value (the game's sliders show none)
 				uint8_t *tag = ui_clone_item(label, menu);
 				*(const char **)(tag + ITEM_TEXT) = NULL;
@@ -494,6 +505,8 @@ static void add_page(void)
 				*(float *)(tag + ITEM_TEXT_ALIGN_X) = 0;
 				place(tag, y);
 				list[n++] = tag;
+				if (t->live == LIVE_SHARP)
+					grey_items[2] = tag;
 			}
 			rows++;
 			y += rh;
@@ -618,6 +631,25 @@ static void patch_options(void)
 	}
 }
 
+// dims the sharpening row when the upscaler is Off or FSR 1 (its alpha goes to 40 %); the row works again the moment FSR 3 or DLSS is chosen
+static void dim_sharpness_row(void)
+{
+	const int iu = opt_index("mw2coop_opt_upscaler");
+	if (iu < 0 || !dvars[iu])
+		return;
+	const int dim = value_of(iu) < 1.5f;
+	for (int i = 0; i < 3; i++) {
+		if (!grey_items[i])
+			continue;
+		float *color = (float *)(grey_items[i] + ITEM_DYNAMIC_FLAGS + 8); // windowDef_t: dynamicFlags, nextTime, foreColor[4]
+		if (!grey_saved[i]) {
+			grey_alpha[i] = color[3];
+			grey_saved[i] = 1;
+		}
+		color[3] = dim ? grey_alpha[i] * 0.4f : grey_alpha[i];
+	}
+}
+
 // What follows the player's changes, in the menus and in a level alike (a level's frame does not run the menus' tick; the page itself is reached from the main menu: the pause menu's Settings is a copy of the options menu that this page's button is not in, see docs/enhanced-page.md): the keys of the changed
 // rows, the live effects, the field of view, the pop-up after the page was left. Two threads may call it (the menus' tick, the level's poll): one at a time.
 static void follow_all(void)
@@ -629,6 +661,7 @@ static void follow_all(void)
 	add_popup();
 	patch_options();
 	follow_changes();
+	dim_sharpness_row();
 	hold_fov();
 	// the page was left (its onClose set mw2coop_enh_left): a row that waits for the next start now differs from what the running game uses -> the pop-up
 	char left[8];

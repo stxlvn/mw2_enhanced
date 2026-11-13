@@ -274,7 +274,7 @@ LANG_RUSSIAN        "Урон от падения в кооперативе"
 
 REFERENCE           MW2COOP_ENH_BORDERLESS
 LANG_ENGLISH        "Borderless full screen"
-LANG_RUSSIAN        "Полный экран без рамки"
+LANG_RUSSIAN        "На весь экран без рамки"
 
 REFERENCE           MW2COOP_ENH_DARKTITLE
 LANG_ENGLISH        "Dark title bar"
@@ -293,8 +293,8 @@ LANG_ENGLISH        "HDR output"
 LANG_RUSSIAN        "HDR"
 
 REFERENCE           MW2COOP_ENH_LOWLAT
-LANG_ENGLISH        "Low latency presenting"
-LANG_RUSSIAN        "Низкая задержка вывода"
+LANG_ENGLISH        "Low frame delay (DirectX 11 / 12)"
+LANG_RUSSIAN        "Меньше задержка кадра (DirectX 11 / 12)"
 
 REFERENCE           MW2COOP_ENH_DIRECTX
 LANG_ENGLISH        "DirectX version"

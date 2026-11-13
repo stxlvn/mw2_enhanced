@@ -1450,10 +1450,15 @@ static void save_pick_f(void)
 #define STEAM_LOBBY_FAIL_NODE XR(0x17eb4e4) // VA 0x1beb4e4 (function at VA 0x66b0c0)
 #endif
 static void (*steam_lobby_fail_original)(void);
+static int iwnet_would_pass(void);
 static void steam_lobby_fail_hook(void)
 {
 	if (InterlockedCompareExchange(&split_mode, 0, 0)) {
 		log_printf("menus: Steam did not make a lobby; a split screen lobby does not need one, the error is not shown");
+		return;
+	}
+	if (!iwnet_would_pass()) { // no Steam or no IWNet: a LAN / direct IP lobby needs no Steam lobby either (only invites do)
+		log_printf("menus: Steam did not make a lobby and there is no connection to it; the lobby stays (LAN / direct IP), the error is not shown");
 		return;
 	}
 	if (steam_lobby_fail_original)
@@ -1486,38 +1491,68 @@ static int continuing, add_member;
 static volatile LONG partner_confirmed;
 
 // Host a lobby: what the Spec Ops "two players online" button runs, then mw2coop_online [map] (or, for a Spec Ops op, the op).
-// The game's own "listen" starts with a check that the game is signed in to IWNet (64-bit 0x28fc00; offline it opens "Connecting to IWNet..." and does nothing else: issue 21, a PC
-// without internet; the 32-bit game's check, 0x416590 (VA), prints a line and stops). A split screen lobby has no use for IWNet, so the check inside `listen` says yes while a split
-// screen lobby is being made; a network lobby still gets the game's own answer.
+// The game's own `listen` (hosting) and `connect` (joining) both start with a check that the game is signed in to IWNet and that Steam is up (64-bit 0x28fc00; offline it opens
+// "Connecting to IWNet..." or "Steam is offline" and does nothing else: issue 21, a PC without internet; the 32-bit game's check, 0x416590 (VA), prints a line and stops). The mod's
+// co-op needs neither: a split screen lobby, and a LAN or direct IP session (`mw2coop_join <address>`, no Steam lobby) have no use for IWNet. So when the game's own answer would be "no",
+// the check inside `listen` and `connect` says yes (these two commands are only used by the mod's co-op in the campaign); an answer "yes" is left to the game, and a split screen lobby
+// is always passed. A Steam lobby that cannot be made is ignored in the same situation (steam_lobby_fail_hook).
 #ifdef _WIN64
 #define LISTEN_SIGNIN_CALL XR(0xd25f6) // the call in listen (function at 0xd25e0)
+#define CONNECT_SIGNIN_CALL XR(0xd23c9) // the call in connect (function at 0xd23c0)
 #else
 #define LISTEN_SIGNIN_CALL XR(0x17a886) // VA 0x57a886 in listen (function at VA 0x57a860)
+#define CONNECT_SIGNIN_CALL XR(0x17a5b9) // VA 0x57a5b9 in connect (function at VA 0x57a5b0)
 #endif
+// what the game's own check answers, without its side effects (a pop-up, a message): Steam is up and the connection to IWNet stands
+static int iwnet_would_pass(void)
+{
+#ifdef _WIN64
+	if (!((unsigned char (*)(void))(base + XR(0x240f00)))()) // Steam available
+		return 0;
+	return base[XR(0x1bbab29)] != 0 && ((unsigned char (*)(void))(base + XR(0x1bab60)))() != 0;
+#else
+	if (!(((unsigned (*)(void))(base + XR(0x8b8c0)))() & 0xff)) // Steam: logged on
+		return 0;
+	return base[XR(0x15fbfe4)] != 0;
+#endif
+}
+
 static int (*listen_signin_original)(int);
-static int listen_signin_hook(int local)
+static int signin_hook(int local)
 {
 	if (InterlockedCompareExchange(&split_mode, 0, 0) || InterlockedCompareExchange(&split_pending, 0, 0)) {
 		static int logged;
 		if (!logged++)
-			log_printf("menus: a split screen lobby needs no IWNet: listen's sign-in check is passed");
+			log_printf("menus: a split screen lobby needs no IWNet: the sign-in check of listen / connect is passed");
+		return 1;
+	}
+	if (!iwnet_would_pass()) {
+		static int logged;
+		if (!logged++)
+			log_printf("menus: no connection to IWNet or Steam (a LAN or direct IP session): the sign-in check of listen / connect is passed");
 		return 1;
 	}
 	return listen_signin_original ? listen_signin_original(local) : 0;
 }
 
-static void listen_signin_install(void)
+static void signin_install(void)
 {
 	static int done;
 	if (done)
 		return;
 	done = 1;
-	void *original = NULL;
-	if (hook_call(base + LISTEN_SIGNIN_CALL, (void *)listen_signin_hook, &original)) {
-		listen_signin_original = (int (*)(int))original;
-		log_printf("menus: listen's IWNet sign-in check is behind ours (a split screen lobby works without internet)");
-	} else
-		log_printf("menus: the sign-in call inside listen is not where it was expected: a split screen lobby needs IWNet");
+	const struct {
+		uint32_t site;
+		const char *what;
+	} sites[] = {{LISTEN_SIGNIN_CALL, "listen"}, {CONNECT_SIGNIN_CALL, "connect"}};
+	for (int i = 0; i < 2; i++) {
+		void *original = NULL;
+		if (hook_call(base + sites[i].site, (void *)signin_hook, &original)) {
+			listen_signin_original = (int (*)(int))original;
+			log_printf("menus: the IWNet sign-in check inside %s is behind ours (co-op works without internet)", sites[i].what);
+		} else
+			log_printf("menus: the sign-in call inside %s is not where it was expected: co-op needs IWNet there", sites[i].what);
+	}
 }
 
 // QA only (MW2COOP_FAKE_IWNET_OFF=1, 64-bit): the game believes it is not connected to IWNet, as on a PC without internet (issue 21: "Connecting to IWNet..." forever in the split
@@ -1545,11 +1580,7 @@ static void fake_iwnet_off_install(void)
 
 static void host_lobby(const char *map)
 {
-	if (split_pending) {
-		steam_lobby_fail_install();
-		listen_signin_install();
-	}
-	fake_iwnet_off_install();
+	steam_lobby_fail_install();
 	int specops = so_name(map); // a Special Ops op: the lobby is the native one, only the second player is on this PC
 	lobby_music_patch(!specops); // listen activates coop_lobby immediately after mw2coop_online
 	char cmd[512];
@@ -3500,6 +3531,8 @@ void menus_install(void)
 		devmap_native = sv_devmap->function;
 		sv_devmap->function = devmap_f;
 	}
+	fake_iwnet_off_install();
+	signin_install();
 	log_printf("menus: installed (devmap %s)", devmap_native ? "hooked" : "NOT FOUND");
 	if (!devmap_native)
 		base = NULL;
