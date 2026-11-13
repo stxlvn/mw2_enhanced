@@ -6,6 +6,7 @@
 
 #ifdef _WIN32
 #include "nat12x.h"
+#include "../log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -159,9 +160,18 @@ struct nat_device {
 	unsigned list_gen;
 	int heaps_set;
 	int cmds; // commands recorded since the list was reset
-	// copy queue (texture uploads)
+	// copy queue (texture uploads): batched, see nat_image_upload
 	ID3D12CommandAllocator *calloc_;
 	ID3D12GraphicsCommandList *clist;
+	ID3D12Resource *up_buf[2];  // two persistently mapped upload buffers: the data of the copies not finished yet
+	uint8_t *up_map[2];
+	UINT64 up_off, up_fv[2]; // the next free byte of the current buffer; the copy fence value after which a buffer can be written again
+	int up_cur;
+	ID3D12CommandAllocator *ca_ring[8]; // one allocator per submission in flight
+	UINT64 ca_val[8];
+	unsigned ca_next;
+	int ca_open, ca_cur;
+	UINT64 up_wait, up_waited; // the last copy submission, and the one the main queue waits for already
 	CRITICAL_SECTION ccs, lock;
 	// descriptors
 	dheap rtv, dsv, srv, smp;
@@ -266,6 +276,7 @@ void nat12_set_heaps(nat_device *d)
 	d->heaps_set = 1;
 }
 
+static void upload_gpu_wait(nat_device *d);
 static void submit(nat_device *d, int wait_idle)
 {
 	// the occlusion queries ended in this list: their results go to the readback buffer
@@ -276,6 +287,7 @@ static void submit(nat_device *d, int wait_idle)
 	}
 	d->qended_n = 0;
 	ID3D12GraphicsCommandList_Close(d->list);
+	upload_gpu_wait(d); // the textures this list draws with: their copies are submitted, and the queue waits for them on the GPU
 	ID3D12CommandList *l[1] = {(ID3D12CommandList *)d->list};
 	ID3D12CommandQueue_ExecuteCommandLists(d->queue, 1, l);
 	ID3D12CommandQueue_Signal(d->queue, d->fence, d->pending);
@@ -581,24 +593,148 @@ static long image_addref(void *self)
 	return 0;
 }
 
-// -- uploads: a copy queue, synchronously
+// -- uploads: a copy queue. The data of a level goes into a persistently mapped upload buffer (no buffer made and no GPU wait per level: 20000 levels in a level load took 18 s that way),
+// the copies are recorded on one copy list and submitted when the buffer is full or when the main queue is about to execute (upload_gpu_wait, which makes the main queue wait for them on the GPU).
+#define UP_ARENA (32u << 20)
+static ID3D12Resource *make_buffer(nat_device *d, UINT64 size, D3D12_HEAP_TYPE heap, D3D12_RESOURCE_STATES state);
 static int copy_queue_init(nat_device *d)
 {
 	D3D12_COMMAND_QUEUE_DESC qd = {D3D12_COMMAND_LIST_TYPE_COPY, 0, D3D12_COMMAND_QUEUE_FLAG_NONE, 0};
 	if (FAILED(ID3D12Device_CreateCommandQueue(d->dev, &qd, &IID_ID3D12CommandQueue, (void **)&d->cqueue)))
 		return 0;
-	if (FAILED(ID3D12Device_CreateCommandAllocator(d->dev, D3D12_COMMAND_LIST_TYPE_COPY, &IID_ID3D12CommandAllocator, (void **)&d->calloc_)))
-		return 0;
+	for (int i = 0; i < 8; i++)
+		if (FAILED(ID3D12Device_CreateCommandAllocator(d->dev, D3D12_COMMAND_LIST_TYPE_COPY, &IID_ID3D12CommandAllocator, (void **)&d->ca_ring[i])))
+			return 0;
+	d->calloc_ = d->ca_ring[0];
 	if (FAILED(ID3D12Device_CreateCommandList(d->dev, 0, D3D12_COMMAND_LIST_TYPE_COPY, d->calloc_, NULL, &IID_ID3D12GraphicsCommandList, (void **)&d->clist)))
 		return 0;
 	ID3D12GraphicsCommandList_Close(d->clist);
 	if (FAILED(ID3D12Device_CreateFence(d->dev, 0, D3D12_FENCE_FLAG_NONE, &IID_ID3D12Fence, (void **)&d->cfence)))
 		return 0;
 	d->cevent = CreateEventA(NULL, FALSE, FALSE, NULL);
+	for (int i = 0; i < 2; i++) { // (a failure leaves the buffers NULL: uploads then go the slow synchronous way)
+		d->up_buf[i] = make_buffer(d, UP_ARENA, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ);
+		if (d->up_buf[i]) {
+			D3D12_RANGE none = {0, 0};
+			ID3D12Resource_Map(d->up_buf[i], 0, &none, (void **)&d->up_map[i]);
+		}
+	}
 	return d->cevent != NULL;
 }
 
+static int nat_image_upload_impl(nat_image *i, unsigned face, unsigned level, const void *data, unsigned row_pitch, unsigned slice_pitch);
 int nat_image_upload(nat_image *i, unsigned face, unsigned level, const void *data, unsigned row_pitch, unsigned slice_pitch)
+{
+	return nat_image_upload_impl(i, face, level, data, row_pitch, slice_pitch);
+}
+
+static void cpu_wait_copy(nat_device *d, UINT64 v)
+{
+	if (ID3D12Fence_GetCompletedValue(d->cfence) < v) {
+		ID3D12Fence_SetEventOnCompletion(d->cfence, v, d->cevent);
+		WaitForSingleObject(d->cevent, INFINITE);
+	}
+}
+
+// submits the copies recorded so far (ccs held)
+static void upload_submit(nat_device *d)
+{
+	if (!d->ca_open)
+		return;
+	ID3D12GraphicsCommandList_Close(d->clist);
+	ID3D12CommandList *l[1] = {(ID3D12CommandList *)d->clist};
+	ID3D12CommandQueue_ExecuteCommandLists(d->cqueue, 1, l);
+	const UINT64 v = ++d->cvalue;
+	ID3D12CommandQueue_Signal(d->cqueue, d->cfence, v);
+	d->ca_val[d->ca_cur] = v;
+	d->up_fv[d->up_cur] = v;
+	d->up_wait = v;
+	d->ca_open = 0;
+}
+
+static void upload_gpu_wait(nat_device *d)
+{
+	EnterCriticalSection(&d->ccs);
+	upload_submit(d);
+	if (d->up_wait > d->up_waited) {
+		ID3D12CommandQueue_Wait(d->queue, d->cfence, d->up_wait);
+		d->up_waited = d->up_wait;
+	}
+	LeaveCriticalSection(&d->ccs);
+}
+
+static int nat_image_upload_sync(nat_image *i, unsigned face, unsigned level, const void *data, unsigned row_pitch, unsigned slice_pitch);
+static int nat_image_upload_impl(nat_image *i, unsigned face, unsigned level, const void *data, unsigned row_pitch, unsigned slice_pitch)
+{
+	if (!i || level >= i->levels || (i->desc.kind == NAT_IMAGE_CUBE && face > 5))
+		return 0;
+	nat_device *d = i->dev;
+	if (!d->up_map[0] || !d->up_map[1])
+		return nat_image_upload_sync(i, face, level, data, row_pitch, slice_pitch);
+	const unsigned w = i->desc.w >> level ? i->desc.w >> level : 1, h = i->desc.h >> level ? i->desc.h >> level : 1;
+	const unsigned dl = i->desc.kind == NAT_IMAGE_VOLUME ? (i->desc.d >> level ? i->desc.d >> level : 1) : 1;
+	const UINT sub = (UINT)(i->desc.kind == NAT_IMAGE_CUBE ? level + face * i->levels : level);
+	D3D12_RESOURCE_DESC rd = ID3D12Resource_GetDesc(i->res);
+	D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp;
+	UINT rows = 0;
+	UINT64 rowsize = 0, total = 0;
+	ID3D12Device_GetCopyableFootprints(d->dev, &rd, sub, 1, 0, &fp, &rows, &rowsize, &total);
+	const UINT64 need = (total + 511) & ~(UINT64)511;
+	if (need > UP_ARENA)
+		return nat_image_upload_sync(i, face, level, data, row_pitch, slice_pitch); // (a level bigger than a buffer)
+	uint32_t *tmp = NULL;
+	if (i->f.expand) {
+		tmp = malloc((size_t)w * h * dl * 4);
+		const uint8_t *src = data;
+		const unsigned unit = i->f.expand == 1 ? 1 : 2;
+		for (unsigned z = 0; z < dl; z++)
+			for (unsigned y = 0; y < h; y++)
+				for (unsigned x = 0; x < w; x++) {
+					const uint8_t *s = src + (size_t)z * slice_pitch + (size_t)y * row_pitch + (size_t)x * unit;
+					const uint32_t lum = s[0], a = unit == 1 ? 255 : s[1];
+					tmp[((size_t)z * h + y) * w + x] = a << 24 | lum << 16 | lum << 8 | lum;
+				}
+		data = tmp;
+		row_pitch = w * 4;
+		slice_pitch = w * h * 4;
+	}
+	EnterCriticalSection(&d->ccs);
+	if (d->up_off + need > UP_ARENA) { // this buffer is full: submit what is recorded and go on in the other one (when its copies are done)
+		upload_submit(d);
+		d->up_cur ^= 1;
+		d->up_off = 0;
+		cpu_wait_copy(d, d->up_fv[d->up_cur]);
+	}
+	if (!d->ca_open) { // a command allocator whose copies are done
+		const unsigned idx = d->ca_next++ & 7;
+		cpu_wait_copy(d, d->ca_val[idx]);
+		ID3D12CommandAllocator_Reset(d->ca_ring[idx]);
+		ID3D12GraphicsCommandList_Reset(d->clist, d->ca_ring[idx], NULL);
+		d->ca_cur = idx;
+		d->ca_open = 1;
+	}
+	const UINT64 off = d->up_off;
+	ID3D12Device_GetCopyableFootprints(d->dev, &rd, sub, 1, off, &fp, &rows, &rowsize, &total);
+	uint8_t *map = d->up_map[d->up_cur] + off;
+	const uint8_t *src = data;
+	for (unsigned z = 0; z < fp.Footprint.Depth; z++)
+		for (unsigned r = 0; r < rows; r++)
+			memcpy(map + (size_t)z * fp.Footprint.RowPitch * rows + (size_t)r * fp.Footprint.RowPitch, src + (size_t)z * slice_pitch + (size_t)r * row_pitch, (size_t)rowsize);
+	D3D12_TEXTURE_COPY_LOCATION dst = {0}, sl = {0};
+	dst.pResource = i->res;
+	dst.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+	dst.SubresourceIndex = sub;
+	sl.pResource = d->up_buf[d->up_cur];
+	sl.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+	sl.PlacedFootprint = fp;
+	ID3D12GraphicsCommandList_CopyTextureRegion(d->clist, &dst, 0, 0, 0, &sl, NULL);
+	d->up_off = off + need;
+	LeaveCriticalSection(&d->ccs);
+	free(tmp);
+	return 1;
+}
+
+static int nat_image_upload_sync(nat_image *i, unsigned face, unsigned level, const void *data, unsigned row_pitch, unsigned slice_pitch)
 {
 	if (!i || level >= i->levels || (i->desc.kind == NAT_IMAGE_CUBE && face > 5))
 		return 0;
@@ -642,6 +778,8 @@ int nat_image_upload(nat_image *i, unsigned face, unsigned level, const void *da
 			memcpy(map + (size_t)z * fp.Footprint.RowPitch * rows + (size_t)r * fp.Footprint.RowPitch, src + (size_t)z * slice_pitch + (size_t)r * row_pitch, (size_t)rowsize);
 	ID3D12Resource_Unmap(up, 0, NULL);
 	EnterCriticalSection(&d->ccs);
+	upload_submit(d);
+	cpu_wait_copy(d, d->cvalue); // (the batched copies, then this one alone)
 	ID3D12CommandAllocator_Reset(d->calloc_);
 	ID3D12GraphicsCommandList_Reset(d->clist, d->calloc_, NULL);
 	D3D12_TEXTURE_COPY_LOCATION dst = {0}, sl = {0};
@@ -974,6 +1112,10 @@ void nat_destroy(nat_device *d)
 	for (int i = 0; i < NAT12_FRAMES; i++)
 		REL(d->alloc[i]);
 	REL(d->clist);
+	for (int i = 0; i < 2; i++)
+		REL(d->up_buf[i]);
+	for (int i = 1; i < 8; i++)
+		REL(d->ca_ring[i]);
 	REL(d->calloc_);
 	REL(d->queue);
 	REL(d->cqueue);
