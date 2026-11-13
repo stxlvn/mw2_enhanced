@@ -280,6 +280,22 @@ REFERENCE           MW2COOP_ENH_DARKTITLE
 LANG_ENGLISH        "Dark title bar"
 LANG_RUSSIAN        "Тёмный заголовок окна"
 
+REFERENCE           MW2COOP_ENH_MSAA
+LANG_ENGLISH        "MSAA anti-aliasing"
+LANG_RUSSIAN        "Сглаживание MSAA"
+
+REFERENCE           MW2COOP_ENH_ANISO
+LANG_ENGLISH        "Anisotropic filtering"
+LANG_RUSSIAN        "Анизотропная фильтрация"
+
+REFERENCE           MW2COOP_ENH_HDR
+LANG_ENGLISH        "HDR output"
+LANG_RUSSIAN        "HDR"
+
+REFERENCE           MW2COOP_ENH_LOWLAT
+LANG_ENGLISH        "Low latency presenting"
+LANG_RUSSIAN        "Низкая задержка вывода"
+
 REFERENCE           MW2COOP_ENH_DIRECTX
 LANG_ENGLISH        "DirectX version"
 LANG_RUSSIAN        "Версия DirectX"
