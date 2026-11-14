@@ -1115,7 +1115,9 @@ static void perf_report(void)
 // [native] pairpresent=1 (default): the picture is shown after the frame of the second view only. Each engine frame draws one view (the first one's, then the second's); showing both would
 // give each view half of the display's rate (the first view's picture is only half new), and with the display's synchronisation on (the engine waits for the refresh in every present)
 // 30 pictures a second per view on a 60 Hz screen. Both halves are composed in every frame anyway, so the picture after the second view's frame is whole and new in both.
+#ifdef _WIN64 // (natframe2.c is only built into the 64-bit DLL: no name to link to in the 32-bit one)
 extern int ngfr_trace_scene; // natframe2.c: the frame end's preconditions are logged while set (QA [native] tracescene=1)
+#endif
 static volatile int skip_this_present;
 static void before_present_inner(int via, IDirect3DDevice9 *dev)
 {
@@ -3843,9 +3845,11 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			static LONG raw_n;
 			const LONG at = CFG_ONCE("exp11rawat", 0), st = CFG_ONCE("exp11rawstep", 600) > 0 ? CFG_ONCE("exp11rawstep", 600) : 1;
 			const LONG k = InterlockedIncrement(&raw_n);
+#ifdef _WIN64
 			{ static int tr0 = -1; if (tr0 < 0) tr0 = CFG_ONCE("tracescene", 0); ngfr_trace_scene = tr0; }
 			if (k == 900 || k == 2700 || k == 5400)
 				log_printf("native: exp11raw tick %ld (at %ld), trace %d", (long)k, (long)at, ngfr_trace_scene);
+#endif
 			if (k >= at && (k - at) % st == 0 && (k - at) / st < 4) {
 				char raw_name[32];
 				snprintf(raw_name, sizeof(raw_name), "raw1-%ld", (long)k);
