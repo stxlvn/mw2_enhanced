@@ -71,3 +71,26 @@ Each phase ends with something checkable in the game; the current design stays t
   with the local player count at 2 (`[native] lccount=2`, the immediate of `0x7ac10`) still at `0x6400c`, after ~70 s. The bad addresses are small offsets:
   a per-view list (the static model surfaces of the view) that is built for view 0 only.
 - Next: the front end's per-view static model data (visibility and cache), compared with the 360's (where each local player's view has its own).
+- **Cause found and worked around: the static model draw data of the second view overflowed its region.** The four static model list builders
+  (`0x3ad40`, `0x3b810`, `0x3be80`, `0x3c440`, called from the scene set-up `0x5160`) take their output chunks from two frame data regions by atomic bumps of
+  two counters that begin-frame resets: `+0xb7f80 + [+0x41964]` (0xa000 a chunk) and `+0xd2f80 + [+0x41968]` (0x4000). The first region has 0x1b000 bytes before
+  the second starts; one view uses about half of it, two views used 0x1c000-0x24000 (logged) and wrote over the second region. The second region is not free
+  either (other data up to `+0x32318`, probe `fdprobe=1`). Fix (`split_smc_redirect`, `[native] exp1smc=1`): before the second view's draw the two counters are
+  set so that the bumps land in two 1 MB buffers of the mod, one pair per frame data set, allocated above the frame data (the counter is an unsigned 32-bit
+  offset from it). Result: two views per frame on Trainer, top and bottom half, no crash in 150 s (the 10 minute run of the phase A check follows).
+
+## Phase C started: both players in every frame (`[native] experiment=11`, 2026-11-14)
+
+- `client_frame_inner` (mode 11): player 2's client logic runs first every frame, with his own screen update suppressed through the screen update's busy flag
+  (rva `0x5db410`, checked by `0xd5b00`); then player 1's frame runs, and its cgame draw (`cg_draw_hook_inner`, mode 11) draws player 1, swaps to context 1 and
+  draws player 2 (second draw: begin-frame skipped, static model chunks redirected, player 2's 2D off for now).
+- **The view rectangle is the cgame's** (pixels, rva `0x43c630`: x, y, w, h; copied into the refdef by `0xbe710`; inside the context-swapped range, so one per
+  player): player 1 (0, 0, W, H/2), player 2 (0, H/2, W, H/2). The normalised per-player rectangle `0x3bd808` (what `0xbd520` returns) is only used by the
+  shellshock's screen sections; it is set per view too.
+- **The back end drew the 3D of one scene only** (`0x45690` calls the 3D pass `0x5c620` for the frame data's "current scene" `+0x41a30` = the last one submitted).
+  The call at `0x456ee` now runs the pass for every scene of the frame, with `+0x41a30` set to the pass's scene (the pass reads it at `0x4df70` / `0x4e030`).
+- **The pass clears after its target switch with the whole target as viewport** (`0x5c484`): only the first pass clears now (the whole picture).
+- Result (Trainer, D3D9 and native D3D11): the screen is split by the engine itself, player 2's bottom view is right; player 1's top view is drawn but lit
+  wrongly (white / black). Cause (next): the scene set-up writes per-scene lighting into fields of the frame data that exist once (the sun at `+0x41a48..+0x41a54`,
+  the sun shadow flag `+0x4195c`, `+0x41958`, the light list `+0x421e0` with entries at `+0x423b0` stride 0x1e0 and their shadow bits `+0x41970`): the last scene's
+  win. Next: keep them per scene (saved after each scene's set-up, put back before its 3D pass), checked against the 360's scene set-up.

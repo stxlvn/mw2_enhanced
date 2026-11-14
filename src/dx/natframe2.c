@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "natframe.h"
+#include "../log.h"
 
 #define AT(p, off) ((uint8_t *)(p) + (off))
 #define RD_PTR(p, off) (*(void **)AT(p, off))
@@ -114,6 +115,7 @@ void ngfr_453c0(ngfr_frame *x)
 				uint8_t *view = list + (size_t)i * 0x13a0;
 				RD_PTR(view, 0x1378) = scene;
 				if (RD_I32(view, 0x1380) == 2) {
+					{ extern int nd_trace; if (nd_trace) log_printf("trace: ==== view %u of %u begin", i, views); }
 					if (x->fn_484c0)
 						x->fn_484c0(view);
 					if (x->fn_5c010)

@@ -2698,6 +2698,66 @@ static void vid_restart_install(void)
 }
 #endif
 
+// Phase A (docs/native-splitscreen-360.md): the static model list builders (rva 0x3ad40, 0x3b810, 0x3be80, 0x3c440) take their output chunks from two regions of the
+// renderer's frame data by atomic bumps of two counters that begin-frame resets: frame data + 0xb7f80 + [+0x41964] (0xa000 a chunk) and + 0xd2f80 + [+0x41968] (0x4000).
+// The regions hold one view's chunks (the first one has 0x1b000 bytes; two views used up to 0x24000 and wrote into the second). For the second view the counters are
+// set so that the bumps land in two buffers of ours, 1 MB each, one pair for each of the two frame data sets, allocated above the frame data (the counter is an unsigned
+// 32-bit offset from it).
+static void split_smc_redirect(uint8_t *fd)
+{
+	static uint8_t *fds[2], *bufs[2][2];
+	int k = fd == fds[0] ? 0 : fd == fds[1] ? 1 : -1;
+	if (k < 0) {
+		k = !fds[0] ? 0 : !fds[1] ? 1 : -1;
+		if (k < 0)
+			return;
+		fds[k] = fd;
+		for (int r = 0; r < 2; r++) {
+			for (uintptr_t at = ((uintptr_t)fd + 0x10000000u + (uintptr_t)(k * 2 + r) * 0x400000u) & ~(uintptr_t)0xffff; !bufs[k][r] && at < (uintptr_t)fd + 0xf0000000u; at += 0x10000)
+				bufs[k][r] = VirtualAlloc((void *)at, 0x100000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+			log_printf("native: phase A: frame data %p: second view's static model chunks (region %d) at %p", (void *)fd, r, (void *)bufs[k][r]);
+		}
+	}
+	if (!bufs[k][0] || !bufs[k][1])
+		return;
+	*(uint32_t *)(fd + 0x41964) = (uint32_t)(bufs[k][0] - (fd + 0xb7f80));
+	*(uint32_t *)(fd + 0x41968) = (uint32_t)(bufs[k][1] - (fd + 0xd2f80));
+}
+
+// The back end's frame (rva 0x45690) draws the 3D of ONE scene, the one at the frame data's "current scene" (+0x41a30, the last scene submitted), at 0x456ee (call 0x5c620),
+// then the per-view composites and 2D (0x453c0). With two scenes in a frame (mode 11, both players drawn in it) only the last one got its 3D. Each scene of the frame
+// gets its 3D pass here, in order.
+static void (*scene3d_original)(void *slot);
+static int scene3d_pass = -1; // the scene whose 3D pass runs (several scenes in a frame), -1 otherwise
+static void scene3d_hook(void *slot)
+{
+	uint8_t *scene = *(uint8_t **)(base + XR(0x4358f58)); // the frame data the back end is drawing
+	const unsigned count = scene ? *(unsigned *)(scene + 0x41a34) : 0;
+	if (mode != 11 || count < 2 || !CFG_ONCE("allscenes", 1)) {
+		scene3d_original(slot);
+		return;
+	}
+	uint8_t *list = *(uint8_t **)(scene + 0x41a38);
+	const unsigned current = *(unsigned *)(scene + 0x41a30);
+	for (unsigned i = 0; i < count && i < 4; i++) {
+		*(unsigned *)(scene + 0x41a30) = i; // the pass reads the "current scene" for some of its steps (0x4df70, 0x4e030)
+		scene3d_pass = i;
+		scene3d_original(list + (size_t)i * 0x13a0);
+	}
+	scene3d_pass = -1;
+	*(unsigned *)(scene + 0x41a30) = current;
+}
+
+// The pass's clear (0x5c484, call 0x51070): after its target switch the viewport is the whole target, so the second view's clear wiped the first view. The first pass clears the
+// whole picture (both views' rectangles); the later ones do not clear.
+static void (*scene_clear_original)(void *, int, void *, float, int);
+static void scene_clear_hook(void *dev, int flags, void *rgba, float depth, int stencil)
+{
+	if (scene3d_pass > 0)
+		return;
+	scene_clear_original(dev, flags, rgba, depth, stencil);
+}
+
 // the second draw of the frame must not start a new frame: it adds its view to the one the first draw began
 static void begin_frame_hook(void)
 {
@@ -3573,6 +3633,12 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 	if (!mode || !sw || second_pass || (mode >= 5 && !split_on)) {
 		if (mode >= 5 && !split_on)
 			half_forget();
+		if (mode == 11 && !split_on) { // back to one picture: player 1's view rectangle covers the screen again
+			int *cvr = (int *)(base + XR(0x43c630));
+			const int sw_px = *(int *)(base + XR(0x4113728)), sh_px = *(int *)(base + XR(0x411372c));
+			if (sw_px > 0 && sh_px > 0 && (cvr[2] != sw_px || cvr[3] != sh_px))
+				cvr[0] = 0, cvr[1] = 0, cvr[2] = sw_px, cvr[3] = sh_px;
+		}
 		if ((mode == 8 || mode == 10) && cg_aspect_have) { // back from the split: the cgame's aspect as it was
 			*(float *)(base + RVA_CG_ASPECT) = cg_aspect_saved;
 			cg_aspect_have = 0;
@@ -3586,6 +3652,67 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		cg_draw_original(local_client, a, b);
 		if (ctx_on)
 			ctx_after_draw();
+		return;
+	}
+	if (mode == 11) { // both views in this frame: the per-player view rectangle (rva 0x3bd808, what 0xbd520 returns) top for player 1, bottom for player 2 (context 1, drawn
+			  // as local client 0 with its statics swapped in); the second draw skips begin-frame (second_pass) and its static model chunks go to our buffers
+		float *vrect = (float *)(base + XR(0x3bd808));
+		float *aspect = (float *)(base + RVA_CG_ASPECT);
+		{
+			static unsigned n11;
+			if (n11++ % 1200 == 0)
+				log_printf("native: mode 11 draw #%u (ctx1 ready %d)", n11, ctx1_ready);
+		}
+		const float aspect_was = *aspect;
+		const int sw_px = *(int *)(base + XR(0x4113728)), sh_px = *(int *)(base + XR(0x411372c)); // the picture's size (the renderer's display globals)
+		if (sw_px > 0 && sh_px > 0 && CFG_ONCE("exp11aspect", 1))
+			*aspect = (float)sw_px / ((float)sh_px * 0.5f); // a half's shape: the cgame builds the field of view for it (as mode 10 does)
+		int *cvr = (int *)(base + XR(0x43c630)); // the cgame's view rectangle in pixels (x, y, w, h; the refdef's, copied by 0xbe710; set at the level start by 0xa6680): one per context
+		vrect[0] = 0, vrect[1] = 0, vrect[2] = 1, vrect[3] = 0.5f;
+		if (sw_px > 0 && sh_px > 0)
+			cvr[0] = 0, cvr[1] = 0, cvr[2] = sw_px, cvr[3] = sh_px / 2;
+		cg_draw_original(local_client, a, b);
+		if (ctx_on)
+			ctx_after_draw();
+		if (ctx1_ready) {
+			uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+			if (fd)
+				split_smc_redirect(fd);
+			vrect[1] = 0.5f;
+			ctx_swap(1);
+			if (sw_px > 0 && sh_px > 0)
+				cvr[0] = 0, cvr[1] = sh_px / 2, cvr[2] = sw_px, cvr[3] = sh_px - sh_px / 2;
+			static dvar_t *draw2d;
+			if (!draw2d)
+				draw2d = game_find_dvar("cg_draw2D");
+			const int no2d = draw2d && CFG_ONCE("exp11no2d", 1); // test: player 2's 2D (HUD, fades) is drawn over the whole screen until the 2D is placed per view (phase B)
+			const int was2d = no2d ? draw2d->current.enabled : 0;
+			if (no2d)
+				draw2d->current.enabled = 0;
+			second_pass = 1;
+			cg_draw_original(0, a, b);
+			second_pass = 0;
+			if (no2d)
+				draw2d->current.enabled = (uint8_t)was2d;
+			ctx_swap(0);
+		}
+		{
+			static unsigned n11b;
+			uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+			if (fd && n11b++ % 1200 == 0) {
+				const int views = *(int *)(fd + 0x419e8);
+				char line[400];
+				const int *cvr = (const int *)(base + XR(0x43c630));
+				int n = snprintf(line, sizeof(line), "native: mode 11 frame: scenes %d views %d | cg view rect %d %d %d %d", *(int *)(fd + 0x41a34), views, cvr[0], cvr[1], cvr[2], cvr[3]);
+				for (int i = 0; i < views && i < 4; i++) {
+					const int *vp = (const int *)(fd + 0x1100 + (size_t)i * 0x150 + 0x130);
+					n += snprintf(line + n, sizeof(line) - n, " | view %d rect %d %d %d %d", i, vp[0], vp[1], vp[2], vp[3]);
+				}
+				log_printf("%s", line);
+			}
+		}
+		vrect[0] = 0, vrect[1] = 0, vrect[2] = 1, vrect[3] = 1;
+		*aspect = aspect_was;
 		return;
 	}
 	if (full_window)
@@ -3709,6 +3836,11 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		vrect[0] = 0, vrect[1] = 0.5f, vrect[2] = 1, vrect[3] = 0.5f;
 	else
 		sw[2] = 0.5f, sw[3] = 1; // the bottom half
+	if (CFG_ONCE("exp1smc", 1)) { // phase A: the second view's static model draw data goes to buffers of ours (the frame data has room for one view's, see split_smc_redirect)
+		uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+		if (fd)
+			split_smc_redirect(fd);
+	}
 	{
 		uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
 		static int n1;
@@ -3723,8 +3855,34 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 	{
 		uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
 		static int n2;
-		if (fd && n2++ < 5)
-			log_printf("native: exp1 after draw 2: scenes %d views %d", *(int *)(fd + 0x41a34), *(int *)(fd + 0x419e8));
+		if (fd && (n2++ % 600) == 0)
+			log_printf("native: exp1 after draw 2: scenes %d views %d | region b7f80 used 0x%x, region d2f80 used 0x%x", *(int *)(fd + 0x41a34), *(int *)(fd + 0x419e8),
+				   *(int *)(fd + 0x41964), *(int *)(fd + 0x41968));
+	}
+	static int fdprobe_on = -1;
+	if (fdprobe_on < 0) {
+		fdprobe_on = cfg("fdprobe", 0);
+		log_printf("native: fdprobe %d", fdprobe_on);
+	}
+	if (fdprobe_on) { // phase A: the highest written byte of each frame data set between +0xd2f80 and +0x1096a8, and of +0xb7f80..+0xd2f80
+		static unsigned hi_d, hi_b, n;
+		uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+		if (fd) {
+			for (unsigned o = 0x1096a8; o > 0xd2f80; o -= 8)
+				if (*(uint64_t *)(fd + o - 8)) {
+					if (o - 0xd2f80 > hi_d)
+						hi_d = o - 0xd2f80;
+					break;
+				}
+			for (unsigned o = 0xd2f80; o > 0xb7f80; o -= 8)
+				if (*(uint64_t *)(fd + o - 8)) {
+					if (o - 0xb7f80 > hi_b)
+						hi_b = o - 0xb7f80;
+					break;
+				}
+			if ((n++ % 600) == 0)
+				log_printf("native: fdprobe frame data %p: +0xd2f80 region written up to +0x%x, +0xb7f80 region up to +0x%x", (void *)fd, hi_d, hi_b);
+		}
 	}
 	memcpy(sw, saved, sizeof(saved));
 	if (byrect)
@@ -6199,7 +6357,29 @@ static void client_frame_inner(void)
 		nogun = cfg("nogun", 0);
 	uint8_t *gun_dvar = *(uint8_t **)(base + RVA_DRAWGUN_DVAR); // cg_drawGun
 	const unsigned view_run = CFG_ONCE("viewrun", 1) < 1 ? 1u : (unsigned)CFG_ONCE("viewrun", 1);
-	if (mode >= 5 && ctx1_ready && split_on && (((frame++) / view_run) & 1)) { // [native] viewrun=<n>: each view is drawn n engine frames in a row (diagnostics: does the renderer reuse the last frame's data?)
+	if (mode == 11 && ctx1_ready && split_on) { // the 360's way (docs/native-splitscreen-360.md, phase C): player 2's client logic every frame, without its own screen update (the
+						     // screen update's busy flag, rva 0x5db410, makes 0xd5b00 return); player 1's frame below draws both views (cg_draw_hook_inner, mode 11)
+		frame_bottom = 1;
+		if (nopredict && np_dvar)
+			*(int *)(np_dvar + 0x10) = 1;
+		ctx_swap(1);
+		pad_frame_player(1, 1);
+		inputlog_frame(1);
+		uint8_t *scr_busy = base + XR(0x5db410);
+		const uint8_t was = *scr_busy;
+		*scr_busy = 1;
+		client_frame_original();
+		*scr_busy = was;
+		native_unswap_entities();
+		ctx_swap(0);
+		frame_bottom = 0;
+		if (nopredict && np_dvar)
+			*(int *)(np_dvar + 0x10) = 0;
+		if (perf_on) {
+			perf_ctx[1] += perf_now() - perf_start;
+			perf_ctx_n[1]++;
+		}
+	} else if (mode >= 5 && mode != 11 && ctx1_ready && split_on && (((frame++) / view_run) & 1)) { // [native] viewrun=<n>: each view is drawn n engine frames in a row (diagnostics: does the renderer reuse the last frame's data?)
 		frame_bottom = 1;
 		if (nogun && gun_dvar)
 			*(int *)(gun_dvar + 0x10) = 0; // test: context 1 without the view model
@@ -8495,6 +8675,10 @@ static int hooks_apply(void)
 		log_printf("native: unexpected code at the scene's 2D pass, mode 10 is off");
 		return 0;
 	}
+	if (*(base + XR(0x5c484)) != 0xe8 || !jhook_call(base + XR(0x5c484), (void *)scene_clear_hook, (void **)&scene_clear_original))
+		log_printf("native: unexpected code at the scene pass's clear (0x5c484)");
+	if (*(base + XR(0x456ee)) != 0xe8 || !jhook_call(base + XR(0x456ee), (void *)scene3d_hook, (void **)&scene3d_original))
+		log_printf("native: unexpected code at the back end's scene pass (0x456ee), one 3D scene per frame");
 	if (*(base + XR(0x4545b)) != 0xe8 || !jhook_call(base + XR(0x4545b), (void *)final2d_hook, (void **)&final2d_original)) {
 		log_printf("native: unexpected code at the frame's 2D command list, mode 10 is off");
 		return 0;
