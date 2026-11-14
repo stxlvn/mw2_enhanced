@@ -1121,6 +1121,18 @@ static void before_present_inner(int via, IDirect3DDevice9 *dev)
 	trace_present();
 	InterlockedIncrement(&present_hits[via]);
 	render_tid = GetCurrentThreadId();
+	if (mode == 11 && split_on) { // QA of mode 11 (no compositor): [native] shot11=<present> saves the frame "m11-<n>.bmp", four of them shot11step (600) presents apart
+		static LONG n;
+		static int at = -2, step;
+		if (at == -2)
+			at = cfg("shot11", -1), step = cfg("shot11step", 600);
+		const LONG k = InterlockedIncrement(&n);
+		if (at >= 0 && k >= at && (k - at) % (step > 0 ? step : 1) == 0 && (k - at) / (step > 0 ? step : 1) < 4) {
+			char name[32];
+			snprintf(name, sizeof(name), "m11-%ld", (long)k);
+			shot_save_now(dev, name);
+		}
+	}
 	if (CFG_ONCE("perflog", 0)) { // how evenly the pictures are shown: the time between two presents
 		static LONGLONG prev;
 		LARGE_INTEGER c, f;
@@ -2731,6 +2743,7 @@ static void split_smc_redirect(uint8_t *fd)
 #define FD_SCENE_HI 0x62980
 static uint8_t *fd_scene_copy[2][4];
 static uint8_t *fd_scene_owner[2];
+static uint8_t *fd_scene_glob[2][4];
 static int fd_scene_set(uint8_t *fd)
 {
 	for (int k = 0; k < 2; k++)
@@ -2754,6 +2767,12 @@ static void fd_scene_save(uint8_t *fd, unsigned scene)
 		fd_scene_copy[k][scene] = HeapAlloc(GetProcessHeap(), 0, FD_SCENE_HI - FD_SCENE_LO);
 	if (fd_scene_copy[k][scene])
 		memcpy(fd_scene_copy[k][scene], fd + FD_SCENE_LO, FD_SCENE_HI - FD_SCENE_LO);
+	static uint8_t *glob_copy[2][4];
+	if (!glob_copy[k][scene])
+		glob_copy[k][scene] = HeapAlloc(GetProcessHeap(), 0, 0x400);
+	if (glob_copy[k][scene])
+		memcpy(glob_copy[k][scene], base + XR(0x4113400), 0x400); // the view values 0x8210 writes per scene (origin and axes 0x4113434.., fog / LOD / fov 0x41135a4..)
+	fd_scene_glob[k][scene] = glob_copy[k][scene];
 }
 // what a scene's 3D pass reads of its own lighting: +0x41940..+0x41a30 (with the sun shadow flag, +0x41958, the shadow bits +0x41970), the sun +0x41a48..+0x41a58, the light
 // list +0x421e0..; the scene list, counters and flags in between (+0x41a30..+0x41a48, +0x41a58..+0x421e0) are the frame's and stay as they are
@@ -2764,6 +2783,8 @@ static int fd_scene_load(uint8_t *fd, unsigned scene)
 		return 0;
 	for (int k = 0; k < 2; k++)
 		if (fd_scene_owner[k] == fd && fd_scene_copy[k][scene]) {
+			if ((CFG_ONCE("scenekeepparts", 7) & 8) && fd_scene_glob[k][scene])
+				memcpy(base + XR(0x4113400), fd_scene_glob[k][scene], 0x400);
 			for (size_t p = 0; p < sizeof(fd_scene_parts) / sizeof(fd_scene_parts[0]); p++)
 				if (CFG_ONCE("scenekeepparts", 7) & (1 << p))
 				memcpy(fd + fd_scene_parts[p][0], fd_scene_copy[k][scene] + (fd_scene_parts[p][0] - FD_SCENE_LO), fd_scene_parts[p][1] - fd_scene_parts[p][0]);
@@ -2813,6 +2834,61 @@ static void scene_clear_hook(void *dev, int flags, void *rgba, float depth, int 
 	if (scene3d_pass > 0)
 		return;
 	scene_clear_original(dev, flags, rgba, depth, stencil);
+}
+
+// The renderer's local player (rva 0x51deb8, written by CG_DrawActiveFrame 0xbca00 from its argument; the 360's 0x8244b424, set by its CG_DrawActiveFrame 0x82113110).
+// The scene set-up (0x5160) and its helpers (0x4780, 0x17740, 0x19000, 0x1b9b0, 0x1bee0, 0x38cc0) keep per-player view data in a block that still has room for 4 players
+// (0x4812878 + lc * 0x2b8: sun shadow and cull planes), and run the once-per-frame steps only for player 0 (0xdb4d0 "lc == 0": the effects' time step 0x208a10).
+// Mode 11 draws player 2 through the cgame as player 0 (the PC client arrays have one element: experiment 3), so both scenes shared player 0's slot and the effects stepped
+// twice a frame. As on the 360, player 2's R_RenderScene runs as renderer player 1; the two cgame callbacks inside it that index one-element cgame arrays
+// (0xbd3d0 shellshock at 0x82dd, 0x93ac0 at 0x6356: 0x51e330 + lc * 0x2cd0) still get 0. [native] exp11lc=0 turns it off.
+static void (*render_scene_original)(void *refdef, uintptr_t scene, uintptr_t c, uintptr_t d); // R_RenderScene(refdef, scene number): every register argument passed on
+static void (*rs_shock_original)(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d);
+static void (*rs_cgents_original)(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d);
+static int rs_player1; // inside player 2's R_RenderScene with the renderer's local player at 1
+static void ctx_wait_workers(void);
+static void rs_log(const char *when)
+{
+	static int n;
+	if (n >= 12 || !CFG_ONCE("rslog", 0))
+		return;
+	n++;
+	uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+	if (!fd)
+		return;
+	const uint64_t *e = (const uint64_t *)(fd + 0x41a68);
+	log_printf("native: rslog %s: lc %d second %d | spot lights %u | entry0 %llx %llx %llx %llx | scenes %u views %u | spot dvar %d",
+		when, *(int *)(base + XR(0x51deb8)), second_pass, *(unsigned *)(fd + 0x41ea8), e[0], e[1], e[2], e[3],
+		*(unsigned *)(fd + 0x41a34), *(unsigned *)(fd + 0x419e8), *(int *)(*(uint8_t **)(base + XR(0x4115fe0)) + 0x10));
+}
+static void render_scene_hook(void *refdef, uintptr_t scene, uintptr_t c, uintptr_t d)
+{
+	if (mode != 11 || !second_pass || !CFG_ONCE("exp11lc", 1)) {
+		render_scene_original(refdef, scene, c, d);
+		rs_log("after p1");
+		return;
+	}
+	rs_log("before p2");
+	int *rlc = (int *)(base + XR(0x51deb8));
+	const int saved = *rlc;
+	*rlc = 1;
+	rs_player1 = 1;
+	render_scene_original(refdef, scene, c, d);
+	rs_player1 = 0;
+	rs_log("after p2");
+	if (CFG_ONCE("exp11lc", 1) == 1)
+		ctx_wait_workers(); // the front end's workers of this scene read the renderer's local player too: let them finish with 1 (exp11lc=2: keep 1 until the next frame's draw instead)
+	else
+		return;
+	*rlc = saved;
+}
+static void rs_shock_hook(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d)
+{
+	rs_shock_original(rs_player1 ? 0 : lc, b, c, d);
+}
+static void rs_cgents_hook(uintptr_t lc, uintptr_t b, uintptr_t c, uintptr_t d)
+{
+	rs_cgents_original(rs_player1 ? 0 : lc, b, c, d);
 }
 
 // the second draw of the frame must not start a new frame: it adds its view to the one the first draw began
@@ -8745,6 +8821,48 @@ static int hooks_apply(void)
 		log_printf("native: unexpected code at the scene pass's clear (0x5c484)");
 	if (*(base + XR(0x456ee)) != 0xe8 || !jhook_call(base + XR(0x456ee), (void *)scene3d_hook, (void **)&scene3d_original))
 		log_printf("native: unexpected code at the back end's scene pass (0x456ee), one 3D scene per frame");
+	if (mode == 11 && CFG_ONCE("exp11lc", 1)) {
+		// The PC's cpose_t has ONE "culled in" byte per entity (+3); the readers index it with the renderer's local player (+3 + lc), so local player 1 writes the next field.
+		// These readers take local player 0 (both views share the byte, as before), and the entity lookup at 0xa4cbf too (its DObj table is the cgame's).
+		static const struct { uint32_t rva; uint8_t want[7]; uint8_t put[7]; } pins[] = {
+			{ 0xb20d0, { 0x48, 0x63, 0x05, 0xe1, 0xbd, 0x46, 0x00 }, { 0x31, 0xc0, 0x90, 0x90, 0x90, 0x90, 0x90 } }, // movsxd rax,[lc] -> xor eax,eax
+			{ 0xb20e0, { 0x48, 0x63, 0x15, 0xd1, 0xbd, 0x46, 0x00 }, { 0x31, 0xd2, 0x90, 0x90, 0x90, 0x90, 0x90 } }, // movsxd rdx,[lc] -> xor edx,edx
+			{ 0x9e547, { 0x48, 0x63, 0x05, 0x6a, 0xf9, 0x47, 0x00 }, { 0x31, 0xc0, 0x90, 0x90, 0x90, 0x90, 0x90 } },
+		};
+		for (size_t i = 0; i < sizeof(pins) / sizeof(pins[0]); i++) {
+			uint8_t *p = base + XR(pins[i].rva);
+			if (memcmp(p, pins[i].want, 7)) {
+				log_printf("native: exp11lc: unexpected code at rva 0x%x, not pinned", pins[i].rva);
+				continue;
+			}
+			DWORD old;
+			VirtualProtect(p, 7, PAGE_EXECUTE_READWRITE, &old);
+			memcpy(p, pins[i].put, 7);
+			VirtualProtect(p, 7, old, &old);
+			FlushInstructionCache(GetCurrentProcess(), p, 7);
+		}
+		// mov reg,[lc] (8b 15/0d rel32) -> xor reg,reg + nops: the entity lookup at 0xa4cbf, and the cgame's local entity callbacks of the front end's workers
+		// (0x934b0 -> 0xa5f10, 0x94bc0 -> 0xa23c0, reached from 0x121490: with 1, "CG_FreeLocalEntity: not active", the cgame has one set of local entities)
+		static const struct { uint32_t rva; uint8_t modrm; } movs[] = { { 0xa4cbf, 0x15 }, { 0x934b0, 0x0d }, { 0x94bc0, 0x0d } };
+		for (size_t i = 0; i < sizeof(movs) / sizeof(movs[0]); i++) {
+			uint8_t *q = base + XR(movs[i].rva);
+			if (q[0] != 0x8b || q[1] != movs[i].modrm || *(int32_t *)(q + 2) + (intptr_t)(q + 6) != (intptr_t)(base + XR(0x51deb8))) {
+				log_printf("native: exp11lc: unexpected code at rva 0x%x, not pinned", movs[i].rva);
+				continue;
+			}
+			DWORD old;
+			VirtualProtect(q, 6, PAGE_EXECUTE_READWRITE, &old);
+			const uint8_t put[6] = { 0x31, movs[i].modrm == 0x15 ? 0xd2 : 0xc9, 0x90, 0x90, 0x90, 0x90 };
+			memcpy(q, put, 6);
+			VirtualProtect(q, 6, old, &old);
+			FlushInstructionCache(GetCurrentProcess(), q, 6);
+		}
+	}
+	if (*(base + XR(0xca523)) != 0xe8 || *(base + XR(0x82dd)) != 0xe8 || *(base + XR(0x6356)) != 0xe8 ||
+	    !jhook_call(base + XR(0xca523), (void *)render_scene_hook, (void **)&render_scene_original) ||
+	    !jhook_call(base + XR(0x82dd), (void *)rs_shock_hook, (void **)&rs_shock_original) ||
+	    !jhook_call(base + XR(0x6356), (void *)rs_cgents_hook, (void **)&rs_cgents_original))
+		log_printf("native: unexpected code at R_RenderScene's call (0xca523) or its cgame calls (0x82dd, 0x6356): player 2 renders as player 0");
 	if (*(base + XR(0x4545b)) != 0xe8 || !jhook_call(base + XR(0x4545b), (void *)final2d_hook, (void **)&final2d_original)) {
 		log_printf("native: unexpected code at the frame's 2D command list, mode 10 is off");
 		return 0;

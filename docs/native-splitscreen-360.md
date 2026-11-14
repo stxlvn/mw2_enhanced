@@ -99,3 +99,33 @@ Each phase ends with something checkable in the game; the current design stays t
   in the light loop (`0x64ac4`); without it there is no crash but player 1's view stays wrong (white / black). So the top view's problem is not (only) those fields.
   Open: what else of the frame is built for one scene (the sun shadow cascades `0x659a0` per pass, the post-processing per view `0x484c0`, the 2D of player 1), to be
   found in the 360's back end (its frame loop over scenes) instead of by trial.
+
+## The 360's renderer front end, read (2026-11-14 evening)
+
+Read from the 360 image (`default_sp.pe`, Ghidra project `mw2x360`; the 360's register save helpers `0x823ddf40..0x823de0e0` had to be taken out of
+"no return" first, they cut every function short):
+- **The 360's `CG_DrawActiveFrame` is `0x82113110` (PC `0xbca00`).** It stores its local player number in a renderer global, **360 `0x8244b424`**
+  (PC rva **`0x51deb8`**, written by `0xbca00` from its argument), and has `lc == 0` / `else` branches that the PC kept (PC `if (param_1 == 0)` in `0xbca00`).
+  The per-player begin function `0x821130a8` (PC `0xbd610`) sets the same global.
+- **The 360's `R_RenderScene` is `0x8238b158` and its scene set-up `0x8238a288` (PC `0x8210` and `0x5160`).** Same steps in the same order: the
+  shellshock for the player (`0x82112298(lc)`, PC `0xbd3d0`), the effects of the refdef's player only (`if (lc == refdef.lc)`, PC `0x20a2c0`), the
+  effects' time step for player 0 only (`0x82141e70(lc)` = "lc == 0", PC `0xdb4d0` -> `0x208a10`), the worker waits by number (PC "wait %s").
+- **The renderer keeps view data per local player**, indexed by that global: the 360 `0x83dc2080 + lc * 0x2b8` (3 frusta of `0xe8`: view and sun shadow
+  cull planes), the PC **`0x4812a40 + lc * 0x2b8`, with room for 4 players** (the next globals start at `0x4813528`). Users on the PC: `0x5160`,
+  `0x4780` (shadowed spot lights), `0x17740`, `0x18b60`, `0x19000`, `0x1b9b0`, `0x1bee0`, `0x38cc0`; all run inside `R_RenderScene`.
+- **What mode 11 did wrong:** player 2's draw runs through the cgame as player 0 (the PC's client arrays have one element: experiment 3), so his scene
+  used player 0's renderer slot too, and the effects' time step ran twice a frame.
+
+### Change (`[native] exp11lc=1`, default on in mode 11)
+
+- The call of `R_RenderScene` (`0xca523`) is hooked: player 2's runs with the renderer global at 1 (as on the 360), then the front end's workers are waited
+  for and it goes back to 0. The hook passes every register argument on (`R_RenderScene(refdef, scene)`: a one-argument hook crashed the back end's light
+  loop at `0x3f0d9` in every run, with or without the change).
+- Readers of the global that index cgame data of one element get 0: the call sites `0x82dd` (shellshock `0xbd3d0`) and `0x6356` (`0x93ac0`,
+  `0x51e330 + lc * 0x2cd0`); the per-entity "culled in" byte of `cpose_t` (`+3 + lc`, one byte on the PC: `0xb20d0`, `0xb20e0`, `0x9e547`); the entity
+  lookup at `0xa4cbf`; the local entity callbacks of the workers `0x934b0` and `0x94bc0` (with 1: engine error "CG_FreeLocalEntity: not active").
+- Result (Trainer, D3D9, 60 s, frames saved with `[native] shot11=<present>`): no crash and no engine error, both views every frame (161 fps).
+  **Player 1's top view is still wrong** (black / white) and the skinned models still have long triangles, so the per-player slot was not the cause of those.
+  Player 2's effects: the refdef carries local player 0, so `if (lc == refdef.lc)` skips his effects update now (to check).
+- Not read yet: the 360's back end frame (the PC `0x45690` -> `0x5c620` / `0x5c240`), which decides how each scene's 3D pass finds its own sun, shadow and
+  light state. Next step.
