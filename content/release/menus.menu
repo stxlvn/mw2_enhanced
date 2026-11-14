@@ -31,12 +31,18 @@ menuDef {
 }
 
 // The campaign page (made by the mod from the game's main menu: Continue, New game, Mission select, Statistics, Back): these buttons are added under Mission Select, in this order.
+// Join a game (mw2coop_find) looks for the co-op games on every network this PC is on; the list's last row joins by address (menuDef "mw2coop_lobbies").
 menuDef {
 	name "mw2coop_campaign"
 	itemDef {
 		name "mw2coop_campaign_online"
 		text "@MENU_SP_TWO_PLAYER_ONLINE_CAPS"
 		action { play "mouse_click"; exec "mw2coop_host_menu"; }
+	}
+	itemDef {
+		name "mw2coop_campaign_join"
+		text "@MW2COOP_JOIN"
+		action { play "mouse_click"; exec "mw2coop_find"; }
 	}
 	itemDef {
 		name "mw2coop_campaign_split"
