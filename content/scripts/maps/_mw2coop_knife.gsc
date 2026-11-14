@@ -74,6 +74,28 @@ partner_wakeup_anim( node, rig, scene )
 	self FreezeControls( false );
 	self wounded_walk();
 	maps\_mw2coop::state( "knife fight: player 2 is free after the wake-up at " + self.origin );
+	self thread partner_takes_knife();
+}
+
+// After the wake-up player 1 holds the knife (give_knife_fight_weapon()); player 2's weapons were disabled for his wake-up
+// and stayed so: his hands were empty ("none") for the rest of the walk (owner, 2026-11-14). He gets them back and raises the
+// knife (QA: network pair and split screen with his pad: he holds ending_knife a moment after the wake-up).
+partner_takes_knife()
+{
+	if ( !self HasWeapon( "ending_knife" ) )
+	{
+		self GiveWeapon( "ending_knife" );
+		self SetWeaponAmmoStock( "ending_knife", 0 );
+		self SetWeaponAmmoClip( "ending_knife", 0 );
+	}
+	// a few tries: a split screen player 2 takes the switch through his pad's weapon key (sync_weapons), a moment later
+	for ( i = 0; i < 4 && self GetCurrentWeapon() == "none"; i++ )
+	{
+		self EnableWeapons();
+		self SwitchToWeaponImmediate( "ending_knife" );
+		wait 0.5;
+	}
+	maps\_mw2coop::state( "knife fight: player 2 holds " + self GetCurrentWeapon() + " after the wake-up" );
 }
 
 // The wake-up animation carries the rig forward and up from where it starts: wakeup_offset() checks
