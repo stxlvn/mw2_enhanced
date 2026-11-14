@@ -1115,6 +1115,7 @@ static void perf_report(void)
 // [native] pairpresent=1 (default): the picture is shown after the frame of the second view only. Each engine frame draws one view (the first one's, then the second's); showing both would
 // give each view half of the display's rate (the first view's picture is only half new), and with the display's synchronisation on (the engine waits for the refresh in every present)
 // 30 pictures a second per view on a 60 Hz screen. Both halves are composed in every frame anyway, so the picture after the second view's frame is whole and new in both.
+extern int ngfr_trace_scene; // natframe2.c: the frame end's preconditions are logged while set (QA [native] tracescene=1)
 static volatile int skip_this_present;
 static void before_present_inner(int via, IDirect3DDevice9 *dev)
 {
@@ -2404,6 +2405,7 @@ void native_final2d_entry(void *vp)
 	native_hud_install();
 #ifdef _WIN64 // (the native renderers are 64-bit only)
 	{ extern int nd_trace; if (nd_trace) log_printf("trace: ==== final2d begin"); }
+	{ extern int ngfr_trace_scene; static LONG f2; if (ngfr_trace_scene && (InterlockedIncrement(&f2) % 50) == 1) log_printf("native: final2d reached #%ld vp %p", (long)f2, vp); }
 #endif
 	if (!(mode == 10 && native_active && split_on) && natboot_hud_begin()) { // upscaled picture: the 2D list (fades, texts) is drawn at the output resolution
 		((void (*)(void *))(base + XR64(0x5c010)))(vp);
@@ -3812,6 +3814,22 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		}
 		if (ctx_on)
 			ctx_after_draw();
+		if (CFG_ONCE("exp11raw", 0)) { // QA: the picture as it is after player 1's draw, before player 2's: "raw1-<n>.bmp", four of them from exp11rawat on, exp11rawstep presents apart
+			static LONG raw_n;
+			const LONG at = CFG_ONCE("exp11rawat", 0), st = CFG_ONCE("exp11rawstep", 600) > 0 ? CFG_ONCE("exp11rawstep", 600) : 1;
+			const LONG k = InterlockedIncrement(&raw_n);
+			{ static int tr0 = -1; if (tr0 < 0) tr0 = CFG_ONCE("tracescene", 0); ngfr_trace_scene = tr0; }
+			if (k == 900 || k == 2700 || k == 5400)
+				log_printf("native: exp11raw tick %ld (at %ld), trace %d", (long)k, (long)at, ngfr_trace_scene);
+			if (k >= at && (k - at) % st == 0 && (k - at) / st < 4) {
+				char raw_name[32];
+				snprintf(raw_name, sizeof(raw_name), "raw1-%ld", (long)k);
+				if (native_active)
+					natboot_shot(raw_name);
+				else if (*(IDirect3DDevice9 **)(base + RVA_D3D_DEVICE))
+					shot_save_now(*(IDirect3DDevice9 **)(base + RVA_D3D_DEVICE), raw_name);
+			}
+		}
 		if (ctx1_ready) {
 			uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
 			if (fd)

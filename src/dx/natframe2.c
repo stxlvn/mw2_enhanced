@@ -4,6 +4,8 @@
 #include "natframe.h"
 #include "../log.h"
 
+int ngfr_trace_scene; // QA: the frame end's preconditions are logged while set
+
 #define AT(p, off) ((uint8_t *)(p) + (off))
 #define RD_PTR(p, off) (*(void **)AT(p, off))
 #define RD_U8(p, off) (*(uint8_t *)AT(p, off))
@@ -95,6 +97,8 @@ static void reset_2d(ngfr_frame *x, uint8_t *scene)
 
 void ngfr_453c0(ngfr_frame *x)
 {
+	{ if (ngfr_trace_scene) { uint8_t *sc = RD_PTR(x->f->exe, G_SCENE); log_printf("native: 453c0 flags 0x%x scenes %u views %u mode %d viewsz %u", sc ? RD_U8(sc, 0x41a60) : 0, sc ? RD_U32(sc, 0x41a34) : 0, sc ? RD_U32(sc, 0x41a34) : 0, RD_I32(x->f->exe, G_SCENE_MODE), sc ? RD_U32(sc, 0x419e8) : 0); } }
+
 	uint8_t *e = x->f->exe;
 	uint8_t *scene = RD_PTR(e, G_SCENE);
 	if (!(RD_U8(scene, 0x41a60) & 2))

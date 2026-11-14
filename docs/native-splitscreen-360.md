@@ -129,3 +129,41 @@ Read from the 360 image (`default_sp.pe`, Ghidra project `mw2x360`; the 360's re
   Player 2's effects: the refdef carries local player 0, so `if (lc == refdef.lc)` skips his effects update now (to check).
 - Not read yet: the 360's back end frame (the PC `0x45690` -> `0x5c620` / `0x5c240`), which decides how each scene's 3D pass finds its own sun, shadow and
   light state. Next step.
+
+## Why the evening runs crashed: the scene's 2D command list was never finished (2026-11-14, later)
+
+`scr/pc_f1.txt` and its neighbours end the same way: `CRASH: access violation (read 0x10) at rva 0x645bd`, 21-30 s in, right after "split view on". The fault
+is in the per-scene 2D command loop (function `0x642e0`, entered from the dispatcher `0x5e620` at `0x5e801` when the command word's type is not 9). It reads
+`RBX = *(RSI + 0x20)` (the command's stream context) and then `*(RBX + 0x10)` with `RBX` = 0. `RBX` is the *last `SetStreamSource` target* of the context
+(`state + 0x58`) and it is NULL when a `DrawIndexedPrimitive` comes with no stream bound: the command still claims vertices, and the loop crashes fetching them.
+
+Why no stream is bound: the renderer's command list is drawn by **two different functions, chosen by the previous command's type** (`CMP EDI/R12D,9`):
+- type 9 (the 3D scene) -> `0x5dde0` (or `0x5da10`), **rewritten** by the native renderer (`ngf_draw_*`);
+- type 0..8 (the 2D layer: HUD, console, debug draw, which run **after** every 3D scene of a frame, `0x5e620`'s non-9 branch) -> `0x642e0` / `0x64980`, **not
+  rewritten**, so its `SetStreamSource` / `SetIndices` / `DrawIndexedPrimitive` still go through the device pointer at `0x410fd20`, which the native renderer
+  leaves empty (`patch_sites()` bridges them to native steps, `w_4f380` acknowledges the sampler states). The `w_4f380` stub is what kept the crash from being
+  the first pointer: the stream itself is fine, the vertices are not.
+
+What changed in mode 11 that exposed it:
+1. `exp11frames=1` (the last uncommitted change): with one renderer frame per player, `0x453c0` runs **once per player** and resets the 2D state (`0x4e390`)
+   and the stream cache twice; player 2's `SetStreamSource` was in the *other* frame's context.
+2. `exp11lc=1`: player 2's `R_RenderScene` runs with the renderer's local-player global (`0x51deb8`) at 1 while the dispatcher and the command loops run in
+   the client frame; the 3D was ported with that number, the 2D was not.
+
+Before touching any of the two: the 2D command loop has to run without the game's Direct3D 9 device whether the frame is split or not, because the native
+renderer has no device at all. Check to run first (D3D11, `experiment=10`, one player view): if the console (`MW2COOP_NATCON=1`) or any 2D debug draw after the
+3D scene is drawn at all in a long run, the 2D path is fine and the crash is mode 11's frame split. If it crashes the same way, the 2D draw loop is the bug.
+
+## Checked in the game (2026-11-14 late, 64-bit, D:\coop-test\mw2-64, 1280x720)
+
+- **The committed mode 11 does not crash the way the evening's uncommitted change did.** With `exp11frames` stashed (HEAD `d6e43e9`), `[native] experiment=11`,
+  Trainer: two runs of 90 s and 300 s with no exception, "scenes 2 views 2" every frame, both players stepping. So the crash in `scr/pc_f1.txt` and its neighbours
+  (rva `0x645bd`, 21-30 s) comes from the last uncommitted change (one renderer frame per player), not from what is committed.
+- **The 2D command list of a frame never reaches the engine function in either mode on the native renderer.** With `[native] tracescene=1` (a QA trace of
+  `ngfr_453c0` and of `native_final2d_entry`) neither mode 11 nor mode 10 logs a single line, while the split screen runs (mode 10 composes, mode 11 draws both
+  views). So the renderer being copied by the native one is not entered the way this doc assumed: the functions of the Direct3D 9 back end that the native
+  renderer replaced are not all on the live path, and the 2D the player sees goes somewhere this trace does not cover. Next: find the caller of the 3D view
+  setup (`fn_484c0` / `fn_5c010`) and of the 2D dispatch table (rva `0x36f768`, no code reference to it) in the *running* process (a debugger breakpoint on
+  `ngfr_453c0` and on `0x5c010` shows who calls them), instead of reading static references.
+- Frame capture for QA of mode 11 on the game's own Direct3D 9: `[native] exp11raw=1;exp11rawat=<n>;exp11rawstep=<k>` saves `raw1-<n>.bmp` after player 1's draw.
+  It uses `shot_save_now` (the device's back buffer) and does not write a file yet: the "not saved" reason is not logged for it.
