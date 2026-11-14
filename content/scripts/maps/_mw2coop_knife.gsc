@@ -70,8 +70,46 @@ partner_wakeup_anim( node, rig, scene )
 	self Unlink();
 	rig Delete();
 	node Delete();
+	self unstick();
 	self FreezeControls( false );
 	self wounded_walk();
+	maps\_mw2coop::state( "knife fight: player 2 is free after the wake-up at " + self.origin );
+}
+
+// The wake-up animation carries the rig forward and up from where it starts: wakeup_offset() checks
+// the start, but the end can be inside something solid (issue 24: player 2 stood still after the
+// wake-up and could not walk; QA: neither his stick nor a push moved him, a teleport 40 units away
+// did). When his spot is solid he is put on the nearest free ground around it that player 1 can
+// see from where he stands.
+unstick()
+{
+	from = self.origin;
+	if ( !player_stuck_at( from ) )
+		return;
+	eye = level.player.origin + ( 0, 0, 40 );
+	for ( r = 16; r <= 160; r += 16 )
+	{
+		for ( a = 0; a < 360; a += 30 )
+		{
+			c = from + ( Cos( a ) * r, Sin( a ) * r, 0 );
+			ground = PlayerPhysicsTrace( c + ( 0, 0, 48 ), c - ( 0, 0, 72 ) );
+			if ( abs( ground[ 2 ] - from[ 2 ] ) > 40 || player_stuck_at( ground ) )
+				continue;
+			if ( !BulletTracePassed( eye, ground + ( 0, 0, 40 ), false, level.player ) )
+				continue;
+			self SetOrigin( ground );
+			maps\_mw2coop::state( "knife fight: player 2's wake-up spot " + from + " is solid, moved " + int( Distance( from, ground ) ) + " units to " + ground );
+			return;
+		}
+	}
+	maps\_mw2coop::state( "knife fight: player 2's wake-up spot " + from + " is solid and no free ground was found near it" );
+}
+
+// A player at pos cannot move: the player's box does not fit there (a short trace up does not leave it).
+player_stuck_at( pos )
+{
+	up = PlayerPhysicsTrace( pos + ( 0, 0, 1 ), pos + ( 0, 0, 12 ) );
+	return up[ 2 ] < pos[ 2 ] + 6;
 }
 
 // The wounded walk before the fight (player 1 has the level's own aftermath walk).
