@@ -167,3 +167,34 @@ renderer has no device at all. Check to run first (D3D11, `experiment=10`, one p
   `ngfr_453c0` and on `0x5c010` shows who calls them), instead of reading static references.
 - Frame capture for QA of mode 11 on the game's own Direct3D 9: `[native] exp11raw=1;exp11rawat=<n>;exp11rawstep=<k>` saves `raw1-<n>.bmp` after player 1's draw.
   It uses `shot_save_now` (the device's back buffer) and does not write a file yet: the "not saved" reason is not logged for it.
+
+## Which renderer the QA runs use (2026-11-15)
+
+Every run in the 2026-11-14 late session and tonight went through `tools/qa_native.sh`, which writes `[native] experiment=<n>` and nothing else: no `[display] directx11=1`,
+so the game's own **Direct3D 9** renderer is in use and `natboot` (the mod's rewritten back end) is not installed at all. Consequences:
+- The traces added tonight to `ngfr_453c0` / `native_final2d_entry` are silent in these runs because those functions are never called, not because the 2D path is broken. That
+  correction is the reason mode 11 "never reached the 2D list": the 2D list in a plain Direct3D 9 run is the engine's own, called by the engine's `0x453c0`, which the mod only
+  hooks to get `scene2d_hook` (`0xca523`-style hook set in `native.c`), not to replace.
+- Mode 10 (the compositor) and mode 11 in a plain Direct3D 9 run both show real, moving pictures (mode 10 composed both halves tonight, `scratch/native-last.png`), so the engine's
+  own frame path is intact in both.
+- To test the native renderers (the path where `patch_sites`, `ngf_*` and `exp11lc` matter), `MW2COOP_DISPLAY=directx11` must be added to the QA run: `qa_native.sh` has no switch
+  for `[display]` yet, and the last session's "mode 11 on the native renderer" claims were about `[native] experiment=11` with `MW2COOP_NATIVE11=1` in the environment.
+
+The next check is therefore: mode 11 with `directx11=1` (native), which is where player 1's top view was white/black and where the crash in `0x645bd` was found.
+
+## Mode 11 on the native Direct3D 11 renderer, measured (2026-11-15, `MW2COOP_DISPLAY="directx11=1"`)
+
+The QA runner now takes `MW2COOP_DISPLAY` (e.g. `directx11=1`) and writes the `[display]` section. With it, mode 11 in the Trainer:
+
+- **No crash in 100 s** (the whole run, the copy was killed by its timeout). The uncommitted `exp11frames` variant is still the one that died, not this.
+- **The back end is entered once per frame after the split starts** (`w_44d00`, `w_453c0`, `w_45060` move together, one per frame). So in mode 11 the engine does **not** run
+  the two-view loop of `0xB12` any more: the `end_frame_hook(flags=1)` between the two players' draws ends the first player's frame, `0x453c0` runs, and then the second player's
+  draw begins a frame of its own. Two whole renderer frames per engine frame, which is what `exp11frames` was reaching for and what the commit at `d6e43e9` does not do.
+- **Player 1's view (top half) is black** in the raw capture taken between the two players' draws (`shots/raw1-300.bmp`): the black covers the top half exactly and the picture
+  beneath it is the alpha-numeric overlay of that frame. Player 2's view (bottom) draws correctly. This is the "black/white top view" of the earlier notes, now with a picture of it.
+- Before the level, the same run renders the mission's briefing film and text correctly on Direct3D 11 (`native11/scene-9000.bmp`: the AC-130 city map, the Russian subtitles),
+  so the native renderer itself is sound; the fault is specific to the split.
+
+Open question that the picture narrows: the top half is not a wrongly-lit view, it is a **cleared** region — the black is laid over the frame the 2D layer is drawn on, so the first
+player's 3D pass, its post-process composite (`fn_484c0`) or the frame's clear writes black over exactly that rectangle. Next: print the view rectangle and the clear rectangle the
+frame's 3D pass uses for each of the two scenes (the pass's clear is already given the whole target for the first view, `split_smc_redirect`'s neighbour `native_scene_clear`).

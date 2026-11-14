@@ -1,10 +1,34 @@
 // The frame start and end functions of the native back end (0x44d00, 0x453c0), see natframe.h.
+#include <stdio.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include "natframe.h"
+#include "nat11.h"
 #include "../log.h"
 
 int ngfr_trace_scene; // QA: the frame end's preconditions are logged while set
+
+// QA (tracescene): the back end's frame end and the frame's 2D list are entered at all, and from where: every call to ngfr_453c0, its first 400; the stack's
+// return addresses into the game's image name the caller
+static void trace_entry(const char *what, unsigned n, uint8_t *exe)
+{
+	if (n > 400 && n % 400 != 0)
+		return;
+	void *fr[6];
+	const USHORT c = RtlCaptureStackBackTrace(1, 6, fr, NULL);
+	char line[200];
+	int len = snprintf(line, sizeof(line), "native: trace %s #%u from", what, n);
+	for (USHORT i = 0; i < c && len < (int)sizeof(line) - 12; i++) {
+		const uintptr_t off = (uintptr_t)fr[i] - (uintptr_t)exe;
+		len += snprintf(line + len, sizeof(line) - len, " %lx", (unsigned long)(off < 0x4000000 ? off : 0));
+	}
+	if (nat_log_hook)
+		nat_log_hook("%s", line);
+}
 
 #define AT(p, off) ((uint8_t *)(p) + (off))
 #define RD_PTR(p, off) (*(void **)AT(p, off))
@@ -97,6 +121,7 @@ static void reset_2d(ngfr_frame *x, uint8_t *scene)
 
 void ngfr_453c0(ngfr_frame *x)
 {
+	{ static unsigned n; if (ngfr_trace_scene) trace_entry("453c0", n++, x->f->exe); }
 	{ if (ngfr_trace_scene) { uint8_t *sc = RD_PTR(x->f->exe, G_SCENE); log_printf("native: 453c0 flags 0x%x scenes %u views %u mode %d viewsz %u", sc ? RD_U8(sc, 0x41a60) : 0, sc ? RD_U32(sc, 0x41a34) : 0, sc ? RD_U32(sc, 0x41a34) : 0, RD_I32(x->f->exe, G_SCENE_MODE), sc ? RD_U32(sc, 0x419e8) : 0); } }
 
 	uint8_t *e = x->f->exe;

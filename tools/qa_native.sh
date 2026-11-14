@@ -24,6 +24,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$HERE/close_test_copies
 	echo "[network]"
 	echo "port=28960"
 	echo
+	[ -n "${MW2COOP_DISPLAY:-}" ] && { echo "[display]"; echo "${MW2COOP_DISPLAY}" | tr ';' '
+'; echo; } # e.g. MW2COOP_DISPLAY="directx11=1"
 	echo "[native]"
 	if [ -z "${MW2COOP_MENU:-}" ] && [ -z "${MW2COOP_LOBBY:-}" ] && [ -z "${MW2COOP_PLAIN:-}" ]; then
 		echo "players=2"
