@@ -198,3 +198,20 @@ The QA runner now takes `MW2COOP_DISPLAY` (e.g. `directx11=1`) and writes the `[
 Open question that the picture narrows: the top half is not a wrongly-lit view, it is a **cleared** region — the black is laid over the frame the 2D layer is drawn on, so the first
 player's 3D pass, its post-process composite (`fn_484c0`) or the frame's clear writes black over exactly that rectangle. Next: print the view rectangle and the clear rectangle the
 frame's 3D pass uses for each of the two scenes (the pass's clear is already given the whole target for the first view, `split_smc_redirect`'s neighbour `native_scene_clear`).
+
+## The black top half: what is ruled out, with the logs (2026-11-15, native Direct3D 11, mode 11)
+
+Measured in the game (`clearlog=1`, `rslog=1`, `exp11raw=1`, 1280x720, Trainer):
+
+- **Both players' scenes are submitted**: `rslog after p1: lc 0 ... scenes 1 views 1`, then `rslog after p2: lc 1 second 1 ... scenes 2 views 2`. The per-player renderer
+  slot (`exp11lc`) is in effect, and the second scene is in the frame.
+- **The view rectangles are set as intended**: at the draw, `view rect 0.000 0.000 1.000 0.500 | cg view 0 0 1280 360 | picture 1280 720` (player 1's top half), and the cgame's
+  rectangle is the same.
+- **The clear the mod hooks (`0x5c484 -> 0x51070`) is not the 3D pass's clear.** Only 24 such clears happen in a run, all on the cgame draw thread, all with the same signature
+  (`flags 0x7 rgba 0 0 0 0 depth 1`, `view rect 0 0 1 1`, `cg view 0 0 0 0`) and always with `scene3d_pass` 0 or -1 — i.e. before the split's rectangles are in place, and never
+  from the front end's worker thread that runs the frame's 3D passes (`0x45690`/`0x456ee`, a data reference, so the call is indirect). The log in `php` from an earlier session
+  ("the 3D pass, `0x5c484`") names the wrong call: `0x5c620`, the function the `p1`/`p2` logs come from, is the one whose pieces the 3D pass runs, and its clear is reached
+  indirectly.
+- **Where the black is written is therefore still open**, but the candidates are now narrow: the front end's own frame clear (the `real clear` of the scene target, inside the
+  worker's pass), the post-process composite (`fn_484c0`), or the scene target's first switch by `reset_2d` (`ngfr_453c0`). The next instrument is inside `ngfr_453c0` and the
+  worker pass: log every `nd_clear` (the native device's clear) with its target and rectangle for two frames of the split, and compare with `raw1-*.bmp`.

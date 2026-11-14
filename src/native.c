@@ -2833,8 +2833,27 @@ static void scene3d_hook(void *slot)
 static void (*scene_clear_original)(void *, int, void *, float, int);
 static void scene_clear_hook(void *dev, int flags, void *rgba, float depth, int stencil)
 {
-	if (scene3d_pass > 0)
+	if (scene3d_pass > 0) {
+		if (CFG_ONCE("clearred", 0)) { // QA: the clear of the second scene is drawn as pure red, to see whether it covers a view
+			const float red[4] = {1.0f, 0.0f, 0.0f, 1.0f};
+			scene_clear_original(dev, flags, (void *)red, depth, stencil);
+			return;
+		}
 		return;
+	}
+	if (CFG_ONCE("clearlog", 0)) { // QA: which scene's clear runs, and over what
+		static unsigned n;
+		if (n++ < 24) {
+			uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+			const float *c = (const float *)rgba;
+			(void)dev;
+			log_printf("native: [x%d] clear scene %d (current %d) flags 0x%x rgba %.3f %.3f %.3f %.3f depth %g | view rect %.3f %.3f %.3f %.3f | cg view %.3f %.3f %.3f %.3f",
+				   (int)(GetCurrentThreadId() & 0xff), scene3d_pass < 0 ? -1 : scene3d_pass, fd ? *(int *)(fd + 0x41a30) : -1, flags, c ? (double)c[0] : 0.0, c ? (double)c[1] : 0.0, c ? (double)c[2] : 0.0,
+				   c ? (double)c[3] : 0.0, (double)depth, (double)((float *)(base + XR(0x3bd808)))[0], (double)((float *)(base + XR(0x3bd808)))[1],
+				   (double)((float *)(base + XR(0x3bd808)))[2], (double)((float *)(base + XR(0x3bd808)))[3], (double)((float *)(base + XR(0x43c630)))[0],
+				   (double)((float *)(base + XR(0x43c630)))[1], (double)((float *)(base + XR(0x43c630)))[2], (double)((float *)(base + XR(0x43c630)))[3]);
+		}
+	}
 	scene_clear_original(dev, flags, rgba, depth, stencil);
 }
 
@@ -3807,6 +3826,12 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		vrect[0] = 0, vrect[1] = 0, vrect[2] = 1, vrect[3] = 0.5f;
 		if (sw_px > 0 && sh_px > 0)
 			cvr[0] = 0, cvr[1] = 0, cvr[2] = sw_px, cvr[3] = sh_px / 2;
+		if (CFG_ONCE("clearlog", 0)) { // QA: the rectangles as they are set, once a second
+			static unsigned n;
+			if (n++ % 120 == 0)
+				log_printf("native: split rects p1: view rect %.3f %.3f %.3f %.3f | cg view %d %d %d %d | picture %d %d", (double)vrect[0], (double)vrect[1], (double)vrect[2],
+					   (double)vrect[3], cvr[0], cvr[1], cvr[2], cvr[3], sw_px, sh_px);
+		}
 		cg_draw_original(local_client, a, b);
 		if (CFG_ONCE("scenekeep", 0)) { // the scene's culling and light lists are finished by the front end's workers after the draw returns: wait for them, then keep its frame data
 			ctx_wait_workers();
