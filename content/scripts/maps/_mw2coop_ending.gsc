@@ -9,16 +9,34 @@ coop()
 	return maps\_mw2coop::is_campaign_coop();
 }
 
+// ending.gsc main(): the game sets "credits_1" when the player holds a weapon (a campaign that arrives from af_chase has
+// them; the Museum of the main menu has none). The players of a co-op session have the mod's loadout by then, so the Museum
+// chosen in the lobby would start the knife fight. The mode "free" the lobby shows is also lost on the way to the level
+// (a co-op session's scripts read only the dvars the DLL flags, control.c: ui_char_museum_mode reads empty): the lobby code
+// (menus.c) keeps the choice in mw2coop_museum, which is flagged, and it is "free" here. (af_chase sets "credits_1" itself when it leads here: the flag is cleared when read.)
+museum_free()
+{
+	return coop() && ( GetDvar( "mw2coop_museum" ) == "1" || GetDvar( "ui_char_museum_mode" ) == "free" );
+}
+
 // ending.gsc main(): the mode comes from ui_char_museum_mode, which af_chase's end sets to
 // "credits_1" (knife fight, then credits). In a co-op session the level script read it empty
 // (QA log), which sent the map to the free-roam museum with broken credits. A co-op campaign
-// session only reaches this map from af_chase, so any value but the menu's own modes is
-// "credits_1".
+// session only reaches this map from af_chase or from the lobby's Museum, so any value but the
+// menu's own modes is "credits_1" unless the lobby chose the Museum.
 museum_mode()
 {
 	mode = GetDvar( "ui_char_museum_mode" );
 	if ( !coop() )
 		return mode;
+	if ( GetDvar( "mw2coop_museum" ) == "1" )
+	{
+		SetDvar( "mw2coop_museum", "0" );
+		maps\_mw2coop::state( "ending: the lobby's Museum (ui_char_museum_mode read '" + mode + "')" );
+		mode = "free";
+		SetDvar( "ui_char_museum_mode", mode );
+		return mode;
+	}
 	if ( mode != "credits_1" && mode != "credits_2" && mode != "credits_black" && mode != "free" )
 	{
 		maps\_mw2coop::state( "ending: ui_char_museum_mode read '" + mode + "', using credits_1" );

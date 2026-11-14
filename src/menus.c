@@ -2197,6 +2197,14 @@ static void patch_lobby_mission(uint8_t *menu, int campaign)
 	// The selectable Endgame mission continues to use the original 'ending' -> 'af_chase'
 	// fallback; all other campaign mission mappings remain unchanged.
 	int museum = strcmp(map, "ending") == 0 && strcmp(museum_mode, "free") == 0;
+	{
+		// the game's mode dvar does not survive the way to the level (it reads empty there, issue 24: the Museum started the knife fight): the choice is kept in a dvar of the mod,
+		// which maps\_mw2coop_ending reads (and clears)
+		char kept[8] = "";
+		game_dvar_raw("mw2coop_museum", kept, sizeof(kept));
+		if ((kept[0] == '1') != (museum != 0))
+			game_cbuf_addtext(museum ? "set mw2coop_museum 1\n" : "set mw2coop_museum 0\n");
+	}
 	const char *shown = museum ? "museum" : (strcmp(map, "ending") == 0 ? "af_chase" : map);
 	char identity[128];
 	snprintf(identity, sizeof(identity), "%s|%s", map, museum_mode);

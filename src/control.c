@@ -136,7 +136,7 @@ static void script_request(const char *cmd)
 // as they exist (they keep 0x100, so script setdvar still works). The harness creates them
 // before the level starts, so both machines flag them before any script reads them.
 static const char *const synced_dvars[] = {"start", "mw2coop_god", "mw2coop_skill", "mw2coop_ff", "mw2coop_cp_start", "mw2coop_cp_pos",
-					   "mw2coop_qa", "mw2coop_qa_phase", "mw2coop_dbg_req"};
+					   "mw2coop_qa", "mw2coop_qa_phase", "mw2coop_dbg_req", "mw2coop_museum"};
 
 static void sync_dvar_flags(void)
 {

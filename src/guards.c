@@ -7,6 +7,11 @@
 // array cannot be read is replaced by an empty definition (its slots are all null: the entity is skipped, as the game does for a weapon without a model), and the
 // index is logged, which is what is still missing to find out how the table got that value.
 //
+// View weapon sway (rva 0x27f9e0, the cgame's per frame view/weapon offset calculation): it takes the weapon definition of the player's current weapon from the
+// table at rva 0x1b761f0 (32 entries, the function at 0x2805b0; entry 0 and the entries of weapons the level did not load stay null) and reads its sway fields (+0x1a0..0x1c0)
+// at once. Spec Ops snowmobile races (so_snowrace1/2_cliffhanger, Vlad, split screen, right after the load): the player's weapon is none or its index is outside the table,
+// the result is null or wild and the read faulted at rva 0x27ff89. The call at 0x27fa7e is wrapped: a result that is not readable becomes an all-zero definition (no sway).
+//
 // Removed entities (rva 0xb06a0, the cgame's loop over the local client's entities that are being removed, stride 0x1a8): for each one without a pointer at +0x20 the
 // loop fetches the entity's DObj (0x1fece0, handle word at +0x13e), sets its flag (0x299ee0), traces from it, spawns the effect and frees it (0x92c00). Split screen: both
 // contexts run as local client 0 and share the DObj table, so when both contexts remove the same entity the second finds no DObj, and the flag write faulted at 0x299ee0
@@ -165,6 +170,39 @@ static void *wdef_hook(uint64_t index)
 		log_printf("guards: the weapon definition of index %llu is %p, not a definition: the entity is skipped", (unsigned long long)index, def);
 	wdef_empty.slots = wdef_empty_slots;
 	return &wdef_empty;
+}
+
+static void (*sway_view_original)(uint64_t, const uint8_t *, float *, float *);
+static void sway_view_hook(uint64_t a, const uint8_t *b, float *c, float *d)
+{
+	// The per client state of the sway (rva 0x1b761a8, stride 0x38) has one entry, for local client 0; the next 0x38 bytes are the weapon definition table. A player state of client 1
+	// (the second player of a Spec Ops split screen) would read and write there. It is run as client 0: its own sway state then is the one entry (the player is the one of this view).
+	const int cn = *(const int *)(b + 4);
+	if (cn != 0) {
+		static LONG logged;
+		if (InterlockedIncrement(&logged) <= 3)
+			log_printf("guards: the view sway of client %d runs as client 0 (the state table has one entry)", cn);
+		int *slot = (int *)(b + 4);
+		*slot = 0;
+		sway_view_original(a, b, c, d);
+		*slot = cn;
+		return;
+	}
+	sway_view_original(a, b, c, d);
+}
+static void *(*sway_wdef_original)(const uint8_t *);
+static uint8_t sway_empty_def[0x800];
+static void *sway_wdef_hook(const uint8_t *weapon_state)
+{
+	const int index = *(const int *)(weapon_state + 4);
+	void *def = index >= 0 && index < 32 ? sway_wdef_original(weapon_state) : NULL;
+	zone_spans_refresh();
+	if (def && zone_readable(def, 0x400))
+		return def;
+	static LONG logged;
+	if (InterlockedIncrement(&logged) <= 8)
+		log_printf("guards: the view sway's weapon definition for weapon index %d is %p, not a definition: no sway", index, def);
+	return sway_empty_def;
 }
 #endif
 
@@ -407,6 +445,15 @@ void guards_install(void)
 		return;
 	}
 	log_printf("guards: weapon definition lookup %s", hook_call(site, (void *)wdef_hook, (void **)&wdef_original) ? "guarded" : "NOT guarded (no hook page)");
+	{
+		static const uint8_t sv[18] = {0x48, 0x8b, 0xc4, 0x89, 0x48, 0x08, 0x55, 0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57};
+		log_printf("guards: the view sway of the second client %s", hook_function(base + XR(0x27f9e0), sv, sizeof(sv), (void *)sway_view_hook, (void **)&sway_view_original) ? "is guarded" : "is NOT guarded (bytes differ)");
+	}
+	uint8_t *sway = base + XR(0x27fa7e); // call 0x1402805b0 (the weapon definition of the view sway)
+	if (sway[0] != 0xe8 || sway + 5 + *(int32_t *)(sway + 1) != base + XR(0x2805b0))
+		log_printf("guards: the view sway's weapon definition lookup is not as expected, not guarded");
+	else
+		log_printf("guards: the view sway's weapon definition lookup %s", hook_call(sway, (void *)sway_wdef_hook, (void **)&sway_wdef_original) ? "is guarded" : "is NOT guarded (no hook page)");
 #endif
 #ifndef _WIN64
 	if (!game_is_iw4x()) {

@@ -4,6 +4,13 @@ Co-op logic lives in mw2coop/scripts/maps/_mw2coop_ending.gsc.
 
 1. The map's mode: in co-op an unknown or empty ui_char_museum_mode means "credits_1" (from
    af_chase: knife fight, then credits).
+2. The Museum chosen in the lobby ("free") stays "free": the game forces "credits_1" for a player who holds any
+   weapon, and in a co-op session the players have the mod's loadout by then (the Museum started the knife fight).
+@@@ subst main
+if( isdefined( weapons ) && weapons.size )
+@@@ to
+if ( isdefined( weapons ) && weapons.size && !maps\_mw2coop_ending::museum_free() )
+@@@ end
 @@@ subst main
 level.level_mode =  getdvar( "ui_char_museum_mode" );
 @@@ to

@@ -12,7 +12,10 @@ M = 'maps\\_mw2coop_ending::'
 
 e = Patch(gsc_root, 'ending/maps/ending.gsc', out_dir)
 e.note('''1. The map's mode: in co-op an unknown or empty ui_char_museum_mode means "credits_1" (from
-   af_chase: knife fight, then credits).''')
+   af_chase: knife fight, then credits).
+2. The Museum chosen in the lobby ("free") stays "free": the game forces "credits_1" for a player who holds any
+   weapon, and in a co-op session the players have the mod's loadout by then (the Museum started the knife fight).''')
+e.subst('main', 'if( isdefined( weapons ) && weapons.size )', 'if ( isdefined( weapons ) && weapons.size && !' + M + 'museum_free() )')
 e.subst('main', 'level.level_mode =  getdvar( "ui_char_museum_mode" );', 'level.level_mode = ' + M + 'museum_mode();')
 e.write('ending.gsc.patch', '''
 mw2coop patch for maps/ending.gsc (ending: knife fight and museum credits, Modern Warfare 2,
