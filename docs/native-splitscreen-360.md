@@ -94,3 +94,8 @@ Each phase ends with something checkable in the game; the current design stays t
   wrongly (white / black). Cause (next): the scene set-up writes per-scene lighting into fields of the frame data that exist once (the sun at `+0x41a48..+0x41a54`,
   the sun shadow flag `+0x4195c`, `+0x41958`, the light list `+0x421e0` with entries at `+0x423b0` stride 0x1e0 and their shadow bits `+0x41970`): the last scene's
   win. Next: keep them per scene (saved after each scene's set-up, put back before its 3D pass), checked against the 360's scene set-up.
+- Tried (off by default, `[native] scenekeep=1`, `scenekeepparts=<bits>`): keeping the frame data block `+0x41940..+0x62980` per scene (saved after each scene's draw,
+  after the front end's workers finished: `ctx_wait_workers`) and putting it back before each 3D pass. Putting back the light list part (`+0x421e0..`) crashes at once
+  in the light loop (`0x64ac4`); without it there is no crash but player 1's view stays wrong (white / black). So the top view's problem is not (only) those fields.
+  Open: what else of the frame is built for one scene (the sun shadow cascades `0x659a0` per pass, the post-processing per view `0x484c0`, the 2D of player 1), to be
+  found in the 360's back end (its frame loop over scenes) instead of by trial.

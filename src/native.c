@@ -2724,6 +2724,54 @@ static void split_smc_redirect(uint8_t *fd)
 	*(uint32_t *)(fd + 0x41968) = (uint32_t)(bufs[k][1] - (fd + 0xd2f80));
 }
 
+// The scene set-up (0x8210 -> 0x5160) writes per-scene lighting into frame data fields that exist once (the sun +0x41a48..+0x41a54, the sun shadow flag +0x4195c, +0x41958,
+// the light list +0x421e0 / +0x423b0 with the shadow bits +0x41970, ...): with two scenes the last one's won and player 1's view was lit with player 2's values. The block
+// +0x41940..+0x62980 is kept after each scene's set-up (one copy per scene and per frame data set) and put back before that scene's 3D pass; the last scene's copy afterwards.
+#define FD_SCENE_LO 0x41940
+#define FD_SCENE_HI 0x62980
+static uint8_t *fd_scene_copy[2][4];
+static uint8_t *fd_scene_owner[2];
+static int fd_scene_set(uint8_t *fd)
+{
+	for (int k = 0; k < 2; k++)
+		if (fd_scene_owner[k] == fd)
+			return k;
+	for (int k = 0; k < 2; k++)
+		if (!fd_scene_owner[k]) {
+			fd_scene_owner[k] = fd;
+			return k;
+		}
+	return -1;
+}
+static void fd_scene_save(uint8_t *fd, unsigned scene)
+{
+	if (!fd || scene >= 4 || !CFG_ONCE("scenekeep", 0))
+		return;
+	const int k = fd_scene_set(fd);
+	if (k < 0)
+		return;
+	if (!fd_scene_copy[k][scene])
+		fd_scene_copy[k][scene] = HeapAlloc(GetProcessHeap(), 0, FD_SCENE_HI - FD_SCENE_LO);
+	if (fd_scene_copy[k][scene])
+		memcpy(fd_scene_copy[k][scene], fd + FD_SCENE_LO, FD_SCENE_HI - FD_SCENE_LO);
+}
+// what a scene's 3D pass reads of its own lighting: +0x41940..+0x41a30 (with the sun shadow flag, +0x41958, the shadow bits +0x41970), the sun +0x41a48..+0x41a58, the light
+// list +0x421e0..; the scene list, counters and flags in between (+0x41a30..+0x41a48, +0x41a58..+0x421e0) are the frame's and stay as they are
+static const uint32_t fd_scene_parts[][2] = {{0x41940, 0x41a30}, {0x41a48, 0x41a58}, {0x421e0, FD_SCENE_HI}};
+static int fd_scene_load(uint8_t *fd, unsigned scene)
+{
+	if (!fd || scene >= 4 || !CFG_ONCE("scenekeep", 0))
+		return 0;
+	for (int k = 0; k < 2; k++)
+		if (fd_scene_owner[k] == fd && fd_scene_copy[k][scene]) {
+			for (size_t p = 0; p < sizeof(fd_scene_parts) / sizeof(fd_scene_parts[0]); p++)
+				if (CFG_ONCE("scenekeepparts", 7) & (1 << p))
+				memcpy(fd + fd_scene_parts[p][0], fd_scene_copy[k][scene] + (fd_scene_parts[p][0] - FD_SCENE_LO), fd_scene_parts[p][1] - fd_scene_parts[p][0]);
+			return 1;
+		}
+	return 0;
+}
+
 // The back end's frame (rva 0x45690) draws the 3D of ONE scene, the one at the frame data's "current scene" (+0x41a30, the last scene submitted), at 0x456ee (call 0x5c620),
 // then the per-view composites and 2D (0x453c0). With two scenes in a frame (mode 11, both players drawn in it) only the last one got its 3D. Each scene of the frame
 // gets its 3D pass here, in order.
@@ -2739,12 +2787,21 @@ static void scene3d_hook(void *slot)
 	}
 	uint8_t *list = *(uint8_t **)(scene + 0x41a38);
 	const unsigned current = *(unsigned *)(scene + 0x41a30);
+	static uint8_t *entry_copy;
+	if (!entry_copy)
+		entry_copy = HeapAlloc(GetProcessHeap(), 0, FD_SCENE_HI - FD_SCENE_LO);
+	if (entry_copy)
+		memcpy(entry_copy, scene + FD_SCENE_LO, FD_SCENE_HI - FD_SCENE_LO); // the frame data as the back end found it: put back after the passes
+	int loaded = 0;
 	for (unsigned i = 0; i < count && i < 4; i++) {
+		loaded |= fd_scene_load(scene, i);
 		*(unsigned *)(scene + 0x41a30) = i; // the pass reads the "current scene" for some of its steps (0x4df70, 0x4e030)
 		scene3d_pass = i;
 		scene3d_original(list + (size_t)i * 0x13a0);
 	}
 	scene3d_pass = -1;
+	if (loaded && entry_copy)
+		memcpy(scene + FD_SCENE_LO, entry_copy, FD_SCENE_HI - FD_SCENE_LO);
 	*(unsigned *)(scene + 0x41a30) = current;
 }
 
@@ -2821,6 +2878,7 @@ static int ctx1_clc_synced; // ctx1_deliver_commands: the ring of context 1 has 
 static void ctx_swap(int to);
 void native_unswap_entities(void);
 static void ctx_after_draw(void);
+static void ctx_wait_workers(void);
 
 // Diagnostics ([native] scanplace=1, once at the first split frame): where the 2D placement keeps the screen scale. The values the placement holds for a 1920x1080 screen are looked for in the
 // game's image: the pair of floats (3.0, 2.25) (real pixels per virtual unit), (1/3, 0.4444), and the int pair (1920, 1080); every hit is logged with the floats around it.
@@ -3672,6 +3730,10 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 		if (sw_px > 0 && sh_px > 0)
 			cvr[0] = 0, cvr[1] = 0, cvr[2] = sw_px, cvr[3] = sh_px / 2;
 		cg_draw_original(local_client, a, b);
+		if (CFG_ONCE("scenekeep", 0)) { // the scene's culling and light lists are finished by the front end's workers after the draw returns: wait for them, then keep its frame data
+			ctx_wait_workers();
+			fd_scene_save(*(uint8_t **)(base + XR(0x410fd00)), 0);
+		}
 		if (ctx_on)
 			ctx_after_draw();
 		if (ctx1_ready) {
@@ -3692,6 +3754,10 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			second_pass = 1;
 			cg_draw_original(0, a, b);
 			second_pass = 0;
+			if (CFG_ONCE("scenekeep", 0)) {
+				ctx_wait_workers();
+				fd_scene_save(*(uint8_t **)(base + XR(0x410fd00)), 1);
+			}
 			if (no2d)
 				draw2d->current.enabled = (uint8_t)was2d;
 			ctx_swap(0);
