@@ -3683,13 +3683,52 @@ static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 			ctx_after_draw();
 		return;
 	}
-	sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 0.5f; // the top half
+	{ // [native] lccount=2 (phase A test): the engine's "how many local players" (rva 0x7ac10, mov eax,1; ret) answers 2, as the 360's does with two players
+		static int done;
+		const int want = CFG_ONCE("lccount", 0);
+		uint8_t *imm = base + XR(0x7ac10);
+		if (!done && want > 0 && imm[0] == 0xb8 && imm[5] == 0xc3) {
+			DWORD old;
+			VirtualProtect(imm, 6, PAGE_EXECUTE_READWRITE, &old);
+			*(int32_t *)(imm + 1) = want;
+			VirtualProtect(imm, 6, old, &old);
+			FlushInstructionCache(GetCurrentProcess(), imm, 6);
+			log_printf("native: phase A: the local player count answers %d", want);
+		}
+		done = 1;
+	}
+	float *vrect = (float *)(base + XR(0x3bd808)); // the per-player view rectangle (rva 0xbd520 returns it; normalised x, y, w, h): the 360 has one per local player
+	const int byrect = CFG_ONCE("exp1rect", 1);
+	if (byrect) {
+		sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 1;
+		vrect[0] = 0, vrect[1] = 0, vrect[2] = 1, vrect[3] = 0.5f;
+	} else
+		sw[0] = 0, sw[1] = 1, sw[2] = 0, sw[3] = 0.5f; // the top half
 	cg_draw_original(local_client, a, b);
-	sw[2] = 0.5f, sw[3] = 1; // the bottom half
+	if (byrect)
+		vrect[0] = 0, vrect[1] = 0.5f, vrect[2] = 1, vrect[3] = 0.5f;
+	else
+		sw[2] = 0.5f, sw[3] = 1; // the bottom half
+	{
+		uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+		static int n1;
+		if (fd && n1++ < 5)
+			log_printf("native: exp1 after draw 1: scenes %d views %d | viewport static %d %d %d %d / %g %g %g %g", *(int *)(fd + 0x41a34), *(int *)(fd + 0x419e8),
+				   ((int *)(base + XR(0x3bd808)))[0], ((int *)(base + XR(0x3bd808)))[1], ((int *)(base + XR(0x3bd808)))[2], ((int *)(base + XR(0x3bd808)))[3],
+				   (double)((float *)(base + XR(0x3bd808)))[0], (double)((float *)(base + XR(0x3bd808)))[1], (double)((float *)(base + XR(0x3bd808)))[2], (double)((float *)(base + XR(0x3bd808)))[3]);
+	}
 	second_pass = 1;
 	cg_draw_original(local_client, a, b);
 	second_pass = 0;
+	{
+		uint8_t *fd = *(uint8_t **)(base + XR(0x410fd00));
+		static int n2;
+		if (fd && n2++ < 5)
+			log_printf("native: exp1 after draw 2: scenes %d views %d", *(int *)(fd + 0x41a34), *(int *)(fd + 0x419e8));
+	}
 	memcpy(sw, saved, sizeof(saved));
+	if (byrect)
+		vrect[0] = 0, vrect[1] = 0, vrect[2] = 1, vrect[3] = 1;
 	static int logged;
 	if (!logged++)
 		log_printf("native: the first frame was drawn twice (top and bottom half)");

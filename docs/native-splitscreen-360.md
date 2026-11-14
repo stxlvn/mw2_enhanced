@@ -51,3 +51,23 @@ Each phase ends with something checkable in the game; the current design stays t
 - Phase A is the risky one (it is where experiment 1 stopped). The 360 binary shows working multi-view code next to the PC's stubs, which is what
   was missing on 2026-10-26.
 - Whether the PC renderer's per-view arrays have room for 2 views everywhere (the view array above has 5 entries) or some were cut to 1.
+
+## Phase A notes (2026-11-14)
+
+- Experiment 1 rerun with the current build (`[native] experiment=1`, Trainer, briefing skipped, 105 s): no crash any more, but no two views either: the
+  window shows ONE view stretched over the whole height, and the skinned models (soldiers, the weapons in their hands) have long broken triangles.
+  Experiment 1 drew both scenes as local client 0.
+- The renderer is built for several scenes per frame: `R_RenderScene` (rva `0x8210`, the refdef and a scene number) takes its scene number from a
+  per-frame counter (rva `0x4a40`: global at rva `0x41136f0`, also written to frame data `+0x41a30` / `+0x41a34`), appends a view slot (frame data
+  `+0x1100 + n * 0x150`, count at `+0x419e8`) and sets the scene up in its own slot (frame data `+0x41a38` array, stride `0x13a0`, rva `0x5160`).
+- So the second scene has its own slots; what breaks is shared per-frame data the second scene reuses: first suspect the skinned-model cache.
+- The cgame draw (rva `0xbca00`) calls begin-frame (`0xc840`) itself; the PC's screen update (`0xd5890`) calls the draw with a literal local player 0. A second
+  draw in the same frame must skip begin-frame (native.c `second_pass`, already there): then the frame holds 2 scenes and 2 views (logged: "scenes 2 views 2").
+- The back end draws every view of the frame whose type (`+0x1380` in the scene slot, set to 2 by `0x5160`) is 2 (`0x453c0`, ported as `ngfr_453c0`). Both
+  views were drawn, but over the whole screen: the view's rectangle comes from the per-player view rectangle (`0xbd520` -> rva `0x3bd808`, normalised
+  x, y, w, h = 0, 0, 1, 1), not from `r_subwindow`, which only moved the projection. With that rectangle set to the top half for the first draw and the bottom
+  half for the second (`[native] experiment=1`, `exp1rect=1`), the renderer draws two real views per frame, and crashes the way the October experiment did:
+  view index 1, in the cached static model loop (`0x63f50`, at `0x6400c`) after ~20 s; with `r_smc_enable 0` in the model instance loop (`0x63850`, at `0x63888`);
+  with the local player count at 2 (`[native] lccount=2`, the immediate of `0x7ac10`) still at `0x6400c`, after ~70 s. The bad addresses are small offsets:
+  a per-view list (the static model surfaces of the view) that is built for view 0 only.
+- Next: the front end's per-view static model data (visibility and cache), compared with the 360's (where each local player's view has its own).
