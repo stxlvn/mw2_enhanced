@@ -128,9 +128,12 @@
 //   groundpick - (native split screen, player 2 on a pad: MW2COOP_PAD=0; any level where player 2 holds a weapon) player 2 picks a weapon off the
 //              ground (Vlad 2026-11-21: "a weapon he picks up shows only after switching once or twice"): one of his weapons is taken from him and laid
 //              in front of him, his pad holds X (Use) on it; it must be in his hands without a switch of his own (frames gp-before, gp-after)
-//   deadpick - (native split screen, player 2 on a pad: MW2COOP_PAD=0; invasion) a weapon lying in the level (one player 2 lacks): player 2 is put beside
-//              it, looks at it and holds X; it must be his weapon in hands (frames dp-before, dp-after); player 1 takes it if player 2 could not (the item,
-//              or player 2's input?)
+//   deadpick - (native split screen with player 2 on a pad: MW2COOP_PAD=0, or a network pair: his client holds +activate; invasion) a weapon lying in the
+//              level (one player 2 lacks; none after 8 s: an AI near him dies by damage and drops one): player 2 is put beside it, looks at it and holds
+//              Use; it must be his weapon in hands (frames dp-before, dp-after; the hands logged frame by frame); player 1 takes it if player 2 could not
+//   deadpick3 - deadpick and three more pickups of the weapon lying nearest (the one he just dropped among them): each must stay in his hands 2.5 s
+//              later, and sync_weapons' empty-hands rule must not press his weapon key during one (a player's report, 2026-11-25: "the game switched
+//              the weapons he picked up")
 //   pingtest - (native split screen; invasion: enemies, cars, Humvees) the co-op markers (maps\_mw2coop_ping.gsc), the script's events given straight: player 1
 //              marks the ground in front (place), again on it (gone), twice quickly (danger), opens the wheel (frame ping-wheel), picks "watching" and lets go
 //              (a watch marker); then, as targets come in sight (90 s at most): player 2 marks an enemy (enemy, an anchor above him), the weapon he drops when
@@ -659,6 +662,8 @@ main()
 		case "groundpick":
 			groundpick();
 			break;
+		case "deadpick3":	// deadpick and three more pickups (the empty-hands rule must not switch his weapon in the middle of one)
+			level.mw2coop_qa_repeat = true;
 		case "deadpick":
 			deadpick();
 			break;
@@ -2987,6 +2992,73 @@ groundpick()
 	report( "done" );
 }
 
+// the nearest weapon item lying in the level that player p does not have (any classname weapon_*); undefined if none
+deadpick_nearest_item( p, max_dist )
+{
+	best = undefined;
+	foreach ( e in GetEntArray() )
+	{
+		if ( !isdefined( e.classname ) || e.classname.size <= 7 || GetSubStr( e.classname, 0, 7 ) != "weapon_" )
+			continue;
+		name = GetSubStr( e.classname, 7 );
+		if ( p HasWeapon( name ) || Distance( e.origin, p.origin ) > max_dist )
+			continue;
+		if ( !isdefined( best ) || Distance( e.origin, p.origin ) < Distance( best.origin, p.origin ) )
+			best = e;
+	}
+	return best;
+}
+
+// one more pickup for deadpick3: the nearest weapon lying on the ground that player 2 does not have
+deadpick_round( p, round )
+{
+	item = deadpick_nearest_item( p, 1500 );
+	w = undefined;
+	if ( isdefined( item ) )
+		w = GetSubStr( item.classname, 7 );
+	check( isdefined( item ), "round " + round + ": a weapon lies near player 2 that he does not have" );
+	if ( !isdefined( item ) )
+		return;
+	presses0 = maps\_mw2coop::int_or_zero( level.mw2coop_weapnext_presses );
+	fwd = AnglesToForward( ( 0, p GetPlayerAngles()[ 1 ], 0 ) );
+	p SetOrigin( PlayerPhysicsTrace( item.origin - fwd * 40 + ( 0, 0, 30 ), item.origin - fwd * 40 - ( 0, 0, 100 ) ) );
+	p SetPlayerAngles( VectorToAngles( item.origin - p GetEye() ) );
+	wait 0.8;
+	p thread deadpick_watch_hands( 6 );
+	for ( presses = 0; presses < 3 && !p HasWeapon( w ); presses++ )
+	{
+		if ( isdefined( item ) )
+			p SetPlayerAngles( VectorToAngles( item.origin - p GetEye() ) );
+		// both ways, always: a split screen reads his pad's QA dvar and ignores player 2's press(); a network pair's client presses +activate and
+		// never reads the pad dvar (mw2coop_native_split is set only by the menu's split screen, not by a QA run's settings.ini)
+		SetDvar( "mw2coop_qa_pad2", "0 0 0 0 16384 0 0 0" );	// X held: Use
+		press( p, "activate", 1200 );
+		wait 0.9;
+		SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
+		wait 0.6;
+	}
+	check( p HasWeapon( w ), "round " + round + ": player 2 picked " + w + " up (" + presses + " presses; " + weapons_text( p ) + ")" );
+	wait 2.5;
+	check( p GetCurrentWeapon() == w, "round " + round + ": " + w + " is in his hands 2.5 s later (" + p GetCurrentWeapon() + ")" );
+	presses1 = maps\_mw2coop::int_or_zero( level.mw2coop_weapnext_presses );
+	check( presses1 == presses0, "round " + round + ": nobody pressed his weapon key during the pickup (" + ( presses1 - presses0 ) + " presses)" );
+}
+
+// every change of the weapon in his hands, frame by frame, for s seconds (a pickup that leaves the hands "none" for a moment set off sync_weapons' empty-hands rule)
+deadpick_watch_hands( s )
+{
+	was = self GetCurrentWeapon();
+	report( "deadpick: hands at " + GetTime() + ": " + was );
+	for ( t = 0; t < s; t += 0.05 )
+	{
+		wait 0.05;
+		now = self GetCurrentWeapon();
+		if ( now != was )
+			report( "deadpick: hands at " + GetTime() + ": " + now + " (" + weapons_text( self ) + ")" );
+		was = now;
+	}
+}
+
 deadpick()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
@@ -3003,17 +3075,55 @@ deadpick()
 	names = strtok( "scar_h_reflex m4_grunt m4m203_reflex scar_h scar_h_acog famas_reflex tavor_reflex ak47 ak47_reflex m240 rpd ump45 mp5 aug_reflex fn2000_reflex beretta usp", " " );
 	item = undefined;
 	w = undefined;
-	foreach ( name in names )
+	for ( waited = 0; waited < 40 && !isdefined( item ) && !isdefined( deadpick_nearest_item( p, 100000 ) ); waited++ )	// (the ally whose weapon lies there dies in the opening scene, not always at the same moment)
 	{
-		if ( p HasWeapon( name ) )
-			continue;
-		found = GetEntArray( "weapon_" + name, "classname" );
-		foreach ( it in found )
-			if ( !isdefined( item ) || Distance( it.origin, p.origin ) < Distance( item.origin, p.origin ) )
+		if ( waited )
+			wait 1;
+		if ( waited == 8 )	// none yet: an AI near him dies by damage (its death animation drops the weapon; Kill() drops none)
+		{
+			victim = undefined;
+			seen = "";
+			foreach ( ai in GetAIArray() )
+				if ( Distance( ai.origin, p.origin ) < 4000 )
+				{
+					wname = "?";
+					if ( isdefined( ai.weapon ) )
+						wname = ai.weapon;
+					seen += ai.team + ":" + wname + ":" + isdefined( ai.magic_bullet_shield ) + ":" + int( Distance( ai.origin, p.origin ) ) + " ";
+				}
+			report( "deadpick: AI near player 2 (team:weapon:shielded:distance): " + GetAIArray().size + " in all; " + seen );
+			foreach ( ai in GetAIArray() )
+				if ( IsAlive( ai ) && !isdefined( ai.magic_bullet_shield ) && isdefined( ai.weapon ) && ai.weapon != "none" && Distance( ai.origin, p.origin ) < 2500
+					&& ( !isdefined( victim ) || Distance( ai.origin, p.origin ) < Distance( victim.origin, p.origin ) ) )
+					victim = ai;
+			if ( isdefined( victim ) )
 			{
-				item = it;
-				w = name;
+				report( "deadpick: no weapon lies: " + victim.classname + " with " + victim.weapon + " at " + int( Distance( victim.origin, p.origin ) ) + " units dies" );
+				dropped = victim.weapon;
+				victim DoDamage( victim.health + 1000, victim.origin );
+				wait 3;
+				if ( !is_in_array( names, dropped ) )
+					names[ names.size ] = dropped;
 			}
+		}
+		foreach ( name in names )
+		{
+			if ( p HasWeapon( name ) )
+				continue;
+			found = GetEntArray( "weapon_" + name, "classname" );
+			foreach ( it in found )
+				if ( !isdefined( item ) || Distance( it.origin, p.origin ) < Distance( item.origin, p.origin ) )
+				{
+					item = it;
+					w = name;
+				}
+		}
+	}
+	if ( !isdefined( item ) )	// any other weapon item lying in the level (placed by the map or dropped)
+	{
+		item = deadpick_nearest_item( p, 100000 );
+		if ( isdefined( item ) )
+			w = GetSubStr( item.classname, 7 );
 	}
 	check( isdefined( item ), "a weapon lies in the level that player 2 does not have" );
 	if ( !isdefined( item ) )
@@ -3030,16 +3140,21 @@ deadpick()
 	p SetPlayerAngles( VectorToAngles( item.origin - p GetEye() ) );
 	wait 0.5;
 	qa_shot( "dp-before" );
+	p thread deadpick_watch_hands( 12 );
 	presses = 0;
 	for ( presses = 0; presses < 4 && !p HasWeapon( w ); presses++ )
 	{
 		if ( isdefined( item ) )
 			p SetPlayerAngles( VectorToAngles( item.origin - p GetEye() ) );
 		wait 0.2;
+		// both ways, always: a split screen reads his pad's QA dvar and ignores player 2's press(); a network pair's client presses +activate and
+		// never reads the pad dvar (mw2coop_native_split is set only by the menu's split screen, not by a QA run's settings.ini)
 		SetDvar( "mw2coop_qa_pad2", "0 0 0 0 16384 0 0 0" );	// X held: Use
-		wait 1.2;
+		press( p, "activate", 1200 );
+		wait 0.9;
 		SetDvar( "mw2coop_qa_pad2", "0 0 0 0 0 0 0 0" );
 		wait 0.6;
+		report( "deadpick: after press " + ( presses + 1 ) + ": player 2 holds " + p GetCurrentWeapon() + "; " + weapons_text( p ) );
 	}
 	check( p HasWeapon( w ), "player 2 picked the dropped " + w + " up with Use (" + presses + " presses; " + weapons_text( p ) + ")" );
 	wait 1.5;
@@ -3060,6 +3175,15 @@ deadpick()
 		if ( level.player HasWeapon( w ) )
 			took = "took";
 		report( "deadpick: control: player 1 " + took + " the " + w + " (" + weapons_text( level.player ) + ")" );
+	}
+	// deadpick3: three more pickups, each time the weapon lying nearest (the one he just dropped among them); the empty-hands rule of sync_weapons must not
+	// press his weapon key in the middle of a pickup (level.mw2coop_weapnext_presses counts its presses)
+	if ( isdefined( level.mw2coop_qa_repeat ) )
+	{
+		for ( round = 2; round <= 4; round++ )
+		{
+			deadpick_round( p, round );
+		}
 	}
 	p SetPlayerAngles( ( 0, p GetPlayerAngles()[ 1 ], 0 ) );
 	wait 0.5;
@@ -4963,6 +5087,8 @@ heldweapons()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
 	empty = 0;
+	run = 0;
+	max_run = 0;
 	for ( i = 0; i < 20; i++ )
 	{
 		wait 2;
@@ -4972,6 +5098,9 @@ heldweapons()
 		if ( c1 != "none" && c2 == "none" && !level.player2 IsLinked() )
 		{
 			empty++;
+			run++;	// (sync_weapons answers empty hands after 1 s: one sample may fall in that second, two in a row may not)
+			if ( run > max_run )
+				max_run = run;
 			if ( GetDvar( "mw2coop_qa_try" ) == "1" && empty == 12 )
 			{
 				p2 = level.player2;
@@ -4993,8 +5122,10 @@ heldweapons()
 				report( "after his own weapnext (pad Y): p2 holds " + p2 GetCurrentWeapon() );
 			}
 		}
+		else
+			run = 0;
 	}
-	check( empty == 0, "player 2 never stood with empty hands while player 1 held a weapon (" + empty + " samples)" );
+	check( max_run < 2, "player 2 never stood with empty hands for two samples in a row while player 1 held a weapon (" + empty + " samples, " + max_run + " in a row)" );
 	report( "done" );
 }
 

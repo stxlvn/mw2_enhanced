@@ -745,6 +745,8 @@ specops_p2_hands()
 {
 	level endon( "special_op_terminated" );
 	empty = 0;
+	inv_was = undefined;
+	inv_at = 0;
 	for ( ;; )
 	{
 		wait 0.25;
@@ -752,17 +754,23 @@ specops_p2_hands()
 		if ( !isdefined( p ) )
 			continue;
 		weapons = p GetWeaponsListPrimaries();
+		inv = p GetWeaponsListAll();	// (his own pickup: the hands are "none" for about 350 ms between the dropped weapon and the new one; see sync_weapons)
+		if ( !isdefined( inv_was ) || !same_weapon_list( inv, inv_was ) )
+		{
+			inv_was = inv;
+			inv_at = GetTime();
+		}
 		in_air = ( isdefined( level.ac130player ) && level.ac130player == p ) || ( isdefined( level.chopperplayer ) && level.chopperplayer == p );
 		if ( p GetCurrentWeapon() == "none" && weapons.size > 0 && !in_air && !p IsLinked() && !is_downed( p ) && !isdefined( p.is_flying_missile )
-			&& !( isdefined( p.is_controlling_UAV ) && p.is_controlling_UAV ) )
+			&& !( isdefined( p.is_controlling_UAV ) && p.is_controlling_UAV ) && GetTime() - inv_at >= 2000 )
 		{
 			empty++;
-			if ( empty == 2 || empty % 12 == 0 )	// (a moment's empty hands are a switch in progress)
+			if ( empty % 12 == 4 )	// (a moment's empty hands are a switch in progress: 1 s, then every 3 s)
 			{
 				SetDvar( "mw2coop_p2_weapnext", GetTime() );
 				state( "Spec Ops: player 2's hands are empty: weapon key pressed for him" );
 			}
-			else if ( empty % 12 == 6 )
+			else if ( empty % 12 == 8 )
 				p SwitchToWeapon( weapons[ 0 ] );
 		}
 		else
@@ -897,19 +905,34 @@ sync_weapons()
 		// (also when both ride something and player 1 has his weapon there: the Gulag fly-in gives player 1 the scoped M14 to shoot from the helicopter, player 2 sat beside him with
 		// empty hands; owner, 2026-11-16: "the bottom player should get a weapon", "not only this level")
 		// (not while he flies the Predator: maps\_remotemissile unlinks him and turns his weapons off for the missile's flight, and gives his weapon back itself)
-		if ( level.player2 GetCurrentWeapon() == "none" && ( !level.player2 IsLinked() || level.player IsLinked() ) && !is_downed( level.player2 ) && !is_downed( level.player ) && level.player GetCurrentWeapon() != "none" && level.player2 GetWeaponsListPrimaries().size > 0
+		// (not in the middle of a weapon change of his own: a pickup from the ground leaves his hands "none" for about 350 ms between the weapon he drops and the
+		// one he takes, and the key pressed then switched him from the picked weapon to the next one: a player's friend "could not pick weapons up, the game
+		// switched them for him", 2026-11-25, QA deadpick3 with network co-op. The hands must stay empty for 1 s, and not within 2 s of a change of his weapons
+		// that player 1's did not share: his own pickup. A level's loadout changes both players' weapons in the same moment (the airport after the elevator:
+		// the saw goes, the machine gun comes) and is answered after 1 s, QA heldweapons. specops_p2_hands waits too.)
+		inv2 = level.player2 GetWeaponsListAll();
+		if ( !isdefined( level.mw2coop_p2_inv ) || !same_weapon_list( inv2, level.mw2coop_p2_inv ) )
+		{
+			if ( isdefined( level.mw2coop_p1_inv ) && same_weapon_list( now1, level.mw2coop_p1_inv ) )
+				level.mw2coop_p2_inv_at = GetTime();
+			level.mw2coop_p2_inv = inv2;
+		}
+		level.mw2coop_p1_inv = now1;
+		if ( level.player2 GetCurrentWeapon() == "none" && ( !level.player2 IsLinked() || level.player IsLinked() )
+			&& ( !isdefined( level.mw2coop_p2_inv_at ) || GetTime() - level.mw2coop_p2_inv_at >= 2000 ) && !is_downed( level.player2 ) && !is_downed( level.player ) && level.player GetCurrentWeapon() != "none" && level.player2 GetWeaponsListPrimaries().size > 0
 			&& !isdefined( level.player2.is_flying_missile ) && !( isdefined( level.player2.is_controlling_UAV ) && level.player2.is_controlling_UAV ) )
 		{
 			if ( !isdefined( level.mw2coop_empty_hands ) )
 				level.mw2coop_empty_hands = 0;
 			level.mw2coop_empty_hands++;
 			held = level.player GetCurrentWeapon();
-			if ( level.mw2coop_empty_hands == 1 || level.mw2coop_empty_hands % 12 == 0 )
+			if ( level.mw2coop_empty_hands % 12 == 4 )	// 1 s of empty hands, then every 3 s
 			{
 				SetDvar( "mw2coop_p2_weapnext", GetTime() );
+				level.mw2coop_weapnext_presses = int_or_zero( level.mw2coop_weapnext_presses ) + 1;	// (QA: deadpick counts the presses; a level variable, never a dvar each PC counts itself)
 				state( "player 2's hands are empty while player 1 holds " + held + ": weapon key pressed for him" );
 			}
-			else if ( level.mw2coop_empty_hands % 12 == 4 && level.player2 HasWeapon( held ) )
+			else if ( level.mw2coop_empty_hands % 12 == 8 && level.player2 HasWeapon( held ) )
 				level.player2 SwitchToWeapon( held );
 		}
 		else
@@ -923,6 +946,24 @@ sync_weapons()
 			prev2 = level.player2 GetWeaponsListAll();
 		}
 	}
+}
+
+// the same weapons in two lists (any order)
+same_weapon_list( a, b )
+{
+	if ( a.size != b.size )
+		return false;
+	foreach ( weapon in a )
+		if ( !is_in_array( b, weapon ) )
+			return false;
+	return true;
+}
+
+int_or_zero( v )
+{
+	if ( !isdefined( v ) )
+		return 0;
+	return v;
 }
 
 // The pistol the revive system hands a downed player who has none (maps\_coop player_coop_force_switch_to_pistol), not a weapon of the level's.
