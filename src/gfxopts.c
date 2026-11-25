@@ -11,6 +11,7 @@
 #include "log.h"
 #include "game.h"
 #include "menus_ui.h"
+#include "settings.h"
 
 #define ITEM_TYPE_SLIDER 10
 #define MENU_NAME_MAX 640
@@ -111,5 +112,10 @@ void gfxopts_tick(void)
 	if (*(int *)(ui + UI_COUNT_AT) <= 0)
 		return;
 	dumped = 1;
-	dump_options();
+	// The full menu dump is useful when a build's native UI differs, but it is only diagnostic
+	// data and adds almost 200 log writes during startup. Keep normal runs quiet; opt in with
+	// [native] gfxoptslog=1 when collecting a menu-layout report.
+	const char *ini = settings_ini_path();
+	if (ini && GetPrivateProfileIntA("native", "gfxoptslog", 0, ini))
+		dump_options();
 }

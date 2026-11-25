@@ -1111,10 +1111,9 @@ static int patch_pause_menu_main_selection_return(int *visible_route_mask)
 	return ready_mask; // bit 0: savegame_warning; bit 1: pausedmenu
 }
 
-// The button background/hitbox uses a full-screen client anchor so it is not offset by the
-// engine's safe-area origin. Text is drawn by a separate decoration item using the normal
-// centered anchor: this keeps glyphs at their native aspect/scale instead of stretching them
-// along with the fullscreen client rectangle.
+// The background and client hitbox use the same centered geometry. Text is drawn by a separate
+// decoration item at that same position, so it cannot become a second focus target or stretch
+// independently of the native button.
 static int selection_button_position(uint8_t *item, float screen_left, float width)
 {
 	const float draw_x = screen_left - 320.0f;
@@ -1123,7 +1122,7 @@ static int selection_button_position(uint8_t *item, float screen_left, float wid
 	float *client = (float *)(item + ITEM_RECT_CLIENT_Y - 4);
 	float *text_rect = (float *)(item + ITEM_TEXT_RECT);
 	int changed = rect[0] != draw_x || client[0] != client_x || rect[2] != width || client[2] != width ||
-		item[ITEM_RECT_ALIGN_H] != 2 || item[ITEM_RECT_CLIENT_ALIGN_H] != 4 ||
+		item[ITEM_RECT_ALIGN_H] != 2 || item[ITEM_RECT_CLIENT_ALIGN_H] != 2 ||
 		item[ITEM_RECT_ALIGN_V] != 3 || item[ITEM_RECT_CLIENT_ALIGN_V] != 3;
 	if (!changed)
 		return 0;
@@ -1175,8 +1174,8 @@ static void selection_button_clear_text(uint8_t *item)
 }
 
 // Clone the native Quit item as a background-only clickable button. Its own text is moved to a
-// companion decoration item with regular centered alignment, so the fullscreen hitbox cannot
-// stretch the label. All native hover/focus colors and click styling remain on this item.
+// companion decoration item at the same centered position, leaving all native hover/focus colors
+// and click styling on the clickable background.
 static uint8_t *selection_menu_button(uint8_t *quit_style, uint8_t *action_source, uint8_t *parent,
 				      const char *name, const char *fallback_action,
 				      float screen_left, float width)
@@ -1199,9 +1198,8 @@ static uint8_t *selection_menu_button(uint8_t *quit_style, uint8_t *action_sourc
 }
 
 // A text-only overlay cloned from Quit: preserve its font, text scale, horizontal text alignment,
-// foreground color and style, but no background or input handlers. Its two rectangles use the
-// regular centered anchor and therefore stay at the same X without inheriting the button hitbox's
-// fullscreen scaling.
+// foreground color and style, but no background or input handlers. Its draw and hit rectangles
+// share the same centered geometry as the background button.
 static uint8_t *selection_menu_button_label(uint8_t *quit_style, uint8_t *parent, const char *name,
 					    const char *text, float screen_left, float width)
 {
@@ -1227,6 +1225,42 @@ static uint8_t *selection_menu_button_label(uint8_t *quit_style, uint8_t *parent
 	*(uint32_t *)(item + ITEM_STATIC_FLAGS) |= WINDOW_FLAG_DECORATION;
 	selection_button_label_position(item, screen_left, width);
 	return item;
+}
+
+// Reassert the label's decoration-only state only when a newly loaded UI zone or another UI
+// patch actually changed it. This runs from the 250 ms menu tick, so writing the same fields
+// on every pass would add needless shared-memory traffic.
+static int selection_button_label_state(uint8_t *item, const char *text)
+{
+	int changed = 0;
+	if (*(const char **)(item + ITEM_TEXT) != text)
+		*(const char **)(item + ITEM_TEXT) = text, changed = 1;
+#define CLEAR_ITEM_POINTER(offset) do { \
+	void **slot = (void **)(item + (offset)); \
+	if (*slot) *slot = NULL, changed = 1; \
+} while (0)
+	CLEAR_ITEM_POINTER(ITEM_TEXT_EXP);
+	CLEAR_ITEM_POINTER(ITEM_BACKGROUND_PTR);
+	CLEAR_ITEM_POINTER(ITEM_MATERIAL_EXP_PTR);
+	CLEAR_ITEM_POINTER(ITEM_FLOAT_EXPS);
+	CLEAR_ITEM_POINTER(ITEM_DISABLED_EXP);
+	CLEAR_ITEM_POINTER(ITEM_DVAR);
+	CLEAR_ITEM_POINTER(ITEM_TYPE_DATA);
+	CLEAR_ITEM_POINTER(ITEM_ACTION);
+	CLEAR_ITEM_POINTER(ITEM_ACCEPT);
+	CLEAR_ITEM_POINTER(ITEM_ON_FOCUS);
+	CLEAR_ITEM_POINTER(ITEM_LEAVE_FOCUS);
+#undef CLEAR_ITEM_POINTER
+	if (*(int *)(item + ITEM_TYPE) != 0)
+		*(int *)(item + ITEM_TYPE) = 0, changed = 1;
+	if (*(int *)(item + ITEM_DATA_TYPE) != 0)
+		*(int *)(item + ITEM_DATA_TYPE) = 0, changed = 1;
+	if (*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) != WINDOW_VISIBLE)
+		*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) = WINDOW_VISIBLE, changed = 1;
+	uint32_t *static_flags = (uint32_t *)(item + ITEM_STATIC_FLAGS);
+	if (!(*static_flags & WINDOW_FLAG_DECORATION))
+		*static_flags |= WINDOW_FLAG_DECORATION, changed = 1;
+	return changed;
 }
 
 // main_selection uses menu-local ui_highlighted_game, not a global dvar. Mirror the card focus
@@ -1269,8 +1303,8 @@ static void patch_selection_instance(uint8_t *sel, uint8_t *main)
 		return;
 
 	// Four equal 144-unit slots with 8-unit gaps: [20,164], [172,316], [324,468], [476,620].
-	// The 600-unit group is centered in the 640-unit logical menu. The background hitboxes use
-	// HORIZONTAL_ALIGN_FULLSCREEN; their text overlays use HORIZONTAL_ALIGN_CENTER.
+	// The 600-unit group is centered in the 640-unit logical menu; backgrounds and labels use
+	// matching centered rectangles, with labels marked as decoration-only.
 	static const float button_width = 144.0f;
 	static const float button_left[4] = {20.0f, 172.0f, 324.0f, 476.0f};
 	static const char *const button_names[4] = {
@@ -1402,23 +1436,7 @@ static void patch_selection_instance(uint8_t *sel, uint8_t *main)
 			continue;
 		items = *(uint8_t ***)(sel + MENU_ITEMS);
 		uint8_t *label = items[at];
-		*(const char **)(label + ITEM_TEXT) = label_texts[i];
-		// Reassert text-only properties in case the UI zone kept an older clone of this item.
-		*(void **)(label + ITEM_BACKGROUND_PTR) = NULL;
-		*(void **)(label + ITEM_MATERIAL_EXP_PTR) = NULL;
-		*(MenuEventHandlerSet **)(label + ITEM_ACTION) = NULL;
-		*(MenuEventHandlerSet **)(label + ITEM_ACCEPT) = NULL;
-		*(MenuEventHandlerSet **)(label + ITEM_ON_FOCUS) = NULL;
-		*(MenuEventHandlerSet **)(label + ITEM_LEAVE_FOCUS) = NULL;
-		*(void **)(label + ITEM_FLOAT_EXPS) = NULL;
-		*(void **)(label + ITEM_DISABLED_EXP) = NULL;
-		*(void **)(label + ITEM_DVAR) = NULL;
-		*(void **)(label + ITEM_TYPE_DATA) = NULL;
-		*(int *)(label + ITEM_TYPE) = 0;
-		*(int *)(label + ITEM_DATA_TYPE) = 0;
-		*(void **)(label + ITEM_TEXT_EXP) = NULL;
-		*(uint32_t *)(label + ITEM_DYNAMIC_FLAGS) = WINDOW_VISIBLE;
-		*(uint32_t *)(label + ITEM_STATIC_FLAGS) |= WINDOW_FLAG_DECORATION;
+		layout_changed |= selection_button_label_state(label, label_texts[i]);
 		layout_changed |= selection_button_label_position(label, button_left[i], button_width);
 	}
 
@@ -3776,8 +3794,9 @@ __asm__(".text\n"
 extern char n32_player_info_stub[];
 #endif
 
-// Player 1 works the lobby; on a pad, his pad does it: a thread reads it 60 times a second and queues the keys a menu knows (mw2coop_menukey: the engine's key event,
-// rva 0xd0f80, on the main thread). D-pad / left stick: arrows (a held direction again after 400 ms, then every 120 ms), A: Enter, B: Escape. Back is the lobby's
+// Player 1 works the split-screen lobby; on a pad, his pad does it: while that lobby is active a thread reads it 60 times a second and queues the keys a menu knows
+// (mw2coop_menukey: the engine's key event, rva 0xd0f80, on the main thread). Outside that lobby it sleeps between 100 ms checks. D-pad / left stick: arrows (a held
+// direction again after 400 ms, then every 120 ms), A: Enter, B: Escape. Back is the lobby's
 // "give my device back" (instance.c).
 static void menukey_f(void)
 {
@@ -3800,9 +3819,16 @@ static DWORD WINAPI lobby_pad_thread(LPVOID unused)
 	WORD prev = 0;
 	DWORD repeat_at = 0;
 	for (;;) {
+		// This reader only drives the split-screen lobby. In an ordinary session (and once
+		// the split-screen game has started) avoid querying the device manager 60 times a second.
+		if (!InterlockedCompareExchange(&split_mode, 0, 0) || native_split_active()) {
+			seen = -1;
+			Sleep(100);
+			continue;
+		}
 		Sleep(16);
 		int pad = devices_menu_pad();
-		if (!split_mode || native_split_active() || pad < 0) {
+		if (pad < 0) {
 			seen = -1;
 			continue;
 		}

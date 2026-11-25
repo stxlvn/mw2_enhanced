@@ -127,16 +127,32 @@ static float view_fov(void)
 }
 #endif
 
+// The view/weapon FOV ratio is stable across the many projection and bolted-effect calls in a
+// frame. Cache it per thread: render/backend threads do not contend, and either dvar changing
+// invalidates only that thread's entry. The ADS blend below remains per call and per player.
+static float weapon_hip_scale(float view, float weapon)
+{
+	static _Thread_local float cached_view = -1.0f;
+	static _Thread_local float cached_weapon = -1.0f;
+	static _Thread_local float cached_scale = 1.0f;
+	if (view != cached_view || weapon != cached_weapon) {
+		cached_view = view;
+		cached_weapon = weapon;
+		cached_scale = tanf(view * 3.14159265f / 360.0f) / tanf(weapon * 3.14159265f / 360.0f);
+	}
+	return cached_scale;
+}
+
 // The weapon's scale k for a player (his ADS fraction, the zoom getter's last answer for him), or 0 when cg_weaponFov is 0 (the game's way)
 static float weapon_k(float ads, int player)
 {
 	const float g = weapon_fov ? weapon_fov->current.value : 0.0f;
-	if (g < 1.0f || g > 170.0f)
+	if (!(g >= 1.0f && g <= 170.0f))
 		return 0.0f;
 	const float f = view_fov();
-	if (f < 1.0f || f > 170.0f)
+	if (!(f >= 1.0f && f <= 170.0f))
 		return 0.0f;
-	const float k_hip = tanf(f * 3.14159265f / 360.0f) / tanf(g * 3.14159265f / 360.0f);
+	const float k_hip = weapon_hip_scale(f, g);
 	if (!(ads >= 0.0f && ads <= 1.0f))
 		ads = 0.0f;
 	float zoom = ads;

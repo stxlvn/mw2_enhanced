@@ -3548,6 +3548,14 @@ static void cg_draw_vis(unsigned local_client, int a, int b)
 static void cg_draw_hook_inner(unsigned local_client, int a, int b)
 {
 	cg_draw_count++;
+	// In ordinary single-player the hook only exists for the full-window aspect correction.
+	// Skip the split-screen bookkeeping and its many cached diagnostic switches on this hot
+	// per-frame path. npclog=2 deliberately opts back into the plain-game comparison trace.
+	if (!mode && !native_active && !ctx_on && CFG_ONCE("npclog", 0) < 2) {
+		cg_aspect_apply_full_window();
+		cg_draw_original(local_client, a, b);
+		return;
+	}
 	float *sw = subwindow();
 	if (split_on)
 		scan_place();

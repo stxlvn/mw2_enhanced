@@ -327,19 +327,30 @@ static DWORD WINAPI sdl_thread(LPVOID unused)
 	log_printf("pads: Xbox pads through XInput, other pads through SDL %d.%d.%d ([input] sdlpads=0 turns that off)", v / 1000000, v / 1000 % 1000, v % 1000);
 	DWORD last_enum = 0, last_look = 0, last_flush = 0;
 	for (;;) {
-		S.UpdateGamepads();
 		const DWORD now = GetTickCount();
-		if (!last_enum || now - last_enum >= 500) {
-			enumerate();
-			last_enum = now;
-		}
-		for (int i = 0; i < MAX_SDL; i++)
-			if (sp[i].used)
-				read_pad(&sp[i]);
 		int any_sdl = 0;
 		for (int i = 0; i < MAX_SDL; i++)
 			any_sdl |= sp[i].used;
-		if (now - last_look >= 20) {
+		if (!last_enum || now - last_enum >= 500) {
+			// SDL still needs an occasional state update to notice a newly attached device,
+			// but the empty-device case does not need a 62.5 Hz update loop.
+			if (!any_sdl)
+				S.UpdateGamepads();
+			enumerate();
+			last_enum = now;
+			any_sdl = 0;
+			for (int i = 0; i < MAX_SDL; i++)
+				any_sdl |= sp[i].used;
+		}
+		// With no SDL gamepad open, neither SDL state updates nor XInput-vs-SDL duplicate
+		// detection can change anything. Device discovery still runs every 500 ms above.
+		if (any_sdl) {
+			S.UpdateGamepads();
+			for (int i = 0; i < MAX_SDL; i++)
+				if (sp[i].used)
+					read_pad(&sp[i]);
+		}
+		if (any_sdl && now - last_look >= 20) {
 			pads_state_t real[4];
 			int real_on = 0;
 			// an empty XInput slot is the costly query: one that held no pad is asked again once a second, not every 20 ms (audit 2026-11-18, glue F10)
@@ -368,7 +379,7 @@ static DWORD WINAPI sdl_thread(LPVOID unused)
 			S.FlushEvents(0, 0xffffffffu);
 			last_flush = now;
 		}
-		Sleep(any_sdl ? 4 : 16); // (no SDL pad open: nothing to read at 250 Hz, audit 2026-11-18, glue F10)
+		Sleep(any_sdl ? 4 : 100); // no SDL pad: discover every 500 ms, without 62.5 Hz empty polling
 	}
 	return 0;
 }
