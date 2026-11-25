@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Network co-op: no more "out of sync" at every checkpoint after a restart** (a player's report, 2026-11-25, Cliffhanger over Steam: 32 resyncs in 15 minutes, then the level change to Airport broke the link). The scripts number their requests to the host's DLL with a dvar (mw2coop_cmd_n) that each PC counts by itself; when the host carried out a restart before the client had run that frame, the client's number stayed one lower, and from then on every checkpoint or restart request read a different number on the two PCs. The game's state hash takes every GetDvar read, so the watch saw a divergence (only that number differed: both logs' hash differences were exactly the string "17" against "18") and loaded the checkpoint again and again. The DLL now leaves that dvar's read out of the hash (the number decides nothing in the game).
+
 - **Single-player frame hook:** ordinary single-player now takes a short path through the cgame draw hook: it keeps the full-window aspect correction and original draw, while skipping split-screen bookkeeping and cached QA switches. `[native] npclog=2` still opts into the plain-game comparison trace.
 - **Menu patch idempotency:** fixed the horizontal client-alignment comparison that reported the main-selection row as changed on every 250 ms pass. Decorative button labels are now repaired only when their state actually differs, avoiding repeated writes and text-layout cache invalidation.
 - **Graphics-menu diagnostics:** the detailed options-menu layout dump is now opt-in with `[native] gfxoptslog=1`; normal startup no longer emits roughly 200 diagnostic log lines. The key is listed in the generated settings reference.

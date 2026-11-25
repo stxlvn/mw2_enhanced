@@ -316,6 +316,8 @@ god_mode()
 // keeps counting through restarts and levels (dvar mw2coop_cmd_n): GetTime() alone starts again
 // with each restart, and a request sent at the same level time as the last one (a restart from a
 // checkpoint, after the same 30 s twice; QA tour 2026-10-22) was the same value and was dropped.
+// The number counts on each PC by itself and can differ (a frame the host restarted from before the client ran it): it decides nothing, and the DLL keeps
+// GetDvar's read of it out of the games' state hash (src/netwatch.c nw_private_dvar). Never branch on it here.
 
 state( text )
 {

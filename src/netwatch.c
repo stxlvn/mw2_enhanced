@@ -90,7 +90,8 @@ enum { NOTE_NONE, NOTE_SILENT, NOTE_BACK, NOTE_DESYNC, NOTE_INSYNC, NOTE_RESYNC,
 // 0x231026, 0x23103b; 32 VA 0x42ecc0 at GetDvar's 0x4e4cd7, 0x4e4ce7). All are (value, file, line); on 32 bits cdecl, the caller pops. Each addition is kept in a ring
 // with the level time of the lockstep frame executed last; when the games go apart, both PCs write the additions of the step before the first differing frame to the
 // log (the client when it finds it, the host when the client tells it): the two logs side by side name the entity and the value. This diagnostic recorder is off by
-// default; [native] netwatchrec=1 enables its twelve call-site hooks and per-addition ring writes for a desync investigation.
+// default; [native] netwatchrec=1 enables its twelve call-site hooks and per-addition ring writes for a desync investigation (GetDvar's two are
+// hooked in any case: they keep the request number out of the hash, nw_private_dvar).
 // The byte that says the hash takes additions (64: rva 0x192d8f9, 32: VA 0x1a93324) is read where the int adder reads it: it begins with `cmp byte [addr], 0` (80 3d,
 // 64: rip+disp32, 32: an absolute address), so the resolver needs no signature for it. When the adder does not begin so, every call is recorded.
 #ifdef _WIN64
@@ -138,18 +139,37 @@ static void nw_add_vec(const int *v, const char *file, int line)
 	nw_record((uintptr_t)__builtin_return_address(0), v, 3, NULL);
 	nw_add_vec_original(v, file, line);
 }
+// The script's GetDvar adds the dvar's name, then its value (two calls in a row, no branch between: 64 0x231026 / 0x23103b, 32 VA 0x4e4cd7 / 0x4e4ce7). A dvar that
+// only carries the scripts' messages to this DLL and may hold another value on the other PC is left out of the hash, name and value: mw2coop_cmd_n, the requests'
+// number (maps\_mw2coop::send_requests reads it to number the next request). It counts on each PC by itself, and a PC that never executed a frame with a request
+// (the host carried out a "restart" before the client got to that frame) kept a number one lower for the rest of the process: from then on every checkpoint or
+// restart request was a "divergence" (only the number's string differed), and the resync loaded the checkpoint again and again (a friend's session, 2026-11-25:
+// Cliffhanger, 32 times, the airport's level change broke the link). The number decides nothing in the game.
+static uint32_t nw_getdvar_name_ret, nw_getdvar_value_ret; // the return addresses (rva) of GetDvar's two additions
+static int nw_skip_value;							   // the next value addition is left out (the main thread runs the scripts)
+static int nw_private_dvar(const char *s)
+{
+	return s && strcmp(s, "mw2coop_cmd_n") == 0;
+}
 static void (*nw_add_str_original)(const char *, const char *, int);
 static void nw_add_str(const char *s, const char *file, int line)
 {
+	const uint32_t ret = (uint32_t)((uintptr_t)__builtin_return_address(0) - (uintptr_t)base);
+	if (ret == nw_getdvar_value_ret && nw_skip_value) {
+		nw_skip_value = 0;
+		return;
+	}
+	nw_skip_value = 0;
+	if (ret == nw_getdvar_name_ret && nw_private_dvar(s)) {
+		nw_skip_value = 1;
+		return;
+	}
 	nw_record((uintptr_t)__builtin_return_address(0), NULL, 0, s);
 	nw_add_str_original(s, file, line);
 }
 static void nw_rec_install(void)
 {
-	if (!cfg("netwatchrec", 0)) {
-		log_printf("netwatch: detailed hash-addition recording is off ([native] netwatchrec=1 enables it)");
-		return;
-	}
+	const int rec = cfg("netwatchrec", 0);
 #ifdef _WIN64
 	uint8_t *const ints[] = {base + XR(0x1714d2), base + XR(0x171607), base + XR(0x17161d), base + XR(0x171633), base + XR(0x174a82), base + XR(0x174a98), base + XR(0x174ab0)};
 	uint8_t *const vecs[] = {base + XR(0x174ac9), base + XR(0x174ae2)};
@@ -160,13 +180,26 @@ static void nw_rec_install(void)
 	uint8_t *const strs[] = {base + XR(0xe4cd7), base + XR(0xe4ce7)};
 #endif
 	const int nstrs = (int)(sizeof(strs) / sizeof(strs[0]));
-	int ok = 0, want = 0;
-	for (size_t i = 0; i < sizeof(ints) / sizeof(ints[0]); i++, want++)
+	const int getdvar = nstrs - 2; // GetDvar's two string additions are the last two (the private dvars are left out of the hash also with netwatchrec=0)
+	int ok = 0, want = 0, getdvar_ok = 0;
+	for (size_t i = 0; rec && i < sizeof(ints) / sizeof(ints[0]); i++, want++)
 		ok += ints[i][0] == 0xe8 && *(const int32_t *)(ints[i] + 1) + (intptr_t)(ints[i] + 5) == (intptr_t)(base + NW_ADD_INT) && hook_call(ints[i], (void *)nw_add_int, (void **)&nw_add_int_original);
-	for (size_t i = 0; i < sizeof(vecs) / sizeof(vecs[0]); i++, want++)
+	for (size_t i = 0; rec && i < sizeof(vecs) / sizeof(vecs[0]); i++, want++)
 		ok += vecs[i][0] == 0xe8 && *(const int32_t *)(vecs[i] + 1) + (intptr_t)(vecs[i] + 5) == (intptr_t)(base + NW_ADD_VEC) && hook_call(vecs[i], (void *)nw_add_vec, (void **)&nw_add_vec_original);
-	for (size_t i = 0; i < sizeof(strs) / sizeof(strs[0]); i++, want++)
-		ok += strs[i][0] == 0xe8 && *(const int32_t *)(strs[i] + 1) + (intptr_t)(strs[i] + 5) == (intptr_t)(base + NW_ADD_STR) && hook_call(strs[i], (void *)nw_add_str, (void **)&nw_add_str_original);
+	for (int i = rec ? 0 : getdvar; i < nstrs; i++, want++) {
+		const int hooked = strs[i][0] == 0xe8 && *(const int32_t *)(strs[i] + 1) + (intptr_t)(strs[i] + 5) == (intptr_t)(base + NW_ADD_STR) && hook_call(strs[i], (void *)nw_add_str, (void **)&nw_add_str_original);
+		ok += hooked;
+		getdvar_ok += i >= getdvar && hooked;
+	}
+	if (getdvar_ok == 2) {
+		nw_getdvar_name_ret = (uint32_t)(strs[getdvar] + 5 - base);
+		nw_getdvar_value_ret = (uint32_t)(strs[getdvar + 1] + 5 - base);
+	}
+	log_printf("netwatch: the request number mw2coop_cmd_n %s", getdvar_ok == 2 ? "is left out of the hash" : "is NOT left out of the hash (GetDvar's additions not found)");
+	if (!rec) {
+		log_printf("netwatch: detailed hash-addition recording is off ([native] netwatchrec=1 enables it)");
+		return;
+	}
 	nw_ret_type = (uint32_t)(ints[4] + 5 - base);
 	for (int i = 0; i < nstrs; i++)
 		nw_ret_str[i] = (uint32_t)(strs[i] + 5 - base);
