@@ -8256,6 +8256,22 @@ DATA 0x3c4b38 img cap=4 delta=-1694 sig=CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 C
 DATA 0x3c4b38 img cap=24 delta=-1798 sig=C6 05 9E DE BB 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF
 DATA 0x3c4b38 img cap=24 delta=-1870 sig=C6 05 F6 E4 BB 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF
 DATA 0x3c4b38 img cap=4 delta=-1905 sig=8B 6C 24 50 ?? ?? ?? ?? 00 00 00 8B 05 6D F0 BD
+DATA 0x3c6800 rip cap=24 tail=4 delta=-4 sig=C6 05 7E 88 BB 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC
+DATA 0x3c6800 rip cap=4 tail=4 delta=12 sig=CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF C6 05 3E 89 BB 01 00 81
+DATA 0x3c6800 rip cap=4 tail=4 delta=-20 sig=CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF C6 05 7E 88 BB 01 00 81
+DATA 0x3c6800 rip cap=24 tail=4 delta=28 sig=C6 05 3E 89 BB 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC
+DATA 0x3c6800 rip cap=4 tail=4 delta=68 sig=CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF C6 05 1E 8C BB 01 00 81
+DATA 0x3c6800 rip cap=24 tail=4 delta=76 sig=FF C3 CC CC CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF
+DATA 0x3c6800 rip cap=4 tail=4 delta=92 sig=CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF C6 05 AE C2 BB 01 00 81
+DATA 0x3c6800 rip cap=24 tail=4 delta=108 sig=C6 05 AE C2 BB 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC
+DATA 0x3c6800 rip cap=24 tail=4 delta=132 sig=C6 05 06 CD BB 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC
+DATA 0x3c6800 rip cap=4 tail=4 delta=140 sig=CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF C6 05 FE CC BB 01 00 81
+DATA 0x3c6800 rip cap=24 tail=4 delta=156 sig=C6 05 FE CC BB 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC
+DATA 0x3c6800 rip cap=24 tail=4 delta=188 sig=C6 05 16 DF BB 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC
+DATA 0x3c6800 rip cap=4 tail=4 delta=196 sig=CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF C6 05 D6 DE BB 01 00 81
+DATA 0x3c6800 rip cap=24 tail=4 delta=212 sig=C6 05 D6 DE BB 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC
+DATA 0x3c6800 rip cap=24 tail=4 delta=236 sig=C6 05 9E DE BB 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC
+DATA 0x3c6800 rip cap=4 tail=4 delta=244 sig=CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF C6 05 F6 E4 BB 01 00 81
 DATA 0x3cf050 img cap=4 delta=304 sig=DA 89 84 37 ?? ?? ?? ?? 8B 42 2C 89 84 37 84 F1
 DATA 0x3cf050 img cap=4 delta=304 sig=F2 48 8D BD ?? ?? ?? ?? 4C 69 F3 80 0E 00 00 33
 DATA 0x3cf050 img cap=4 delta=308 sig=41 89 84 2E ?? ?? ?? ?? 8B 46 30 41 89 84 2E 88
@@ -9016,6 +9032,8 @@ DATA 0x1a2d270 rip cap=4 tail=4 delta=-804 sig=CC CC 81 25 ?? ?? ?? ?? FF FF 0F 
 DATA 0x1a2d270 rip cap=8 tail=4 delta=-804 sig=05 8E B1 A2 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC
 DATA 0x1a2d270 rip cap=4 tail=4 delta=1140 sig=CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF C6 05 C6 B8
 DATA 0x1a2d270 rip cap=8 tail=4 delta=1140 sig=05 C6 B8 A2 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC
+DATA 0x1a2d700 rip cap=4 tail=4 delta=-28 sig=CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF C6 05 C6 B8
+DATA 0x1a2d700 rip cap=8 tail=4 delta=-28 sig=05 C6 B8 A2 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC
 DATA 0x1a2f758 rip cap=4 tail=4 delta=84 sig=CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF C6 05 2E D9
 DATA 0x1a2f758 rip cap=8 tail=4 delta=84 sig=05 2E D9 A2 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC
 DATA 0x1a3ab00 rip cap=4 tail=4 delta=16 sig=7E 01 C7 05 ?? ?? ?? ?? 00 00 A0 43 C7 05 3D D7
@@ -9057,6 +9075,7 @@ DATA 0x1bbaad8 rip cap=4 tail=4 delta=68 sig=CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF
 DATA 0x1bbaad8 rip cap=8 tail=4 delta=68 sig=05 3E 89 BB 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC
 DATA 0x1bbab29 rip cap=4 tail=4 delta=-13 sig=CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF C6 05 3E 89
 DATA 0x1bbab29 rip cap=8 tail=4 delta=-13 sig=05 3E 89 BB 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC
+DATA 0x1bbf038 rip cap=4 tail=4 sig=57 C0 C7 05 ?? ?? ?? ?? 7F 00 00 01 0F 57 C9 F3
 DATA 0x1bc0a30 rip cap=4 tail=4 delta=-52 sig=CC CC 81 25 ?? ?? ?? ?? 00 00 00 FF C3 CC CC CC CC CC 48 8D
 DATA 0x1bc0a30 rip cap=4 tail=4 delta=-60 sig=CC CC 81 25 ?? ?? ?? ?? FF FF 0F FF C6 05 F6 E4
 DATA 0x1bc0a30 rip cap=8 tail=4 delta=-60 sig=05 F6 E4 BB 01 00 81 25 ?? ?? ?? ?? 00 00 F0 FF C3 CC CC CC

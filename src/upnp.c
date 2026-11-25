@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "game.h"
 #include "log.h"
 #include "settings.h"
 #include "upnp.h"
@@ -256,6 +257,76 @@ static int request_mapping(int lease, char *reply, int reply_size)
 	return soap("AddPortMapping", args, reply, reply_size);
 }
 
+// ---------------------------------------------------------------- the port in the Steam invite
+// A Steam invite gives the partner the address the host's game published in its Steam lobby, and the game takes the internet port of it from the IWNet
+// "ipdetect" reply: the port the ipdetect server saw the query come from. A router or a proxy that sends the query from another port puts a port in the
+// invite that nothing forwards: a player's router answered DNS with fake-IP addresses (198.18.0.0/15, a proxy on the router), the query went out from
+// port 47224, and the partner's coopConnect went to <host IP>:47224 for good while UPnP forwarded 28960 (2026-11-25; the same evening a join by the
+// lobby's rejoin, which uses the game's port, worked). With the game's port forwarded by UPnP and the ipdetect address the same as the router's, the
+// forwarded port is published instead, as the game does after its own UPnP (64-bit build, Ghidra):
+//   - the address record (rva 0x1bbf038; 0x28fe20 returns it): +0 this PC's address, +4 the internet address the ipdetect reply gave (0x28fca0, called
+//     by the reply handler 0x1b8c70), +8 the game's port, +0xa the internet port (host order);
+//   - the int at rva 0x3c6800: the internet port is confirmed (0x28fbf0); a later ipdetect reply then keeps it (0x28fca0). The game's own UPnP (0x1bccf0)
+//     sets the port (0x28fd20) and this flag;
+//   - LobbyCreated_t (0x240310) copies the record once into the IWSteamClient object (its pointer at rva 0x1a2d700: +0xd0 the lobby's id, +0xe0 copied,
+//     +0xe4 the copy, its internet port at +0xee) and sets the lobby data addrLoc, portLoc, addr and port (ISteamMatchmaking::SetLobbyData, vtable +0xa0).
+//     A lobby made before the forward was in place gets its "port" set again here.
+// Not on the 32-bit builds yet.
+#ifdef _WIN64
+#define XN_RECORD XR(0x1bbf038)
+#define XN_PORT_CONFIRMED XR(0x3c6800)
+#define STEAM_CLIENT_PTR XR(0x1a2d700)
+static void publish_forwarded_port(uint16_t port, uint32_t router_ip)
+{
+	uint8_t *exe = (uint8_t *)GetModuleHandleA(NULL);
+	if (!addr_resolved(0x1bbf038) || !addr_resolved(0x3c6800) || !addr_resolved(0x1a2d700)) {
+		log_printf("upnp: the game's address record was not found in this build: the invite keeps the port the ipdetect server saw");
+		return;
+	}
+	volatile uint32_t *ip = (volatile uint32_t *)(exe + XN_RECORD);	// [0] this PC, [1] the internet address
+	volatile uint16_t *ports = (volatile uint16_t *)(exe + XN_RECORD + 8); // [0] the game's port, [1] the internet port
+	for (int i = 0; i < 60 && !ip[1]; i++)					// the ipdetect reply comes a few seconds after the game starts
+		Sleep(250);
+	struct in_addr seen = {.s_addr = ip[1]}, router = {.s_addr = router_ip};
+	char seen_text[16] = "", router_text[16] = "";
+	inet_ntop(AF_INET, &seen, seen_text, sizeof(seen_text));
+	inet_ntop(AF_INET, &router, router_text, sizeof(router_text));
+	if (!ip[1]) {
+		log_printf("upnp: no ipdetect reply yet: the invite keeps the game's own port");
+		return;
+	}
+	if (ip[1] == ip[0])
+		return; // no NAT: the game publishes its own port
+	if (ip[1] != router_ip) {
+		log_printf("upnp: the ipdetect server saw %s, the router says %s: the invite keeps the port the server saw (%u)", seen_text, router_text, ports[1]);
+		return;
+	}
+	const uint16_t before = ports[1];
+	ports[1] = port;
+	*(volatile int32_t *)(exe + XN_PORT_CONFIRMED) = 1;
+	if (before != port)
+		log_printf("upnp: the invite's port is %u now (the ipdetect server saw %s:%u; the router forwards %u)", port, seen_text, before, port);
+	uint8_t *client = *(uint8_t *volatile *)(exe + STEAM_CLIENT_PTR);
+	if (!client || !*(volatile uint8_t *)(client + 0xe0) || !*(volatile uint64_t *)(client + 0xd0))
+		return; // no Steam lobby yet: it takes the record when it is made
+	if (*(volatile uint16_t *)(client + 0xee) == port)
+		return;
+	*(volatile uint16_t *)(client + 0xee) = port;
+	HMODULE steam = GetModuleHandleA("steam_api64.dll");
+	void *(*matchmaking)(void) = steam ? (void *(*)(void))GetProcAddress(steam, "SteamMatchmaking") : NULL;
+	void *mm = matchmaking ? matchmaking() : NULL;
+	char value[8];
+	snprintf(value, sizeof(value), "%u", port);
+	const int ok = mm && ((_Bool (*)(void *, uint64_t, const char *, const char *))(*(void ***)mm)[0xa0 / 8])(mm, *(volatile uint64_t *)(client + 0xd0), "port", value);
+	log_printf("upnp: the Steam lobby's port %s %u", ok ? "set again to" : "could NOT be set to", port);
+}
+#else
+static void publish_forwarded_port(uint16_t port, uint32_t router_ip)
+{
+	(void)port, (void)router_ip;
+}
+#endif
+
 static void add_mapping(void)
 {
 	char reply[4096];
@@ -283,6 +354,8 @@ static void add_mapping(void)
 	log_printf("upnp: UDP %u forwarded to %s; the router's internet address is %s%s", port, local_ip,
 		   ext[0] ? ext : "unknown",
 		   ext[0] && private_address(ext) ? " (a provider's private address: players on the internet cannot reach it, use Steam or a VPN)" : "");
+	if (ext[0] && !private_address(ext))
+		publish_forwarded_port(port, inet_addr(ext));
 }
 
 static void delete_mapping(void)
@@ -338,6 +411,21 @@ void upnp_want(int hosting)
 	SetEvent(wake);
 }
 
+#ifdef _WIN64
+static uint16_t qa_invite_port;
+static DWORD WINAPI qa_invite_worker(LPVOID unused)
+{
+	(void)unused;
+	while (!wanted)
+		WaitForSingleObject(wake, 5000);
+	uint8_t *exe = (uint8_t *)GetModuleHandleA(NULL);
+	for (int i = 0; i < 60 && addr_resolved(0x1bbf038) && !((volatile uint32_t *)(exe + XN_RECORD))[1]; i++)
+		Sleep(250);
+	publish_forwarded_port(qa_invite_port, addr_resolved(0x1bbf038) ? ((volatile uint32_t *)(exe + XN_RECORD))[1] : 0);
+	return 0;
+}
+#endif
+
 void upnp_install(void)
 {
 	// QA: test copies never change the router (MW2COOP_NOUPNP, set by tools/qa_pair.sh): a pair run on one PC needs no forward, and a real
@@ -346,6 +434,17 @@ void upnp_install(void)
 	WSAStartup(MAKEWORD(2, 2), &wsa); // (kept either way: other parts may count on Winsock being up)
 	if (GetEnvironmentVariableA("MW2COOP_NOUPNP", NULL, 0)) {
 		log_printf("upnp: off (MW2COOP_NOUPNP)");
+#ifdef _WIN64
+		// QA (MW2COOP_QA_INVITEPORT=<port>): no router; once this PC hosts, the invite's port is published as after a forward of <port> by a router
+		// whose internet address is the one the ipdetect reply gave
+		char qa[16];
+		if (GetEnvironmentVariableA("MW2COOP_QA_INVITEPORT", qa, sizeof(qa)) && atoi(qa) > 0 && atoi(qa) < 65536) {
+			qa_invite_port = (uint16_t)atoi(qa);
+			wake = CreateEventA(NULL, FALSE, FALSE, NULL);
+			CloseHandle(CreateThread(NULL, 0, qa_invite_worker, NULL, 0, NULL));
+			log_printf("upnp: QA: the invite's port is published as if the router forwarded %u", qa_invite_port);
+		}
+#endif
 		return;
 	}
 	wake = CreateEventA(NULL, FALSE, FALSE, NULL);
