@@ -157,19 +157,30 @@ static void register_dvars(void)
 {
 	if (registered)
 		return;
-	dvar_t *fov = game_find_dvar("cg_fov");
-	if (!game_find_dvar("com_maxfps") || !fov || fov->type != DVAR_TYPE_FLOAT) // wait until the game's dvars are registered
+	if (!game_find_dvar("com_maxfps")) // the game's dvar table is not there yet
 		return;
-	registered = 1;
 	// on a build whose addresses moved, a register function that was not found is a `ret` block handing back no dvar: the options stay at their defaults, as
 	// padopts.c does (audit 2026-11-18, menus F6)
 	if (!addr_resolved(REF_DVAR_REGISTER_BOOL) || !addr_resolved(REF_DVAR_REGISTER_FLOAT)) {
+		registered = 1;
 		log_printf("enhopts: the dvar register functions were not found in this build: the Enhanced options stay at their defaults");
 		return;
 	}
 	uint8_t *base = (uint8_t *)GetModuleHandleA(NULL);
 	dvar_t *(*reg_bool)(const char *, int, unsigned, const char *) = (void *)(base + RVA_DVAR_REGISTER_BOOL);
 	dvar_t *(*reg_float)(const char *, float, float, float, unsigned, const char *) = (void *)(base + RVA_DVAR_REGISTER_FLOAT);
+	// The field-of-view row is the game's cg_fov, and the game registers that with its cgame, when a level loads: in the main menu, where the page is reached, it
+	// did not exist, so the page waited for it and was never made (no Enhanced button in Settings since 2026-11-25; owner, 2026-11-26). Registered here as the
+	// game does it (rva 0xa7180: 65, 1..160, CHEAT | SAVED, its description), plus ARCHIVE so that the slider's angle is kept in players\config.cfg; the game's
+	// own registration later finds it and keeps its value and flags. A value from config.cfg (an external string dvar until then) is taken over.
+	dvar_t *fov = game_find_dvar("cg_fov");
+	if (!fov || fov->type != DVAR_TYPE_FLOAT) {
+		fov = reg_float("cg_fov", 65.0f, 1.0f, 160.0f, 0x44u | DVAR_ARCHIVE, "The field of view angle in degrees");
+		log_printf("enhopts: cg_fov registered for the page (%s, %.0f degrees)", fov && fov->type == DVAR_TYPE_FLOAT ? "float" : "FAILED", fov && fov->type == DVAR_TYPE_FLOAT ? fov->current.value : 0.0f);
+	}
+	if (!fov || fov->type != DVAR_TYPE_FLOAT)
+		return;
+	registered = 1;
 	const char *path = settings_ini_path();
 	for (int o = 0; o < OPTS; o++) {
 		const opt_t *t = &opts[o];
