@@ -664,6 +664,21 @@ main()
 		case "pingtest":
 			pingtest();
 			break;
+		case "fffail":
+			fffail();
+			break;
+		case "cpfavela":
+			cpfavela();
+			break;
+		case "fragbuf":
+			fragbuf();
+			break;
+		case "dogdrone":
+			dogdrone();
+			break;
+		case "cpflagfail":
+			cpflagfail();
+			break;
 		case "pingvoice":
 			pingvoice();
 			break;
@@ -8999,5 +9014,150 @@ ownswap()
 	report( "ownswap: after player 1's swap, player 1 has " + weapdrop_text( level.player ) + "| player 2 has " + weapdrop_text( level.player2 ) );
 	check( level.player2 HasWeapon( "beretta" ), "player 2 keeps his pistol" );
 	check( !level.player2 HasWeapon( "flash_grenade" ), "player 1's pickup stays his" );
+	report( "done" );
+}
+
+// fffail (any map with allies that can die, e.g. trainer): a failure's reason in the log. First a failure that sets no death quote of its own after one that
+// did (the log must not show the old one), then player 2 kills an ally: the mission fails for friendly fire, and the log names the script functions that
+// failed it ("netwatch: the mission is failed by ...") and what player 2 hit ("friendly fire: player 2 killed ...").
+fffail()
+{
+	wait_intro();
+	wait 3;
+	if ( GetDvar( "mw2coop_qa_phase" ) == "" )
+	{
+		SetDvar( "mw2coop_qa_phase", "ff" );
+		SetDvar( "ui_deadquote", "QA: an old quote" );
+		report( "fffail: a failure with a stale death quote set before it" );
+		maps\_utility::missionFailedWrapper();
+		return;
+	}
+	if ( GetDvar( "mw2coop_qa_phase" ) != "ff" )
+		return;
+	SetDvar( "mw2coop_qa_phase", "done" );
+	victim = undefined;
+	foreach ( ai in GetAIArray( "allies" ) )
+		if ( !isdefined( victim ) && !isdefined( ai.magic_bullet_shield ) )
+			victim = ai;
+	foreach ( ai in GetAIArray( "allies" ) )
+		if ( !isdefined( victim ) )
+			victim = ai;
+	if ( !isdefined( victim ) )
+	{
+		report( "fffail: no ally here" );
+		return;
+	}
+	report( "fffail: player 2 shoots " + victim.classname + " (bullet shield " + isdefined( victim.magic_bullet_shield ) + ")" );
+	victim notify( "friendlyfire_notify", 500, level.player2, ( 0, 0, 1 ), victim.origin, "MOD_RIFLE_BULLET", "m4_grunt" );	// (maps_friendlyfire::friendly_fire_think hears this; DoDamage does not reach a bullet-shielded hero)
+	wait 4;
+	report( "done" );
+}
+
+// Both PCs keep the flags of a checkpoint as maps\_mw2coop::snapshot_flags does (the names here, set at the checkpoint of start point <start>), then the level
+// restarts at its start point, as after a failure the checkpoint brought back (src/saves.c, "doomed") or after checkpoints that differ.
+cp_fake_snapshot( start, names )
+{
+	SetDvar( "mw2coop_cp_f0", names );
+	SetDvar( "mw2coop_cp_fn", 1 );
+	SetDvar( "mw2coop_cp_fname", level.script + " " + start );
+	SetDvar( "mw2coop_retry", "" );
+	maps\_mw2coop::request( "restart" );
+}
+
+// cpfavela (favela, start point "favela"): the owner's log 2026-11-26. After a restart at "favela" the flags kept at the checkpoint there were set again; start_chase
+// began the chase again with the runner far away and the mission failed 5 s in ("@FAVELA_RUNNER_GOT_AWAY"), again and again. Favela sets none of them again now
+// (maps\_mw2coop_checkpoints::no_flag_restore): after the restart the chase, Faust's first appearance and the chase's vision stay off and the mission goes on.
+cpfavela()
+{
+	wait_intro();
+	if ( GetDvar( "mw2coop_qa_phase" ) == "" )
+	{
+		wait 2;
+		SetDvar( "mw2coop_qa_phase", "restarted" );
+		report( "cpfavela: the checkpoint keeps the chase's flags; restart at '" + level.start_point + "'" );
+		cp_fake_snapshot( level.start_point, "start_chase visionset_chase runner_gets_away faust_appearance_1 dialog_watch_rooftops opening_scene_started" );
+		return;
+	}
+	if ( GetDvar( "mw2coop_qa_phase" ) != "restarted" )
+		return;
+	SetDvar( "mw2coop_qa_phase", "done" );
+	for ( t = 0; t < 40 && !level.mw2coop.failing; t++ )
+		wait 1;
+	check( level.start_point == "favela", "the restart was at the start point favela (" + level.start_point + ")" );
+	check( !level.mw2coop.failing, "the mission did not fail in the 40 s after the restart (" + t + " s)" );
+	foreach ( name in strtok( "start_chase visionset_chase faust_appearance_1", " " ) )
+		check( !flag( name ), "the flag " + name + " stays clear" );
+	check( !isdefined( level.runner ) || !isalive( level.runner ), "no runner" );
+	qa_shot( "favela" );
+	report( "done" );
+}
+
+// dogdrone (any level with co-op bodies, e.g. contingency): a dog's attack makes a stand-in of the player it knocks down as animscripts/dog/dog_combat playerDrone_create
+// does (a script model at the player's origin, given the player's model function): it must get that player's body (maps\_mw2coop::body_model). Owner's log
+// 2026-11-26, Contingency: it had no model, and the knock-down animations were script errors.
+dogdrone()
+{
+	wait_intro();
+	foreach ( n, player in level.players )
+	{
+		drone = Spawn( "script_model", player.origin );
+		drone [[ player.last_modelfunc ]]();
+		check( isdefined( drone.model ) && drone.model == player.mw2coop_body, "player " + ( n + 1 ) + "'s stand-in has his body ('" + drone.model + "', his '" + player.mw2coop_body + "')" );
+		drone Delete();
+	}
+	report( "done" );
+}
+
+// fragbuf (arcadia, with MW2COOP_QA_LATE_CLIENT "!sleep 30000;mw2coop_netpause 3000"): the owner's session 2026-11-26. The client sends nothing for 3 s, the host
+// sends it all the frames it has not acknowledged in one message, longer than the 0x1000 bytes the game's channel puts together (src/net.c coop_fragment_buffers):
+// the session must go on (the client's log: "a message of N bytes from the partner"; with MW2COOP_NOFRAGBUF the client ended it with COOP_HOSTTIMEOUT).
+fragbuf()
+{
+	wait_intro();
+	for ( t = 0; t < 50; t++ )
+	{
+		if ( level.players.size != 2 )
+			break;
+		wait 1;
+	}
+	check( level.players.size == 2, "two players for 50 s (" + t + " s)" );
+	report( "done" );
+}
+
+// cpflagfail (estate, start point "escape"): a failure that the level's own script makes soon after a restart that set the checkpoint's flags again drops those flags:
+// the level restarts at its start point without them (maps\_mw2coop::restored_flags_failed). Phase 1 keeps two flags the start function of "escape" does not set,
+// phase 2 checks that they were set again and fails the mission with a level's death quote, phase 3 checks that the restart set none.
+cpflagfail()
+{
+	wait_intro();
+	phase = GetDvar( "mw2coop_qa_phase" );
+	if ( phase == "" )
+	{
+		wait 2;
+		SetDvar( "mw2coop_qa_phase", "restored" );
+		report( "cpflagfail: the checkpoint keeps two flags; restart at '" + level.start_point + "'" );
+		cp_fake_snapshot( level.start_point, "deploy_house_defense_jeeps ghost_gives_regroup_order" );
+		return;
+	}
+	if ( phase == "restored" )
+	{
+		SetDvar( "mw2coop_qa_phase", "dropped" );
+		for ( t = 0; t < 5 && !isdefined( level.mw2coop_flags_restored_at ); t += 0.5 )
+			wait 0.5;
+		check( isdefined( level.mw2coop_flags_restored_at ), "the checkpoint's flags were set again after the restart" );
+		check( flag_exist( "deploy_house_defense_jeeps" ) && flag( "deploy_house_defense_jeeps" ), "deploy_house_defense_jeeps is set" );
+		wait 2;
+		report( "cpflagfail: the level fails the mission" );
+		SetDvar( "ui_deadquote", "@ESTATE_QA_LEVEL_FAILURE" );
+		maps\_utility::missionFailedWrapper();
+		return;
+	}
+	if ( phase != "dropped" )
+		return;
+	SetDvar( "mw2coop_qa_phase", "done" );
+	wait 3;
+	check( level.start_point == "escape", "the restart was at the start point escape (" + level.start_point + ")" );
+	check( GetDvar( "mw2coop_cp_fname" ) == "", "the checkpoint's flags are dropped ('" + GetDvar( "mw2coop_cp_fname" ) + "')" );
+	check( !isdefined( level.mw2coop_flags_restored_at ), "none were set again" );
 	report( "done" );
 }

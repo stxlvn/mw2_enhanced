@@ -31,6 +31,7 @@ is_specialop()
 
 	if ( maps\_mw2coop::is_campaign_coop() )
 	{
+		GetDvar( "mw2coop_failstack" );	// (the DLL logs the script functions that failed the mission: src/netwatch.c)
 		thread maps\_mw2coop::mission_failed();
 		return;
 	}

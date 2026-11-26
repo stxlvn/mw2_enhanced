@@ -169,6 +169,19 @@ static void nw_add_str(const char *s, const char *file, int line)
 		nw_skip_value = 1;
 		return;
 	}
+	if (ret == nw_getdvar_name_ret && s && strcmp(s, "mw2coop_failstack") == 0) {
+		// maps\_utility::missionFailedWrapper in co-op reads this dvar (patch _utility.gsc.patch 2) to name the script functions that failed the mission: a
+		// failure whose own death quote was not set showed the last failure's (a player's log, 2026-11-26: Arcadia failed with Favela's "the runner got away")
+		uint32_t where[4];
+		char f[4][80], line[400] = ""; // (the first callers only: further frames are not this thread's)
+		const int n = scrdebug_stack_offsets(where, 4);
+		for (int k = 1; k < n; k++) { // (0 is missionFailedWrapper itself)
+			scrdebug_stack_name(where[k], f[k], sizeof(f[k]));
+			if (f[k][0] && (k == 1 || strcmp(f[k], f[k - 1]) != 0)) // (a function that calls itself again, or a frame of the same one, once)
+				snprintf(line + strlen(line), sizeof(line) - strlen(line), "%s%s", line[0] ? " < " : "", f[k]);
+		}
+		log_printf("netwatch: the mission is failed by %s", line[0] ? line : "a script thread of its own (no caller on its stack)");
+	}
 	nw_record((uintptr_t)__builtin_return_address(0), NULL, 0, s);
 	nw_add_str_original(s, file, line);
 }
@@ -561,6 +574,21 @@ static void netpause_f(void)
 	InterlockedExchange(&pause_until, (LONG)(GetTickCount() + (DWORD)(ms > 0 ? ms : 5000)));
 	log_printf("netwatch: QA: nothing is sent to the partner for %d ms", ms > 0 ? ms : 5000);
 }
+// QA: mw2coop_netqa_recvpause <ms>: this PC reads none of the partner's game packets for that long (they are dropped; the game's out-of-band ones still come). A client
+// then waits for the host's frames in the engine's loop, which sends the host a packet each time round: the host's frames fill up with them, and the message that
+// carries the frames the client has not acknowledged grows past the game's fragment buffer (the owner's session 2026-11-26, after a briefing; src/net.c).
+static volatile LONG recv_pause_until;
+int netwatch_recv_paused(void)
+{
+	const LONG u = recv_pause_until;
+	return u && (LONG)(GetTickCount() - (DWORD)u) < 0;
+}
+static void netqa_recvpause_f(void)
+{
+	const int ms = atoi(game_cmd_argv(1));
+	InterlockedExchange(&recv_pause_until, (LONG)(GetTickCount() + (DWORD)(ms > 0 ? ms : 2500)));
+	log_printf("netwatch: QA: the partner's game packets are not read for %d ms", ms > 0 ? ms : 2500);
+}
 static void netqa_desync_f(void)
 {
 #ifdef _WIN64
@@ -580,6 +608,7 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_netnotice", NULL, NULL, notice_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_netpause", NULL, NULL, netpause_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_netqa_desync", NULL, NULL, netqa_desync_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_netqa_recvpause", NULL, NULL, netqa_recvpause_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_netqa_say", NULL, NULL, netqa_say_f CMD_NODE_FLAG},
 };
 

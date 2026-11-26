@@ -225,6 +225,16 @@ late_sections( level_name )
 	return [];
 }
 
+// Levels whose flags kept at a checkpoint are not set again after a restart at its start point (maps\_mw2coop restore_flags). Favela: every thread of the level
+// that waits on an earlier flag begins a scene the players left behind (start_chase: the chase with the runner, who got away at once and failed the mission, owner's
+// log 2026-11-26; visionset_chase / visionset_torture: the vision of the chase or the torture over the favela's; faust_appearance_1..4: Faust and the objective marker
+// on him behind the players, with a save each; the rooftop dialogue said again), and its start functions set what their own section needs: a session went from the
+// start "favela" to the end of the mission with none of them set again.
+no_flag_restore( level_name )
+{
+	return level_name == "favela";
+}
+
 // From maps\_mw2coop::main() in a co-op campaign session.
 watch_flags()
 {

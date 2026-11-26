@@ -44,6 +44,7 @@ static char partner_name[NAME_LEN]; // what the partner said his name is, "" unt
 static int lan_client;		    // this PC joined its lobby by address (mw2coop_join)
 static int lan_partner;		    // the partner said he joined by address
 static char last_sent[NAME_LEN];    // the name the partner was told in this session
+static int last_lan;		    // the last session that ended was a LAN one (kept for a rejoin of it)
 static const char *(THISCALL *persona_original)(void *self);
 
 // keeps what a name may hold: no control characters, and none of " \ ; that the console and the packets read as syntax
@@ -228,6 +229,17 @@ void nick_joined_by_address(void)
 	sync_name_dvar(nick_current());
 }
 
+// The rejoin after a break (menus.c, rejoin.c) joins the host by address as well, but it goes back into the session that broke: one made through Steam keeps the
+// Steam names (owner's log 2026-11-26, Exodus: after the rejoin the partner's card and name tag said "Player 2" instead of his Steam name).
+void nick_rejoined_by_address(void)
+{
+	if (lan_client || last_lan) {
+		nick_joined_by_address();
+		return;
+	}
+	log_printf("nick: back by address in a session made through Steam: the names stay (\"%s\")", nick_current());
+}
+
 // net.c: "mw2coop_nick <L|S> <name>" from the partner
 void nick_on_packet(const char *text)
 {
@@ -274,6 +286,7 @@ void nick_tick(void)
 		else if (!idle_since)
 			idle_since = GetTickCount() | 1;
 		else if (GetTickCount() - idle_since > 2000 && (lan_client || lan_partner || partner_name[0] || last_sent[0])) {
+			last_lan = lan_client || lan_partner;
 			lan_client = lan_partner = 0;
 			partner_name[0] = last_sent[0] = 0;
 			log_printf("nick: the session is over (the default name is \"%s\" again)", nick_current());
@@ -282,6 +295,7 @@ void nick_tick(void)
 		return;
 	}
 	idle_since = 0;
+	last_lan = lan_client || lan_partner; // (the kind of the session this PC is in, for a rejoin after a break)
 	const char *mine = nick_current();
 	sync_name_dvar(mine);
 	write_slot(is_host() ? 0 : 1, mine);

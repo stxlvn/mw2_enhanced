@@ -12,6 +12,8 @@ void nick_set(const char *text);
 void nick_clean(const char *in, char *out, size_t size);
 // party.c: this PC joins a lobby by address (a LAN session), before its connect
 void nick_joined_by_address(void);
+// party.c: the same for the rejoin after a break (rejoin.c): a session made through Steam stays one, with its names
+void nick_rejoined_by_address(void);
 // net.c: the partner's "mw2coop_nick <L|S> <name>"
 void nick_on_packet(const char *text);
 // the menus' tick (main thread)

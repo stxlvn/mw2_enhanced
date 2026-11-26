@@ -567,7 +567,7 @@ static void hs_sent(const char *buf, int len, const struct sockaddr *to)
 	if (len < 4 || *(const unsigned int *)buf == 0xffffffffu || !from_partner(to))
 		return;
 	EnterCriticalSection(&hs_lock);
-	if (menus_briefing_holds()) {
+	if (menus_briefing_holds() || netwatch_recv_paused()) { // (and QA mw2coop_netqa_recvpause, counted the same way)
 		hs.sent++;
 		hs.sent_bytes += len;
 		if (len > hs.sent_max)
@@ -673,10 +673,77 @@ static void learn_polled_socket(SOCKET s)
 		log_printf("net: the game's socket (port %u) learnt from its polling", (unsigned)ntohs(own.sin_port));
 }
 
+// The co-op connection's fragment buffers. The host sends the client every game frame the client has not acknowledged yet, up to 20, in one message (rva
+// 0x22f400; up to 0x4000 bytes, Netchan_Transmit 0x203200); a message longer than a packet comes in fragments that the client's channel puts together in its
+// fragment buffer. The engine gives that buffer 0x1000 bytes (Netchan_Setup 0x203190, called by coopAccept 0x22d460 with the static buffer 0x5421d8), and
+// Netchan_Process (0x202ff0) drops a message that does not fit without a word. Owner's session 2026-11-26, Exodus: the client's briefing waited 2 s for the
+// host's, the host's frames of those 2 s made a message of 4937 bytes (Arcadia's opening street, its vehicles and soldiers), and the client dropped it each time
+// the host sent it again: no new frame came for 10 s and the engine ended the session (COOP_HOSTTIMEOUT, 0x22e7a0). Other levels' messages after a briefing
+// stayed under 0x1000 (3940 bytes at most in that session's log). Each slot's channel gets a buffer of 0x4000, the most the host can send; the 32-bit game
+// has the same channel (0x48f550 + slot * 0x263c, buffer at +0x2c, size +0x30; Netchan_Process 0x4a76c0). Netchan_Setup puts the small buffer back at each
+// connection: this runs before every packet the game reads (only the game's main thread reads the game's socket, and only that thread processes the channels).
+#ifdef _WIN64
+#define COOP_CHAN_REF 0x540ba0u // netchan_t of member slot 0 (the host)
+#define COOP_CHAN_OFS 0
+#define COOP_CHAN_STRIDE 0x2650
+#define CHAN_FRAG_LEN 0x28  // int fragmentLength (bytes put together so far)
+#define CHAN_FRAG_BUF 0x30  // byte *fragmentBuffer
+#define CHAN_FRAG_SIZE 0x38 // int fragmentBufferSize
+#else
+#define COOP_CHAN_REF 0x48f560u // the type field of slot 0's address, 0x10 into its netchan_t (the address the iw4x-sp table knows)
+#define COOP_CHAN_OFS (-0x10)
+#define COOP_CHAN_STRIDE 0x263c
+#define CHAN_FRAG_LEN 0x28
+#define CHAN_FRAG_BUF 0x2c
+#define CHAN_FRAG_SIZE 0x30
+#endif
+#define COOP_FRAG_SMALL 0x1000
+#define COOP_FRAG_BIG 0x4000
+
+static void coop_fragment_buffers(void)
+{
+	static uint8_t big[2][COOP_FRAG_BIG];
+	static int usable = -1;
+	if (usable < 0) // (QA: MW2COOP_NOFRAGBUF leaves the game's buffers, to see the failure)
+		usable = addr_resolved(COOP_CHAN_REF) && !GetEnvironmentVariableA("MW2COOP_NOFRAGBUF", NULL, 0);
+	if (!usable)
+		return;
+	uint8_t *const img = (uint8_t *)GetModuleHandleA(NULL);
+	for (int i = 0; i < 2; i++) {
+		uint8_t *const chan = img + XR(COOP_CHAN_REF) + COOP_CHAN_OFS + i * COOP_CHAN_STRIDE;
+		int *const size = (int *)(chan + CHAN_FRAG_SIZE);
+		uint8_t **const buf = (uint8_t **)(chan + CHAN_FRAG_BUF);
+		if (*size != COOP_FRAG_SMALL || !*buf || *buf == big[i])
+			continue;
+		const int have = *(int *)(chan + CHAN_FRAG_LEN);
+		if (have > 0 && have <= COOP_FRAG_SMALL)
+			memcpy(big[i], *buf, (size_t)have); // (a message half put together goes on in the new buffer)
+		*buf = big[i];
+		*size = COOP_FRAG_BIG;
+		static volatile LONG told[2];
+		if (InterlockedIncrement(&told[i]) <= 3)
+			log_printf("net: the co-op channel of slot %d puts messages together in 0x%x bytes (the game's 0x%x)", i, COOP_FRAG_BIG, COOP_FRAG_SMALL);
+	}
+}
+
+// The last fragment of a message from the partner (netchan header: long sequence with bit 31 for a fragment, long start, short length; a fragment shorter than
+// 1300 bytes ends the message): a message longer than the game's own fragment buffer is logged (the first few), the case coop_fragment_buffers is for.
+static void note_long_message(const char *buf, int len, const struct sockaddr *from)
+{
+	if (len < 10 || *(const unsigned *)buf == 0xffffffffu || !(*(const unsigned *)buf & 0x80000000u) || !from_partner(from))
+		return;
+	const int start = *(const int *)(buf + 4), flen = *(const uint16_t *)(buf + 8);
+	static volatile LONG logged;
+	if (flen < 1300 && start + flen > COOP_FRAG_SMALL && InterlockedIncrement(&logged) <= 8)
+		log_printf("net: a message of %d bytes from the partner in %d fragments (more than the game's 0x%x)", start + flen, start / 1300 + 1, COOP_FRAG_SMALL);
+}
+
 static int WINAPI my_recvfrom(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen)
 {
 	if (game_socket == INVALID_SOCKET)
 		learn_polled_socket(s);
+	if (s == game_socket)
+		coop_fragment_buffers();
 	if (hold_count && !(flags & MSG_PEEK)) {
 		EnterCriticalSection(&hold_lock);
 		if (hold_count) {
@@ -691,13 +758,21 @@ static int WINAPI my_recvfrom(SOCKET s, char *buf, int len, int flags, struct so
 			hold_count--;
 			LeaveCriticalSection(&hold_lock);
 			hs_read(buf, n, from);
+			note_long_message(buf, n, from);
 			return n;
 		}
 		LeaveCriticalSection(&hold_lock);
 	}
 	int r = recv_filtered(s, buf, len, flags, from, fromlen);
-	if (r > 0 && !(flags & MSG_PEEK))
+	while (r >= 4 && !(flags & MSG_PEEK) && *(const unsigned *)buf != 0xffffffffu && netwatch_recv_paused() && from_partner(from)) {
+		r = recv_filtered(s, buf, len, flags, from, fromlen); // (QA mw2coop_netqa_recvpause: the partner's game packets are dropped)
+		if (r <= 0)
+			return r;
+	}
+	if (r > 0 && !(flags & MSG_PEEK)) {
 		hs_read(buf, r, from);
+		note_long_message(buf, r, from);
+	}
 	return r;
 }
 
@@ -707,7 +782,7 @@ static DWORD WINAPI hold_drain_thread(LPVOID unused)
 	for (;;) {
 		Sleep(5);
 		const int holding = menus_briefing_holds();
-		hs_tick(holding);
+		hs_tick(holding || netwatch_recv_paused());
 		if (!holding)
 			continue;
 		EnterCriticalSection(&peer_lock);

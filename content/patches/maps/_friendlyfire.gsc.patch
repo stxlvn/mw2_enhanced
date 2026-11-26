@@ -1,0 +1,13 @@
+mw2coop patch for maps/_friendlyfire.gsc (Modern Warfare 2, 64-bit Steam build)
+Outside a co-op campaign session the change does nothing (maps\_mw2coop::ff_note returns).
+
+1. A player's damage to a friendly or a civilian is noted for the log: when the mission fails for
+   friendly fire, the log says who hurt or killed whom with what (a player's log, 2026-11-26:
+   Cliffhanger failed for friendly fire three times right after its start, with nothing to show
+   what was hit).
+@@@ subst friendly_fire_think
+		friendly_fire_checkPoints( civilianKilled );
+@@@ to
+		maps\_mw2coop::ff_note( entity, attacker, damage, method, weaponName, killed );
+		friendly_fire_checkPoints( civilianKilled );
+@@@ end

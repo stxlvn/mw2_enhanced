@@ -502,9 +502,31 @@ static void w_242a0(void)
 }
 static int w_2a0a0_dummy;
 
+// Windows' pointer probes (IsBadReadPtr and the rest) read the address and catch the access violation themselves: a first-chance exception that is no fault. The engine
+// probes a string so when a session ends (owner's log 2026-11-26: "exception c0000005 at KERNEL32.DLL+0x2ffba (access address ffffffffffffffff)" right before each
+// COOP_HOST_END_GAME, IsBadStringPtrA), and the line read as a crash.
+static int in_pointer_probe(uintptr_t ip)
+{
+	static uintptr_t probes[5];
+	static int got;
+	if (!got) {
+		static const char *const names[5] = {"IsBadReadPtr", "IsBadWritePtr", "IsBadStringPtrA", "IsBadStringPtrW", "IsBadCodePtr"};
+		HMODULE k = GetModuleHandleA("kernel32.dll");
+		for (int i = 0; i < 5; i++)
+			probes[i] = k ? (uintptr_t)GetProcAddress(k, names[i]) : 0;
+		got = 1;
+	}
+	for (int i = 0; i < 5; i++)
+		if (probes[i] && ip >= probes[i] && ip < probes[i] + 0x100)
+			return 1;
+	return 0;
+}
+
 static LONG CALLBACK veh(EXCEPTION_POINTERS *x)
 {
 	const DWORD c = x->ExceptionRecord->ExceptionCode;
+	if (c == EXCEPTION_ACCESS_VIOLATION && in_pointer_probe((uintptr_t)x->ExceptionRecord->ExceptionAddress))
+		return EXCEPTION_CONTINUE_SEARCH;
 	if (c == EXCEPTION_ACCESS_VIOLATION || c == EXCEPTION_ILLEGAL_INSTRUCTION || c == EXCEPTION_INT_DIVIDE_BY_ZERO || c == EXCEPTION_STACK_OVERFLOW) {
 		static LONG n;
 		if (InterlockedIncrement(&n) <= 8) {
@@ -594,16 +616,24 @@ static DWORD WINAPI monitor(LPVOID arg)
 {
 	(void)arg;
 	LONG last[sizeof(hits) / sizeof(hits[0])] = {0};
+	// The counters every 0.5 s were a debugging aid: two lines each time, all game long (the owner's log of 2026-11-26: 13 MB, most of it these). They come every
+	// 5 minutes now, and every 0.5 s again with MW2COOP_NATIVE11_LOG set; a new reason for a refused draw is still logged at once.
+	const int verbose = GetEnvironmentVariableA("MW2COOP_NATIVE11_LOG", NULL, 0) != 0;
+	DWORD last_report = 0;
 	for (;;) {
 		Sleep(500);
+		const DWORD now = GetTickCount();
+		const int due = verbose || !last_report || now - last_report >= 300000; // (the first report once the counters move, then every 5 minutes)
 		char line[1024] = "";
-		for (size_t i = 0; i < sizeof(hits) / sizeof(hits[0]); i++)
+		for (size_t i = 0; due && i < sizeof(hits) / sizeof(hits[0]); i++)
 			if (hits[i] != last[i]) {
 				snprintf(line + strlen(line), sizeof(line) - strlen(line), " %s=%ld", hit_names[i], (long)hits[i]);
 				last[i] = hits[i];
 			}
-		if (line[0])
+		if (line[0]) {
 			log_printf("native11: calls (totals):%s", line);
+			last_report = now | 1;
+		}
 		{ // a draw function spinning (a loop that never ends): dump the threads once, after the second such interval
 			static LONG o_spin, spins;
 			if (hits[25] - o_spin > 3000000 && ++spins == 2)
@@ -628,7 +658,7 @@ static DWORD WINAPI monitor(LPVOID arg)
 					}
 				}
 			}
-			if (dr != o_draws || rf != o_refused) {
+			if (due && (dr != o_draws || rf != o_refused)) {
 				log_printf("native11: draws %u, refused %u, uploads %u, shaders %u, layouts %u, states %u; last refusal: %s", dr, rf, up, sh, ly, st, nd_last_error(N.d));
 				if (rf != o_refused) {
 					extern unsigned nd_refuse_why[8];

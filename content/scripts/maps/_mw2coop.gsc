@@ -278,8 +278,22 @@ attach_weapon_model_left( weapon_model )
 
 body_model()
 {
-	self SetModel( self.mw2coop_body );
-	self Attach( self.mw2coop_head, "", true );
+	owner = self;
+	if ( !isdefined( self.mw2coop_body ) )
+	{
+		// A stand-in of a player: a dog's attack (animscripts/dog/dog_combat playerDrone_create) spawns a script model at the player's origin and gives it the player's
+		// model function, for the partner to see the player knocked down while the player himself is hidden from him. With no body of its own it stayed without a
+		// model, and every animation the attack gave it was a script error (owner's log 2026-11-26, Contingency: SetAnim / SetAnimKnobRestart on the stand-in, rva
+		// 0x182682 / 0x182a12): the partner saw nothing. It takes the body of the player it stands in for, the one at its place.
+		owner = undefined;
+		foreach ( player in level.players )
+			if ( isdefined( player.mw2coop_body ) && ( !isdefined( owner ) || DistanceSquared( player.origin, self.origin ) < DistanceSquared( owner.origin, self.origin ) ) )
+				owner = player;
+		if ( !isdefined( owner ) )
+			return;
+	}
+	self SetModel( owner.mw2coop_body );
+	self Attach( owner.mw2coop_head, "", true );
 }
 
 // --------------------------------------------------------------------------------------------
@@ -1323,6 +1337,11 @@ restore_flags()
 	if ( GetDvar( "mw2coop_cpflags" ) == "0" || !isdefined( level.start_point ) || level.start_point == "default" || GetDvar( "mw2coop_cp_fname" ) != level.script + " " + level.start_point )
 		return;
 	wait 0.5;	// after the start function (its spawns and its own flags)
+	if ( maps\_mw2coop_checkpoints::no_flag_restore( level.script ) )
+	{
+		state( "restart at " + level.start_point + ": the flags set at the checkpoint are not set again on this level (its start points stand on their own)" );
+		return;
+	}
 	set = 0;
 	kept = 0;
 	n = GetDvarInt( "mw2coop_cp_fn" );
@@ -1338,6 +1357,23 @@ restore_flags()
 		}
 	}
 	state( "restart at " + level.start_point + ": " + set + " of the " + kept + " flags set at the checkpoint were clear and are set again" );
+	if ( set > 0 )
+	{
+		level.mw2coop_flags_restored_at = GetTime();
+		level.mw2coop_flags_restored = set;
+	}
+}
+
+// A flag set again can start a scene of a section the players left long ago: the thread that waits on it runs it again, behind them or around them (owner's log
+// 2026-11-26, Favela: after a restart at "favela" the restored start_chase began the chase again with the runner far from the players, and its distance check failed
+// the mission 5 s in, every time: "@FAVELA_RUNNER_GOT_AWAY"; the checkpoints taken in those 5 s held the same chase). A failure that the level's own script makes soon
+// after the flags were set again (not a player's death, not friendly fire) drops this checkpoint's flags: the level restarts at its start point without them.
+restored_flags_failed()
+{
+	if ( !isdefined( level.mw2coop_flags_restored_at ) || GetTime() - level.mw2coop_flags_restored_at > 30000 )
+		return false;
+	quote = GetDvar( "ui_deadquote" );
+	return quote != "" && !IsSubStr( quote, "DEADQUOTE" ) && !IsSubStr( quote, "SCRIPT_MISSIONFAIL" );
 }
 
 restore_weapons()
@@ -1871,6 +1907,44 @@ fail_on_death()
 	level thread mission_failed();
 }
 
+// maps\_friendlyfire::friendly_fire_think, a player's damage to a friendly or a civilian (_friendlyfire.gsc.patch): what it was, for the log if the mission
+// fails for it (both players' damage counts in one score there, level.player.participation)
+ff_note( entity, attacker, damage, method, weapon, killed )
+{
+	if ( !is_campaign_coop() )
+		return;
+	who = "something";
+	if ( isdefined( attacker ) && isdefined( level.player2 ) && attacker == level.player2 )
+		who = "player 2";
+	else if ( isdefined( attacker ) && attacker == level.player )
+		who = "player 1";
+	else if ( isdefined( attacker ) && isdefined( attacker.classname ) )
+		who = attacker.classname;
+	what = "?";
+	if ( isdefined( entity ) && isdefined( entity.classname ) )
+		what = entity.classname;
+	if ( isdefined( entity ) && isdefined( entity.name ) )
+		what += " '" + entity.name + "'";
+	if ( isdefined( entity ) && isdefined( entity.targetname ) )
+		what += " (" + entity.targetname + ")";
+	how = "";
+	if ( isdefined( weapon ) )
+		how += weapon;
+	if ( isdefined( method ) )
+		how += " " + method;
+	text = who;
+	if ( isdefined( killed ) && killed )
+		text += " killed ";
+	else if ( isdefined( damage ) )
+		text += " hurt (" + damage + ") ";
+	else
+		text += " hurt ";
+	text += what + " with " + how;
+	if ( isdefined( level.player.participation ) )
+		text += ", score " + level.player.participation;
+	level.mw2coop_ff_note = text;
+}
+
 // Replaces MissionFailed() in a co-op campaign session.
 mission_failed()
 {
@@ -1880,16 +1954,30 @@ mission_failed()
 	level notify( "mw2coop_level_end" );
 	flag_set( "special_op_terminated" );
 	// both machines run this in lockstep: their DLLs read mw2coop_retry when the host's fast_restart (and the coopRestart it sends the client) runs, 3 s from now
-	if ( saves_on() )
+	// one state line (two in one frame: the DLL logs only the last)
+	why = "deadquote '" + GetDvar( "ui_deadquote" ) + "'";
+	if ( isdefined( level.mw2coop_ff_note ) && ( IsSubStr( GetDvar( "ui_deadquote" ), "MISSIONFAIL_KILL" ) || IsSubStr( GetDvar( "ui_deadquote" ), "CIVILIAN" ) ) )
+		why += "; friendly fire: " + level.mw2coop_ff_note;
+	level.mw2coop_ff_note = undefined;
+	if ( restored_flags_failed() )
+	{
+		SetDvar( "mw2coop_cp_fname", "" );
+		SetDvar( "mw2coop_retry", "restart" );
+		state( "mission failed (" + why + ") " + int( ( GetTime() - level.mw2coop_flags_restored_at ) / 1000 ) + " s after " + level.mw2coop_flags_restored
+			+ " flags of the checkpoint were set again: restart at '" + GetDvar( "start" ) + "' without them" );
+	}
+	else if ( saves_on() )
 	{
 		SetDvar( "mw2coop_retry", "load" );
-		state( "mission failed (deadquote '" + GetDvar( "ui_deadquote" ) + "'), back to the last checkpoint" );
+		state( "mission failed (" + why + "), back to the last checkpoint" );
 	}
 	else
 	{
 		SetDvar( "mw2coop_retry", "restart" );
-		state( "mission failed (deadquote '" + GetDvar( "ui_deadquote" ) + "'), restart at '" + GetDvar( "start" ) + "'" );
+		state( "mission failed (" + why + "), restart at '" + GetDvar( "start" ) + "'" );
 	}
+	// a co-op failure shows no death quote (the screen goes black): cleared, so that a later failure that sets none does not log this one's
+	SetDvar( "ui_deadquote", "" );
 	foreach ( player in level.players )
 	{
 		player EnableInvulnerability();

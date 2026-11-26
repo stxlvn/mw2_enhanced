@@ -31,6 +31,7 @@
 #include "settings.h"
 #include "party.h"
 #include "nick.h"
+#include "rejoin.h"
 #include "upnp.h"
 
 static uint8_t *base;
@@ -136,7 +137,12 @@ static void join_f(void)
 	}
 	if (!party_join(addr, port))
 		return;
-	nick_joined_by_address(); // a LAN session: "Player 2" unless a nickname is set (nick.c); before the connect, whose coopConnect carries the name
+	if (rejoin_state() == REJOIN_CLIENT_JOIN)
+		nick_rejoined_by_address(); // back into the session that broke: it keeps its kind (a session made through Steam keeps the Steam names)
+	else if (GetEnvironmentVariableA("MW2COOP_QA_STEAMJOIN", NULL, 0)) // (QA: a pair on one PC joins by address; this join counts as one made through Steam)
+		log_printf("party: QA: this join by address counts as one made through Steam (names)");
+	else
+		nick_joined_by_address(); // a LAN session: "Player 2" unless a nickname is set (nick.c); before the connect, whose coopConnect carries the name
 	// connect stores its port argument as-is into a network-order field
 	char cmd[64];
 	if (game_is_iw4x()) // the iw4x-sp client replaces `connect` by one that takes the plain port, swaps it and runs the game's own as `connect_coop`
