@@ -15,6 +15,12 @@
 //   snowpick - (cliffhanger, start "icepick") player 2 takes player 1's snowmobile first
 //   climb    - (cliffhanger, default start) both players climb the ice wall on their own lanes,
 //              make the big jump, Soap catches both, both climb to the top (bot input)
+//   climbreal - the same with player 2's real buttons (climbreal1: player 1's): his own machine presses attack / aim through the key bindings (press(); a
+//              press shorter than 250 ms is a click let go by its own thread, src/control.c), the way a mouse does; the presses each grab and stab took
+//              must all be one (a player's report, 2026-11-26: "it still needs a double press in co-op"). With [native] netwatchrec=1 on both copies a
+//              divergence is recorded with the script functions behind each GetDvar (netwatch.c)
+//   climbfinal - the climb with frames of the second wall: final-own-<n> (player 1 starting it while player 2 hangs at the same spot), final-look-<n>
+//              (player 1 up, looking at player 2 on it); the partner's rigs must not be in either view ("mantis arms", 2026-11-26)
 //   spawn    - (any map/start) where player 2 is during the first 12 s
 //   partnernear - (any map with room behind player 1) player 2 behind player 1 at 8, 3, 5.1, 6 and 4.5 m: his marker on player 1's view at 8 and 6 m only (hidden under 5 m, back past 5.3)
 //   overlap  - (any map; Cliffhanger runs the climb bot) how close the players come (eyes, origins) and frames ov-N of both views when the eyes are under 30 units
@@ -710,6 +716,15 @@ main()
 				report( "done" );
 			}
 			break;
+		case "climbreal":	// the climb with player 2's real buttons: his machine clicks attack / aim (press()), as a mouse does; player 1 by the bot's hold
+		case "climbreal1":	// the same with player 1's real buttons
+			if ( GetDvar( "mw2coop_qa" ) == "climbreal" )
+				level.mw2coop_qa_climb_real = 2;
+			else
+				level.mw2coop_qa_climb_real = 1;
+		case "climbfinal":	// the climb with frames of the second wall: each climber's own view, player 1 (up first) looking at player 2 from around him (the partner rigs)
+			if ( GetDvar( "mw2coop_qa" ) == "climbfinal" )
+				level.mw2coop_qa_climb_frames = true;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
 			// other maps' zones do not have)

@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -163,6 +164,45 @@ static void describe_pos(const char *what, const char *pos)
 	}
 	log_printf("    %s: %s::%s +0x%x", what, files[starts[best].file].name,
 		   files[starts[best].file].funcs[starts[best].func], off - starts[best].off);
+}
+
+int scrdebug_stack_offsets(uint32_t *out, int max)
+{
+	if (!vm.vm_pos || max <= 0)
+		return 0;
+	const char *program = *(const char *const *)(base + vm.program_buffer);
+	if (!program)
+		return 0;
+	int n = 0;
+	const char *pos = *(const char *const *)(base + vm.vm_pos);
+	out[n++] = pos && pos >= program ? (uint32_t)(pos - program) : 0;
+	int count = *(const int32_t *)(base + vm.depth);
+	for (int i = count - 1; i >= 0 && n < max; i--) {
+		const uint8_t *frame = vm.frame_ptr ? *(const uint8_t *const *)(base + vm.frame_ptr) - (int64_t)(count - i) * vm.frame_size : base + vm.frames + (int64_t)i * vm.frame_size;
+		const char *p = *(const char *const *)frame;
+		out[n++] = p && p >= program ? (uint32_t)(p - program) : 0;
+	}
+	return n;
+}
+
+const char *scrdebug_stack_name(uint32_t off, char *buf, int size)
+{
+	int lo = 0, hi = start_count - 1, best = -1;
+	while (lo <= hi) {
+		int mid = (lo + hi) / 2;
+		if (starts[mid].off <= off) {
+			best = mid;
+			lo = mid + 1;
+		} else {
+			hi = mid - 1;
+		}
+	}
+	if (best < 0 || !off) {
+		lstrcpynA(buf, "", size);
+		return buf;
+	}
+	snprintf(buf, size, "%s::%s", files[starts[best].file].name, files[starts[best].file].funcs[starts[best].func]);
+	return buf;
 }
 
 void scrdebug_stack_log(void)

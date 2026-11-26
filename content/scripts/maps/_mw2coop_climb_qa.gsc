@@ -14,6 +14,8 @@ climb()
 	maps\_mw2coop_qa::check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
 	foreach ( player in level.players )
 		player thread climb_bot();
+	if ( isdefined( level.mw2coop_qa_climb_frames ) )	// (scenario climbfinal: player 1's camera is moved, the "together at the top" check then fails)
+		level thread climb_final_frames();
 	for ( t = 0; t < 420 && !flag( "reached_top" ); t += 5 )
 	{
 		maps\_mw2coop_qa::report( "t " + t + " can_save " + flag( "can_save" ) + " | p1 " + climb_text( level.player ) + " | p2 " + climb_text( level.player2 ) );
@@ -27,6 +29,22 @@ climb()
 	wait 3;
 	d = Distance( level.player.origin, level.player2.origin );
 	maps\_mw2coop_qa::check( d < 400, "both players together at the top (" + int( d ) + " units)" );
+	// climb_leftover_frames();	// (2026-11-26: the climb rigs left on the walls are hidden ones: no frame showed them)
+	if ( isdefined( level.mw2coop_qa_climb_real ) )
+	{
+		more = 0;
+		n = 0;
+		if ( isdefined( level.mw2coop_qa_climb_presses ) )
+			foreach ( p in level.mw2coop_qa_climb_presses )
+			{
+				n++;
+				if ( p > 1 )
+					more++;
+			}
+		if ( isdefined( level.mw2coop_qa_first_grabs ) )
+			maps\_mw2coop_qa::report( "real buttons: presses for the first grab, each attempt:" + level.mw2coop_qa_first_grabs );
+		maps\_mw2coop_qa::check( n > 0 && more == 0, "real buttons: every stab and grab took one press (" + more + " of " + n + " needed more)" );
+	}
 	maps\_mw2coop_qa::report( "done" );
 }
 
@@ -176,7 +194,30 @@ climb_bot()
 	maps\_mw2coop_qa::report( maps\_mw2coop_climb::player_name( self ) + " in position " + self ent_flag( "player_in_position_to_climb" ) );
 	self SetPlayerAngles( VectorToAngles( wall ) );
 	self.mw2coop_qa_step = "climb";
-	self.mw2coop_qa_hold[ "left" ] = true;
+	if ( self bot_real() )
+	{
+		// the first grab: the left pick's button pressed (held) until the climb has begun (the arms are made); presses counted
+		self thread climb_real_watch( 6 );
+		presses = 0;
+		while ( presses < 6 && !isdefined( self.mw2coop_arm_globals ) )
+		{
+			self bot_hold( "left", false );
+			self bot_hold( "left", true );
+			presses++;
+			for ( t = 0; t < 2.5 && !isdefined( self.mw2coop_arm_globals ); t += 0.05 )
+				wait 0.05;
+		}
+		if ( !isdefined( level.mw2coop_qa_first_grabs ) )
+			level.mw2coop_qa_first_grabs = "";
+		level.mw2coop_qa_first_grabs += " " + presses;
+		wait 0.15;	// (not in the frame the watch reports the climb's start)
+		maps\_mw2coop_qa::report( maps\_mw2coop_climb::player_name( self ) + " first grab: " + presses + " press(es)" );	// (reported at the end: a report in the same frame as the watch's was lost)
+		if ( !isdefined( level.mw2coop_qa_climb_presses ) )
+			level.mw2coop_qa_climb_presses = [];
+		level.mw2coop_qa_climb_presses[ level.mw2coop_qa_climb_presses.size ] = presses;
+	}
+	else
+		self bot_hold( "left", true );
 	self climb_bot_stabs( "player_preps_for_jump" );
 
 	// over the top of the wall: run and jump the gap
@@ -189,8 +230,11 @@ climb_bot()
 		node = GetEnt( "climb_jump_org", "targetname" );
 		maps\_mw2coop_qa::report( "climb_jump_org " + node.origin + " " + node.angles + ", me " + self.origin + " " + self GetPlayerAngles() );
 	}
-	self.mw2coop_qa_hold[ "left" ] = false;
-	self.mw2coop_qa_hold[ "right" ] = false;
+	if ( !self bot_real() )	// (real buttons: a player keeps both picks' buttons down over the top and through the jump, ready to hold on)
+	{
+		self bot_hold( "left", false );
+		self bot_hold( "right", false );
+	}
 	yaw = GetEnt( "big_jump_yaw", "targetname" );
 	targ = GetEnt( yaw.target, "targetname" );
 	jump = VectorToAngles( targ.origin - yaw.origin );
@@ -231,21 +275,179 @@ climb_bot()
 
 	// hang on until Soap has him, then climb to the top
 	self.mw2coop_qa_step = "hang";
-	self.mw2coop_qa_hold[ "left" ] = true;
-	self.mw2coop_qa_hold[ "right" ] = true;
+	self bot_hold( "left", true );
+	self bot_hold( "right", true );
 	self ent_flag_wait( "final_climb" );
 	self.mw2coop_qa_step = "final";
-	self.mw2coop_qa_hold[ "right" ] = false;
+	self bot_hold( "right", false );
 	self climb_bot_stabs( "reached_top" );
 	self.mw2coop_qa_step = "top";
-	self.mw2coop_qa_hold[ "left" ] = false;
-	self.mw2coop_qa_hold[ "right" ] = false;
+	self bot_hold( "left", false );
+	self bot_hold( "right", false );
+}
+
+// The second climb (after the big jump, Soap's catch): frames of both views while both climb it (final-1..4; owner, 2026-11-26: "mantis arms" on the
+// second climb), with what each player's partner rigs are: the climb's arms (player_rig) and the jump's arms (player_arms) shown or not
+climb_final_frames()
+{
+	// player 1 on the second wall: his own view (host frames final-own-<n>; the client's show player 2 waiting for his catch)
+	for ( t = 0; t < 200 && !( level.player ent_flag( "final_climb" ) && level.player IsLinked() ); t += 0.25 )
+		wait 0.25;
+	wait 1;
+	for ( n = 1; n <= 2 && level.player IsLinked() && !level.player ent_flag( "reached_top" ); n++ )
+	{
+		hidden = isdefined( level.player.mw2coop_climb_body ) && isdefined( level.player.mw2coop_climb_body.mw2coop_overlap_hidden );
+		text = "final own " + n + ": eyes " + int( Distance( level.player GetEye(), level.player2 GetEye() ) ) + " apart (" + int( Distance2D( level.player GetEye(), level.player2 GetEye() ) ) + " sideways)";
+		if ( isdefined( level.player.mw2coop_climb_body ) )
+			text += ", player 2's eyes " + int( maps\_mw2coop_climb::body_eye_distance( level.player.mw2coop_climb_body.origin, level.player GetEye(), level.player2 GetEye() ) ) + " from player 1's climbing body";
+		maps\_mw2coop_qa::report( text + ", hidden from player 2: " + hidden );
+		near = 0;
+		foreach ( m in GetEntArray( "script_model", "classname" ) )
+			if ( isdefined( m.model ) && Distance( m.origin, level.player2 GetEye() ) < 110 && near < 8 )
+			{
+				near++;
+				maps\_mw2coop_qa::report( "final own " + n + ": near player 2's eyes: " + m.model + " " + int( Distance( m.origin, level.player2 GetEye() ) ) + " units" );
+			}
+		maps\_mw2coop_qa::qa_shot( "final-own-" + n );
+		wait 1.5;
+	}
+	// player 2 on the second wall while player 1 is up: player 1 looks at him from the sides and from behind (host frames final-look-<n>), player 2's own view
+	// (client frames final-look-<n>)
+	for ( t = 0; t < 120; t += 0.25 )
+	{
+		if ( level.player ent_flag( "reached_top" ) && !level.player IsLinked() && level.player2 ent_flag( "final_climb" ) && level.player2 IsLinked() )
+			break;
+		wait 0.25;
+	}
+	if ( !level.player ent_flag( "reached_top" ) || !level.player2 IsLinked() || level.player2 ent_flag( "reached_top" ) )
+	{
+		maps\_mw2coop_qa::report( "final look: no moment with player 1 up and player 2 on the second wall" );
+		return;
+	}
+	yaws = strtok( "90 -90 160 200 120", " " );
+	foreach ( n, yaw in yaws )
+	{
+		if ( level.player2 ent_flag( "reached_top" ) )
+			break;
+		look_at( level.player2, 90, int( yaw ) );
+		text = "final look " + n + " (yaw " + yaw + "): player 2 eye " + vec_text( level.player2 GetEye() );
+		if ( isdefined( level.player2.mw2coop_climb_body ) )
+			text += " body " + vec_text( level.player2.mw2coop_climb_body.origin ) + " anim time " + level.player2.mw2coop_climb_body GetAnimTime( %cliffhanger_climb_up_mid );
+		else
+			text += " no climbing body";
+		maps\_mw2coop_qa::report( text );
+		maps\_mw2coop_qa::qa_shot( "final-look-" + n );
+	}
+	level.player Unlink();
+}
+
+// After the climb: player 1's camera goes to each first-person arms model still in the level (the climb's rigs left on the walls) and looks at it (frames leftover-<n>)
+climb_leftover_frames()
+{
+	models = GetEntArray( "script_model", "classname" );
+	n = 0;
+	cam = Spawn( "script_origin", level.player.origin );
+	foreach ( m in models )
+	{
+		if ( !isdefined( m ) || !isdefined( m.model ) || !IsSubStr( m.model, "viewhands" ) || n >= 6 )
+			continue;
+		n++;
+		at = m.origin + ( 0, 0, 30 );
+		level.player Unlink();
+		cam.origin = at + AnglesToForward( ( 0, 165 + 180, 0 ) ) * 110 + ( 0, 0, 20 ) - ( 0, 0, 60 );
+		level.player SetOrigin( cam.origin );
+		level.player PlayerLinkTo( cam );
+		wait 0.1;
+		level.player SetPlayerAngles( VectorToAngles( at - level.player GetEye() ) );
+		wait 0.6;
+		text = "leftover " + n + ": " + m.model + " at " + vec_text( m.origin );
+		if ( isdefined( m.targetname ) )
+			text += " targetname " + m.targetname;
+		if ( isdefined( m.animname ) )
+			text += " animname " + m.animname;
+		if ( isdefined( m.mw2coop_player ) )
+			text += " jump arms of " + maps\_mw2coop_climb::player_name( m.mw2coop_player );
+		maps\_mw2coop_qa::report( text );
+		maps\_mw2coop_qa::qa_shot( "leftover-" + n );
+	}
+	level.player Unlink();
+	cam Delete();
+}
+
+vec_text( v )
+{
+	return int( v[ 0 ] ) + "," + int( v[ 1 ] ) + "," + int( v[ 2 ] );
+}
+
+// QA climbreal / climbreal1: the player whose own machine presses his real attack (left pick) and aim (right pick) buttons through the usercmd (press(): the
+// DLL runs the key bindings), as the mouse does; the other player plays by self.mw2coop_qa_hold. One player at a time: both would share the press dvar.
+bot_real()
+{
+	if ( !isdefined( level.mw2coop_qa_climb_real ) )
+		return false;
+	if ( level.mw2coop_qa_climb_real == 2 )
+		return isdefined( level.player2 ) && self == level.player2;
+	return self == level.player;
+}
+
+arm_button( arm )
+{
+	if ( arm == "left" )
+		return "attack";
+	return "speed_throw";
+}
+
+// self: player. Holds an arm's button down (a press, kept) or lets it go
+bot_hold( arm, on )
+{
+	if ( !self bot_real() )
+	{
+		self.mw2coop_qa_hold[ arm ] = on;
+		return;
+	}
+	if ( !isdefined( self.mw2coop_qa_real ) )
+		self.mw2coop_qa_real = [];
+	held = isdefined( self.mw2coop_qa_real[ arm ] ) && self.mw2coop_qa_real[ arm ];
+	if ( on )
+		maps\_mw2coop_qa::press( self, arm_button( arm ), 600000 );
+	else if ( held )
+		maps\_mw2coop_qa::press( self, arm_button( arm ), 1 );	// (a held button: the press is no new one, the release lets it go)
+	self.mw2coop_qa_real[ arm ] = on;
+}
+
+// QA climbreal: for <seconds>, each change of what the climb reads: the player's attack / aim buttons from his usercmd, the arm the climb waits for, and each
+// arm's press count, the count it last used and whether it counts as held (pressed within 750 ms)
+climb_real_watch( seconds )
+{
+	self endon( "death" );
+	last = "";
+	for ( t = 0; t < seconds; t += 0.05 )
+	{
+		s = "atk " + self AttackButtonPressed() + " ads " + self AdsButtonPressed();
+		g = self.mw2coop_arm_globals;
+		if ( isdefined( g ) && isdefined( g.arm_ents ) )
+		{
+			s += " cur " + g.current_arm;
+			foreach ( arm in strtok( "left right", " " ) )
+			{
+				e = g.arm_ents[ arm ];
+				if ( !isdefined( e ) || !isdefined( e.button_press_num ) )
+					continue;
+				s += " | " + arm + " " + e.button_press_num + "/" + e.button_press_num_last + " held " + ( e.last_button_press + 750 > GetTime() );
+			}
+		}
+		if ( s != last )
+			maps\_mw2coop_qa::report( "watch " + maps\_mw2coop_climb::player_name( self ) + " t " + t + ": " + s );
+		last = s;
+		wait 0.05;
+	}
 }
 
 // self: climbing player. Swing arm after arm (press the arm to swing while holding the other)
 // until the flag is set.
 climb_bot_stabs( until )
 {
+	stabs = 0;
 	while ( !self ent_flag( until ) )
 	{
 		g = self.mw2coop_arm_globals;
@@ -256,6 +458,44 @@ climb_bot_stabs( until )
 		}
 		arm = g.current_arm;
 		other = maps\_climb::get_other_arm( arm );
+		if ( self bot_real() )
+		{
+			// a player's way: the other pick's button held, this one's let go and pressed again (held); presses counted until the arm changes
+			if ( !isdefined( self.mw2coop_qa_real ) || !isdefined( self.mw2coop_qa_real[ other ] ) || !self.mw2coop_qa_real[ other ] )
+				self bot_hold( other, true );
+			// a press counts when this arm's stab begins within 2 s (maps\_climb::arm_completes_stab notes the press count it starts from: mw2coop_press_at_stab);
+			// then the bot waits for the stab to end (the arm changes) without pressing, as a player who saw his pick move
+			ent = g.arm_ents[ arm ];
+			before = ent.mw2coop_press_at_stab;
+			presses = 0;
+			started = false;
+			latency = -1;
+			while ( presses < 6 && !started && isdefined( self.mw2coop_arm_globals ) && self.mw2coop_arm_globals == g && g.current_arm == arm && !self ent_flag( until ) )
+			{
+				self bot_hold( arm, false );
+				pressed_at = GetTime();
+				self bot_hold( arm, true );
+				presses++;
+				for ( t = 0; t < 2 && !started && g.current_arm == arm && !self ent_flag( until ); t += 0.05 )
+				{
+					started = isdefined( ent.mw2coop_press_at_stab ) && ( !isdefined( before ) || ent.mw2coop_press_at_stab != before );
+					if ( started )
+						latency = GetTime() - pressed_at;
+					else
+						wait 0.05;
+				}
+				if ( g.current_arm != arm )
+					started = true; // (a stab begun and ended between two looks)
+			}
+			for ( t = 0; t < 6 && isdefined( self.mw2coop_arm_globals ) && self.mw2coop_arm_globals == g && g.current_arm == arm && !self ent_flag( until ); t += 0.05 )
+				wait 0.05;
+			stabs++;
+			maps\_mw2coop_qa::report( maps\_mw2coop_climb::player_name( self ) + " " + until + " stab " + stabs + " (" + arm + "): " + presses + " press(es), began " + latency + " ms after the last" );
+			if ( !isdefined( level.mw2coop_qa_climb_presses ) )
+				level.mw2coop_qa_climb_presses = [];
+			level.mw2coop_qa_climb_presses[ level.mw2coop_qa_climb_presses.size ] = presses;
+			continue;
+		}
 		self.mw2coop_qa_hold[ other ] = true;
 		self.mw2coop_qa_hold[ arm ] = false;
 		wait 0.2;

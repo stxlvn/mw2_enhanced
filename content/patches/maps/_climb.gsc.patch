@@ -679,3 +679,27 @@ ent.button_press_num_last = ent.button_press_num;
 @@@ to
 ent.button_press_num_last = ent.mw2coop_press_at_stab;
 @@@ end
+
+14. The fall check's grace after a pause, in co-op (QA climbrec, 2026-11-26): should_fall() lets a
+    climber keep hanging for 10 s after the game was last paused (GetTimeSinceLastPaused: this PC's
+    own clock of pauses). The two co-op machines are paused at different moments (a failed mission's
+    screen, a load), so after a restart on the wall one machine dropped the climber while the other
+    kept him hanging, and the games went apart for good (the host's state hash took one more
+    icepick_button_pressed() from should_fall in the first frames after the restart; the resync
+    found no checkpoint before it). In co-op the time is the same on both machines
+    (maps\_mw2coop_climb::time_since_paused).
+@@@ subst should_fall
+GetTimeSinceLastPaused()
+@@@ to
+maps\_mw2coop_climb::time_since_paused()
+@@@ end
+
+15. The jump's arms (player_arms: the first-person arms the jumper hangs from until Soap's catch)
+    are the jumper's own view; the game shows them to everyone, and on the second wall, where both
+    players hang and start climbing at the same spot, the partner had them in his face ("mantis
+    arms", owner, 2026-11-26). They are hidden from the partner, who sees the jumper's body.
+@@@ subst player_big_jump
+player_arms Show();
+@@@ to
+player_arms maps\_mw2coop_climb::rig_show( self );
+@@@ end

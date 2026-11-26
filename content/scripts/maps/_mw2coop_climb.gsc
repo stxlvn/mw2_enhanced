@@ -255,6 +255,16 @@ swing_pressed( arm, key )
 	return self AdsButtonPressed();
 }
 
+// maps\_climb::should_fall(): the time since the game was last paused, for its 10 s grace. GetTimeSinceLastPaused() is each PC's own: the co-op machines are
+// paused at different moments (a failed mission's screen, a load) and one dropped the climber while the other did not. A co-op game is not paused for one
+// player: no grace, the same on both machines.
+time_since_paused()
+{
+	if ( !climb_coop() )
+		return GetTimeSinceLastPaused();
+	return 100000;
+}
+
 // ent: an arm of the climb. The extra keyboard keys (j, k) only outside co-op.
 key_pressed( ent )
 {
@@ -814,5 +824,49 @@ climb_body_moves( rig, climber )
 		if ( self GetAnimTime( %cliffhanger_climb_up_mid ) > 0.85 )
 			self SetAnimTime( %cliffhanger_climb_up_mid, climb_anim_from() );
 		self climb_body_to_eyes( rig, climber );
+		self climb_body_overlap( climber );
 	}
+}
+
+// self: the climbing body. On the second wall both players hang and start at the same spot (the partner waits there for his catch while the climber goes up
+// from it): the partner's eyes were inside the climbing body and its arms and picks filled his view ("mantis arms", owner, 2026-11-26; QA climb frame
+// final-own: the climber's legs and rifle at the eyes of the partner hanging under him: his eyes 54 units from the line from the body's feet to its head, 97
+// below the climber's; Soap's climb throws the legs out). Hidden from the partner while he is under the climber (more than 40 units lower, within 66 of that
+// line), shown to him again past 74 or once he is less than 30 lower (1.5 s later the line was 78 away and the body above him looked right). Side by side on the
+// first wall the eyes are at about the same height. The climber never sees it. Positions only: the same on both machines.
+climb_body_overlap( climber )
+{
+	other = maps\_mw2coop::other_player( climber );
+	if ( !isdefined( other ) )
+		return;
+	mine = climber GetEye();
+	his = other GetEye();
+	below = mine[ 2 ] - his[ 2 ];
+	d = body_eye_distance( self.origin, mine, his );
+	if ( below > 40 && d < 66 && !isdefined( self.mw2coop_overlap_hidden ) )
+	{
+		self.mw2coop_overlap_hidden = true;
+		self Hide();
+	}
+	else if ( isdefined( self.mw2coop_overlap_hidden ) && ( d > 74 || below < 30 ) )
+	{
+		self.mw2coop_overlap_hidden = undefined;
+		self Show();
+		self hideOnClient( climber );
+	}
+}
+
+// the distance from eye to the line from feet to head (a body's length)
+body_eye_distance( feet, head, eye )
+{
+	along = head - feet;
+	len = VectorDot( along, along );
+	f = 0;
+	if ( len > 0 )
+		f = VectorDot( eye - feet, along ) / len;
+	if ( f < 0 )
+		f = 0;
+	if ( f > 1 )
+		f = 1;
+	return Distance( eye, feet + along * f );
 }

@@ -120,7 +120,7 @@ static char *read_mod_script(const char *ext, int *size)
 					   "main()\n{\n\tif ( GetDvar( \"mw2coop_qa\" ) == \"hoplite\" )\n\t\tlevel thread hoplite();\n}\n"
 					   "hoplite()\n{\n\twait 15;\n\tmaps\\_mw2coop::mission_complete();\n}\n"
 					   "link_probe()\n{\n}\nmuseum_anim_probe()\n{\n}\nclimbsolo()\n{\n}\nbbcheck()\n{\n}\nracestart()\n{\n}\nhintkeys_precache()\n{\n}\ncheck( ok, text )\n{\n}\nreport( text )\n{\n}\n"
-					   "qa_shot( label )\n{\n}\nwait_intro()\n{\n}\nplayer_name( player )\n{\n\treturn \"\";\n}\n";
+					   "qa_shot( label )\n{\n}\npress( player, button, ms )\n{\n}\nwait_intro()\n{\n}\nplayer_name( player )\n{\n\treturn \"\";\n}\n";
 		char *buf = malloc(sizeof(stub));
 		if (!buf)
 			return NULL;

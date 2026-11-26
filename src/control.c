@@ -269,6 +269,19 @@ static char press_last[96];
 static char held_name[MAX_HELD][32];
 static DWORD held_until[MAX_HELD];
 
+// a QA click: "<button> <ms>" let go after ms
+static DWORD WINAPI tap_thread(LPVOID arg)
+{
+	char name[32], cmd[64];
+	int ms = 100;
+	if (sscanf((const char *)arg, "%31s %d", name, &ms) != 2)
+		return 0;
+	Sleep((DWORD)ms);
+	snprintf(cmd, sizeof(cmd), "mw2coop_bind -%s\n", name);
+	game_cbuf_addtext(cmd);
+	return 0;
+}
+
 static void press_poll(void)
 {
 	char v[96], cmd[64];
@@ -289,6 +302,18 @@ static void press_poll(void)
 	// (split screen: both players are here and the party is reset; player 1's presses are the keyboard's, player 2's go through his pad's QA file)
 	if (native_split_active() ? player != 1 : player != (game_peek(RVA_PARTY_IS_HOST, 1) ? 1 : 2))
 		return;
+	if (ms > 0 && ms < 250) { // a click shorter than this poll's step (a mouse click is about 100 ms): its own thread lets it go
+		static char tap_name[4][32];
+		static int tap_next;
+		char *keep = tap_name[tap_next];
+		tap_next = (tap_next + 1) % 4;
+		snprintf(keep, 32, "%s %d", name, ms);
+		snprintf(cmd, sizeof(cmd), "mw2coop_bind +%s\n", name);
+		game_cbuf_addtext(cmd);
+		CloseHandle(CreateThread(NULL, 0, tap_thread, keep, 0, NULL));
+		log_printf("control: qa click %s for %d ms", name, ms);
+		return;
+	}
 	int slot = 0;
 	while (slot < MAX_HELD - 1 && held_name[slot][0] && strcmp(held_name[slot], name) != 0)
 		slot++;

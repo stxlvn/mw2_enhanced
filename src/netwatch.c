@@ -29,6 +29,7 @@
 #include "hook.h"
 #include "localize.h"
 #include "log.h"
+#include "scrdebug_stack.h"
 #include "net.h"
 #include "netwatch.h"
 #include "saves.h"
@@ -109,6 +110,7 @@ typedef struct {
 	uint32_t site; // the return address's rva: which addition
 	int v[3];
 	char s[16];
+	uint32_t where[5]; // a string addition (a script's GetDvar): the script function and its callers (code offsets, scrdebug_stack.c)
 } nw_rec_t;
 #define NW_REC 65536
 static nw_rec_t *nw_rec;
@@ -124,8 +126,11 @@ static void nw_record(uintptr_t ret, const int *v, int n, const char *s)
 	r->site = (uint32_t)(ret - (uintptr_t)base);
 	r->v[0] = n > 0 ? v[0] : 0, r->v[1] = n > 1 ? v[1] : 0, r->v[2] = n > 2 ? v[2] : 0;
 	r->s[0] = 0;
-	if (s)
+	memset(r->where, 0, sizeof(r->where));
+	if (s) {
 		lstrcpynA(r->s, s, sizeof(r->s));
+		scrdebug_stack_offsets(r->where, 5);
+	}
 }
 static void (*nw_add_int_original)(int, const char *, int);
 static void nw_add_int(int v, const char *file, int line)
@@ -225,7 +230,7 @@ static void nw_dump(int from, int to, const char *who)
 	log_printf("netwatch: %s: the hash's additions of the steps after the frames %d..%d (compare this block with the other PC's log):", who, from, to);
 	const unsigned n = nw_rec_n, first = n > NW_REC ? n - NW_REC : 0;
 	int lines = 0;
-	char line[400];
+	char line[640];
 	for (unsigned i = first; i < n && lines < 3000; i++) {
 		const nw_rec_t *r = &nw_rec[i % NW_REC];
 		if (r->time < from || r->time > to)
@@ -240,7 +245,13 @@ static void nw_dump(int from, int to, const char *who)
 				 (double)af[0], (double)af[1], (double)af[2]);
 			i += 4;
 		} else if (r->s[0] || r->site == nw_ret_str[0] || r->site == nw_ret_str[1] || r->site == nw_ret_str[2])
-			snprintf(line, sizeof(line), "netwatch: add t %d at %x string \"%s\"", r->time, r->site, r->s);
+		{
+			char f[5][80];
+			for (int k = 0; k < 5; k++)
+				scrdebug_stack_name(r->where[k], f[k], sizeof(f[k]));
+			snprintf(line, sizeof(line), "netwatch: add t %d at %x string \"%s\"%s%s%s%s%s%s%s%s%s%s", r->time, r->site, r->s, r->where[0] ? " in " : "", f[0],
+				 r->where[1] ? " < " : "", f[1], r->where[2] ? " < " : "", f[2], r->where[3] ? " < " : "", f[3], r->where[4] ? " < " : "", f[4]);
+		}
 		else
 			snprintf(line, sizeof(line), "netwatch: add t %d at %x value %d %d %d", r->time, r->site, r->v[0], r->v[1], r->v[2]);
 		log_printf("%s", line);

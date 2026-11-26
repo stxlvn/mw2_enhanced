@@ -15,3 +15,7 @@ typedef struct {
 void scrdebug_stack_init(uint8_t *module_base, const scrdebug_vm_t *where);
 void scrdebug_stack_build(void); // at the end of a script load, before the loaded-scripts table is freed
 void scrdebug_stack_log(void);
+// The code offsets (in the program buffer) of the running script function and of its callers, innermost first, up to max; the count (0 when unknown). Cheap: for records.
+int scrdebug_stack_offsets(uint32_t *out, int max);
+// "file::function" of a code offset from scrdebug_stack_offsets(), or "" when unknown (valid while the scripts that were loaded stay loaded)
+const char *scrdebug_stack_name(uint32_t off, char *buf, int size);
