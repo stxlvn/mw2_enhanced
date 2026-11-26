@@ -934,7 +934,7 @@ static void install_all(void)
 	N.f.fn_projection = (void (*)(void *, int *))(exe + 0x50d70);
 	N.f.fn_5c8d0 = (void (*)(void *))(exe + 0x5c8d0);
 	N.f.fn_5d650 = (void (*)(void *, void *, int))(exe + 0x5d650);
-	N.f.fn_4fbe0 = (void (*)(void *, void *, int, int))(exe + 0x4fbe0);
+	N.f.fn_4fbe0 = (void (*)(void *, void *, float, int))(exe + 0x4fbe0);
 	N.f.fn_5dd00 = (void (*)(void *, void *, void *))(exe + 0x5dd00);
 	N.f.fn_60120 = (void (*)(void *, void *, int))(exe + 0x60120);
 	N.f.fn_637a0 = (void (*)(void *, void *))(exe + 0x637a0);

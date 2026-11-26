@@ -21,7 +21,11 @@ typedef struct {
 	void (*fn_637a0)(void *particle, void *input);      // 0x637a0: per-particle constants (CPU)
 	void (*fn_efbe0)(uint8_t kind, void *handle, void **index_buffer, int *start_index); // 0xefbe0: the index buffer and start of a mesh kind
 	void (*fn_efdd0)(uint8_t kind, void *handle, void **vertex_buffer, int *byte_offset); // 0xefdd0
-	void (*fn_4fbe0)(void *input, void *obj, int index, int zero); // 0x4fbe0: per-object matrices (CPU)
+	// 0x4fbe0: per-object matrices (CPU): (input, a cloud's transform, its scale, which of the three matrix sets). The scale is a float: the game passes it in xmm2
+	// (call sites in 0x5da10: movss xmm2, [obj + 0x1c]); passed as an int it went to r8 and the function read whatever xmm2 held: the spark clouds' second and
+	// third matrices lost the cloud's scale and each streak ran from the cloud's middle to its particle (a blizzard's snow as rays over the whole picture,
+	// owner 2026-11-26)
+	void (*fn_4fbe0)(void *input, void *obj, float scale, int index);
 	void (*fn_5dd00)(void *ctx, void *a, void *b);                 // 0x5dd00
 	void (*fn_60120)(void *cmd, void *ctx, int mode);              // 0x60120
 	uint8_t tex_thunk[16][32];                          // game-image look-alikes (first field = the native image) for the raw texture pointers of 0x5fe50

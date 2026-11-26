@@ -176,18 +176,18 @@ void ngf_draw_5da10(ngf *f, void *ctx, uintptr_t *cursor)
 	if (RD_PTR(input, 0x1698) != obj) {
 		RD_PTR(input, 0x1698) = obj;
 		if (f->fn_4fbe0)
-			f->fn_4fbe0(input, obj, RD_I32(obj, 0x1c), 0);
+			f->fn_4fbe0(input, obj, RD_F32(obj, 0x1c), 0);
 	}
 	if (has3) {
 		if (RD_PTR(input, 0x16a0) != obj + 0x40) {
 			RD_PTR(input, 0x16a0) = obj + 0x40;
 			if (f->fn_4fbe0)
-				f->fn_4fbe0(input, obj + 0x40, RD_I32(obj, 0x5c), 1);
+				f->fn_4fbe0(input, obj + 0x40, RD_F32(obj, 0x5c), 1);
 		}
 		if (RD_PTR(input, 0x16a8) != obj + 0x80) {
 			RD_PTR(input, 0x16a8) = obj + 0x80;
 			if (f->fn_4fbe0)
-				f->fn_4fbe0(input, obj + 0x80, RD_I32(obj, 0x9c), 2);
+				f->fn_4fbe0(input, obj + 0x80, RD_F32(obj, 0x9c), 2);
 		}
 	}
 	ng_apply_object(f->g, f->ops, input, state);
