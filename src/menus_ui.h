@@ -68,6 +68,21 @@
 #define WINDOW_HASFOCUS 2
 #define WINDOW_VISIBLE 4
 #define BUTTON_HEIGHT 20.0f
+// itemDef_t::textRect follows windowDef_t (its cached width/height are invalidated when an item is moved); the static flags; the font,
+// then textAlignMode (int: the low two bits left 0 / centre 1 / right 2), textalignx and textaligny (float), textscale (float)
+#ifdef _WIN64
+#define ITEM_TEXT_RECT 0xb0
+#define ITEM_STATIC_FLAGS 0x4c
+#define ITEM_FONT 0xd0
+#else
+#define ITEM_TEXT_RECT 0xa4
+#define ITEM_STATIC_FLAGS 0x44
+#define ITEM_FONT 0xc4
+#endif
+#define ITEM_TEXT_ALIGN (ITEM_FONT + 4)
+#define ITEM_TEXT_ALIGN_X (ITEM_FONT + 8)
+#define ITEM_TEXT_SCALE (ITEM_FONT + 16)
+#define WINDOW_AUTOWRAPPED 0x00800000
 
 // The menus the UI has loaded; NULL if not loaded. Main thread.
 uint8_t *ui_find_menu(const char *name);
@@ -90,5 +105,7 @@ uint8_t *ui_clone_menu(uint8_t *from, const char *name);
 int ui_register_menu(uint8_t *menu);
 // A copy of an item for another menu (or the same one), without focus.
 uint8_t *ui_clone_item(uint8_t *from, uint8_t *parent_menu);
+// A popup copied from quit_popmenu: room for a question of several lines (the text of <text_name>, else <lines>) above Yes (menus.c).
+void ui_popup_question_lines(uint8_t *menu, int question, const char *text_name, int lines);
 // A copy of a handler set with <from> replaced by <to> in its script strings; NULL if no script had <from>.
 void *ui_script_replace(const void *set, const char *from, const char *to);

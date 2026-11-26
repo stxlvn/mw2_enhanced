@@ -6614,10 +6614,8 @@ static void pad_frame_player(int pl, int play)
 // where the full screen HUD has it (another build of the menus). The PC's d-pad (the action slot keys, bottom centre) has no console counterpart and stays.
 #ifdef _WIN64
 #define CG_DC_RVA XR(0x51e330)   // the cgame's UI context of local client 0 (ui/hud.txt is added to it at rva 0xa6b7f), menus[] at +0x38, their count at +0x1438
-#define ITEM_TEXT_SCALE 0xe0 // itemDef_t: type, dataType, alignment, font, textAlignMode, textalignx, textaligny, textscale
 #else
 #define CG_DC_RVA 0x354d28 // VA 0x754d28 (+ 0x1684 per local client; the list is added at VA 0x5658a4)
-#define ITEM_TEXT_SCALE 0xd4
 #endif
 #define ITEM_RECT_W 0x10
 #define ITEM_RECT_CLIENT (ITEM_RECT + 0x14) // rectClient: x, y, w, h, horizontal and vertical alignment (+0x10, +0x11)

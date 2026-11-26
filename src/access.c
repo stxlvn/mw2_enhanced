@@ -282,6 +282,25 @@ static uint8_t *lobby_row(uint8_t *from, uint8_t *menu, const char *name, const 
 #define LOBBY_ROWS 6 // nickname, access, friendly fire, password, and the split screen lobby's two difficulty rows (shown by menus.c)
 #define LOBBY_SHIFT_ROWS 4 // the lines the rows below move down (the first four rows; the difficulty rows only exist in the split screen lobby, which lays them out itself)
 static uint8_t *lobby_menu, **native_items, **campaign_items, **specops_items, **spec_split_items, *password_row;
+
+// The campaign lobby's texts beside the operation panel: right of the operation's name row (x 0..216) and of its picture, from the name's line down,
+// left-aligned in a column of their own (aligned to the bottom like the panel). The player list on the right begins 280 units from the right edge.
+#define SIDE_X 224.0f
+#define SIDE_W 200.0f
+static void side_panel(uint8_t *it, float y, float h, int wrap)
+{
+	float *rect = (float *)(it + ITEM_RECT), *client = (float *)(it + ITEM_RECT_CLIENT_Y - 4), *text_rect = (float *)(it + ITEM_TEXT_RECT);
+	rect[0] = client[0] = SIDE_X;
+	rect[1] = client[1] = y;
+	rect[2] = client[2] = SIDE_W;
+	rect[3] = client[3] = h;
+	*(int *)(it + ITEM_TEXT_ALIGN) &= ~3; // left (the vertical part of the mode stays)
+	*(float *)(it + ITEM_TEXT_ALIGN_X) = 0.0f;
+	if (wrap)
+		*(uint32_t *)(it + ITEM_STATIC_FLAGS) |= WINDOW_AUTOWRAPPED;
+	text_rect[0] = text_rect[1] = text_rect[2] = text_rect[3] = 0.0f; // (the cached layout of the place it came from)
+}
+
 static int native_count;
 
 static void patch_lobby_row(int campaign, int spec_split)
@@ -346,19 +365,31 @@ static void patch_lobby_row(int campaign, int spec_split)
 		}
 		// the Access, Friendly fire and Password rows take the line of the lobby's NAT type text
 		// ("nattype", y 126) and the next two: the left column's items from that line down (aligned
-		// top-left like the buttons) move three lines lower, and so do the focused button's hint
-		// lines under them ("description", aligned to the bottom, y -262 and -242; the operation
-		// panel starts at -202); copies, so the Spec Ops lobby keeps its layout
+		// top-left like the buttons) move three lines lower. The texts the lobby writes over the operation panel's top (aligned to the bottom: the focused
+		// button's hint lines "description" -262 and "description2" -242, Start's status lines at -262) do not fit there any more:
+		// moved down with the rows they lay on the operation's name and picture, and the mission's description (menus.c) on the Friendly fire and NAT type
+		// rows (a player's report and the QA frames, 2026-11-26, 1920 x 1080). They go beside the operation panel, right of its name and picture (side_panel).
+		// Copies, so the Spec Ops lobby keeps its layout.
 		for (int i = at + LOBBY_ROWS + 1; i < native_count + LOBBY_ROWS; i++) {
 			uint8_t *it = campaign_items[i];
 			float iy = *(float *)(it + ITEM_RECT_Y);
+			const char *name = *(const char **)it;
 			int below = it[ITEM_RECT_ALIGN_V] == 1 && iy >= y + BUTTON_HEIGHT / 2 && iy <= 400;
 			int hint = it[ITEM_RECT_ALIGN_V] == 3 && iy < -230;
+			// the start's status lines ("needs one more player", "start the operation", "waiting for the host"): unnamed, at the hint's line with a text
+			// of their own, shown while Start is focused in the description's place
+			int status = hint && !name && *(void **)(it + ITEM_TEXT_EXP);
 			if (it[ITEM_RECT_ALIGN_H] != 1 || !(below || hint))
 				continue;
 			uint8_t *moved = ui_clone_item(campaign_items[i], menu);
-			*(float *)(moved + ITEM_RECT_Y) += (LOBBY_SHIFT_ROWS - 1) * BUTTON_HEIGHT;
-			*(float *)(moved + ITEM_RECT_CLIENT_Y) += (LOBBY_SHIFT_ROWS - 1) * BUTTON_HEIGHT;
+			if (status || (hint && name && !strcmp(name, "description")))
+				side_panel(moved, -182.0f, 92.0f, 1);
+			else if (hint && name && !strcmp(name, "description2"))
+				side_panel(moved, -86.0f, 44.0f, 1);
+			else {
+				*(float *)(moved + ITEM_RECT_Y) += (LOBBY_SHIFT_ROWS - 1) * BUTTON_HEIGHT;
+				*(float *)(moved + ITEM_RECT_CLIENT_Y) += (LOBBY_SHIFT_ROWS - 1) * BUTTON_HEIGHT;
+			}
 			campaign_items[i] = moved;
 		}
 	}

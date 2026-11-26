@@ -810,7 +810,8 @@ wheel_open()
 		w.boxes[ i ] = box;
 		w.labels[ i ] = label;
 	}
-	w.hint = self wheel_elem( 0, 124, 901 );
+	// under the wheel: the bottom box ("fall back", y 120, 24 high) ends at 132; at 124 the hint lay on it (owner, 2026-11-26)
+	w.hint = self wheel_elem( 0, 160, 901 );
 	w.hint.font = "default";
 	w.hint.fontScale = 1.4;
 	w.hint.alpha = 0.8;

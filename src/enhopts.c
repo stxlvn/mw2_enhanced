@@ -573,6 +573,7 @@ static void add_popup(void)
 	}
 	*(const char **)(items[yes - 1] + ITEM_TEXT) = "@MW2COOP_ENH_RESTART_TEXT"; // the question, just above Yes
 	*(void **)(items[yes - 1] + ITEM_TEXT_EXP) = NULL;
+	ui_popup_question_lines(menu, yes - 1, "MW2COOP_ENH_RESTART_TEXT", 3);
 	*(void **)(items[yes] + ITEM_ACTION) = ui_script_set("\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"quit\" ; ");
 	*(void **)(items[ui_item_index(src, "no")] + ITEM_ACTION) = ui_script_set(UI_S_CLICK_CLOSE);
 	if (ui_register_menu(menu))

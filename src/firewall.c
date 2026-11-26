@@ -133,6 +133,7 @@ static void add_popup(void)
 	// the question, just above Yes
 	*(const char **)(items[yes - 1] + ITEM_TEXT) = "@MW2COOP_FIREWALL_TEXT";
 	*(void **)(items[yes - 1] + ITEM_TEXT_EXP) = NULL;
+	ui_popup_question_lines(menu, yes - 1, "MW2COOP_FIREWALL_TEXT", 2);
 	*(void **)(items[yes] + ITEM_ACTION) =
 		ui_script_set("\"play\" \"mouse_click\" ; \"close\" \"self\" ; \"exec\" \"mw2coop_firewall_fix\" ; ");
 	*(void **)(items[ui_item_index(src, "no")] + ITEM_ACTION) = ui_script_set(UI_S_CLICK_CLOSE);

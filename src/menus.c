@@ -28,6 +28,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 
 #include "fonts.h"
@@ -64,20 +65,6 @@
 #include "voice.h"
 #include "chat.h"
 #include "steamnet.h"
-
-// itemDef_t::textRect follows windowDef_t. The cached width/height must be invalidated
-// when a cloned button is moved, otherwise its label keeps the source item's old layout.
-#ifdef _WIN64
-#define ITEM_TEXT_RECT 0xb0
-#else
-#define ITEM_TEXT_RECT 0xa4
-#endif
-
-#ifdef _WIN64
-#define ITEM_STATIC_FLAGS 0x4c
-#else
-#define ITEM_STATIC_FLAGS 0x44
-#endif
 
 #define WINDOW_FLAG_DECORATION 0x00100000u
 // rectClient has its own alignment bytes after its four floats. The UI's layout pass
@@ -535,6 +522,121 @@ uint8_t *ui_clone_menu(uint8_t *from, const char *name)
 	return menu;
 }
 
+// A menu expression (Statement_s: numEntries, entries, supportingData, lastExecuteTime, lastResult) and its entries (expressionEntry: type 0 an
+// operator, 1 an operand; then the operator, or the operand's data type 0 int / 1 float / 2 string and its value), and an item's float expressions
+// (ItemFloatExpression: the rect field it sets, the expression).
+#ifdef _WIN64
+#define STATEMENT_SIZE 0x30
+#define STATEMENT_ENTRIES 8
+#define EXP_ENTRY_SIZE 0x18
+#define EXP_ENTRY_OP 8
+#define EXP_ENTRY_VALUE 0x10
+#define FLOAT_EXP_SIZE 16
+#define FLOAT_EXP_STATEMENT 8
+#else
+#define STATEMENT_SIZE 0x18
+#define STATEMENT_ENTRIES 4
+#define EXP_ENTRY_SIZE 12
+#define EXP_ENTRY_OP 4
+#define EXP_ENTRY_VALUE 8
+#define FLOAT_EXP_SIZE 8
+#define FLOAT_EXP_STATEMENT 4
+#endif
+#define ITEM_FLOAT_EXP_COUNT (ITEM_FLOAT_EXPS - 4)
+#define OP_MULTIPLY 2
+#define OP_ADD 5
+
+static int exp_int(const uint8_t *e, int value)
+{
+	return *(const int *)e == 1 && *(const int *)(e + EXP_ENTRY_OP) == 0 && *(const int *)(e + EXP_ENTRY_VALUE) == value;
+}
+
+static int exp_op(const uint8_t *e, int op)
+{
+	return *(const int *)e == 0 && *(const int *)(e + EXP_ENTRY_OP) == op;
+}
+
+// A copy of a popup's height expression "24 + 3 * 20" (the title's row and three rows of 20: the question, Yes, No) counting <add> rows more; NULL when
+// the expression has no such part.
+static void *popup_height_with_rows(const uint8_t *st, int add)
+{
+	if (!st || IsBadReadPtr(st, STATEMENT_SIZE))
+		return NULL;
+	int n = *(const int *)st;
+	const uint8_t *entries = *(uint8_t *const *)(st + STATEMENT_ENTRIES);
+	if (n < 5 || n > 64 || !entries || IsBadReadPtr(entries, (size_t)n * EXP_ENTRY_SIZE))
+		return NULL;
+	for (int e = 0; e + 4 < n; e++) {
+		const uint8_t *at = entries + EXP_ENTRY_SIZE * e;
+		if (!exp_int(at, 24) || !exp_op(at + EXP_ENTRY_SIZE, OP_ADD) || !exp_int(at + 2 * EXP_ENTRY_SIZE, 3) ||
+		    !exp_op(at + 3 * EXP_ENTRY_SIZE, OP_MULTIPLY) || !exp_int(at + 4 * EXP_ENTRY_SIZE, 20))
+			continue;
+		uint8_t *copy = HeapAlloc(GetProcessHeap(), 0, STATEMENT_SIZE), *copied = HeapAlloc(GetProcessHeap(), 0, (size_t)n * EXP_ENTRY_SIZE);
+		memcpy(copy, st, STATEMENT_SIZE);
+		memcpy(copied, entries, (size_t)n * EXP_ENTRY_SIZE);
+		*(int *)(copied + EXP_ENTRY_SIZE * (e + 2) + EXP_ENTRY_VALUE) = 3 + add;
+		*(uint8_t **)(copy + STATEMENT_ENTRIES) = copied;
+		return copy;
+	}
+	return NULL;
+}
+
+// A popup copied from quit_popmenu keeps one line for its question (y -64, between the title at -84 and Yes at -40): a question of more lines ran onto
+// Yes and the focused row's bar hid it (the firewall popup, 2026-11-26 frames). The popup grows down a row (20 units) per line past the first, the way
+// the game's popups with more rows do: Yes and No go down, the panel's height and its bottom pieces' place (expressions "24 + 3 * 20", copied for this
+// popup) count the rows more, the panel's plain background grows. The lines are counted in the text of <text_name> (MW2COOP_..., no '@'); <lines> if
+// it is not found.
+void ui_popup_question_lines(uint8_t *menu, int question, const char *text_name, int lines)
+{
+	const char *text = text_name ? localize_text(text_name) : NULL;
+	if (text)
+		for (lines = 1; *text; text++)
+			lines += *text == '\n';
+	int count = menu ? *(int *)(menu + MENU_ITEM_COUNT) : 0;
+	if (question < 0 || question >= count || lines <= 1)
+		return;
+	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
+	float extra = 20.0f * (lines - 1), top = ((float *)(items[question] + ITEM_RECT))[1], bottom = top;
+	for (int i = 0; i < count; i++) {
+		const float *rect = (const float *)(items[i] + ITEM_RECT);
+		if (rect[1] > top && rect[1] + rect[3] > bottom)
+			bottom = rect[1] + rect[3]; // under No
+	}
+	int patched = 0;
+	for (int i = 0; i < count; i++) {
+		uint8_t *it = items[i];
+		float *rect = (float *)(it + ITEM_RECT), *client = (float *)(it + ITEM_RECT_CLIENT_Y - 4);
+		int exps = *(int *)(it + ITEM_FLOAT_EXP_COUNT);
+		const uint8_t *fexp = *(uint8_t **)(it + ITEM_FLOAT_EXPS);
+		if (exps > 0 && exps <= 16 && fexp && !IsBadReadPtr(fexp, (size_t)exps * FLOAT_EXP_SIZE)) {
+			uint8_t *copy = NULL;
+			for (int k = 0; k < exps; k++) {
+				void *grown = popup_height_with_rows(*(uint8_t *const *)(fexp + FLOAT_EXP_SIZE * k + FLOAT_EXP_STATEMENT), lines - 1);
+				if (!grown)
+					continue;
+				if (!copy) {
+					copy = HeapAlloc(GetProcessHeap(), 0, (size_t)exps * FLOAT_EXP_SIZE);
+					memcpy(copy, fexp, (size_t)exps * FLOAT_EXP_SIZE);
+				}
+				*(void **)(copy + FLOAT_EXP_SIZE * k + FLOAT_EXP_STATEMENT) = grown;
+				patched++;
+			}
+			if (copy)
+				*(uint8_t **)(it + ITEM_FLOAT_EXPS) = copy;
+			continue;
+		}
+		if (rect[1] > top) { // Yes, No
+			rect[1] += extra;
+			client[1] += extra;
+		} else if (rect[1] < top && rect[3] > 0 && fabsf(rect[1] + rect[3] - bottom) < 0.5f) { // the panel's background
+			if (client[3] == rect[3])
+				client[3] += extra;
+			rect[3] += extra;
+		}
+	}
+	log_printf("menus: popup %s: room for %d lines of its question (%d height expressions)", *(const char **)menu, lines, patched);
+}
+
 int ui_register_menu(uint8_t *menu)
 {
 	uint8_t *ui = base + RVA_UI_CONTEXT;
@@ -566,14 +668,6 @@ static int is_selection_logo(const char *name)
 // (the itemDefs without an action: lines of text, centered), the four source links as icons (a strip of four pictures, mw2coop\about-icons.tga, in the place of the picture of one
 // of the game's menu cards; the itemDefs with an action are the clickable places over the icons) and Back at the bottom. The icons are a copy of the logo's
 // material with a texture of their own (icons_material), so nothing the game draws elsewhere changes; without them (ABOUT_ICONS 0, or the picture missing) the links are text buttons. Over the whole page lies the dark panel of the main menu.
-#ifdef _WIN64
-#define ITEM_FONT 0xd0 // int fontEnum, then textAlignMode (int), textalignx and textaligny (float), textscale (float)
-#else
-#define ITEM_FONT 0xc4
-#endif
-#define ITEM_TEXT_ALIGN (ITEM_FONT + 4)
-#define ITEM_TEXT_ALIGN_X (ITEM_FONT + 8)
-#define ITEM_TEXT_SCALE (ITEM_FONT + 16)
 static void set_page_esc(uint8_t *page);
 #define ALIGN_MIDDLE_CENTER 5
 #define ITEM_TEXT_STYLE (ITEM_FONT + 0x14) // int textStyle after textscale: 3 = shadowed
@@ -2735,7 +2829,6 @@ static void patch_lobby(int campaign, int spec_split)
 #define ASSET_TYPE_MATERIAL 5
 #define ITEM_BACKGROUND ITEM_BACKGROUND_PTR
 #define ITEM_MATERIAL_EXP ITEM_MATERIAL_EXP_PTR
-#define WINDOW_AUTOWRAPPED 0x00800000
 static uint8_t *pic_item, *name_item;
 static void *pic_native_material, *pic_native_exp, *name_native_exp;
 static const char *name_native_text;
@@ -2802,14 +2895,8 @@ static void patch_lobby_description(uint8_t *menu, int campaign, const char *des
 	*(void **)(item + ITEM_FLOAT_EXPS) = NULL; // do not gate the description on ui_hint_focus/startmatch
 	*(void **)(item + ITEM_DISABLED_EXP) = NULL;
 	*(uint32_t *)(item + ITEM_STATIC_FLAGS) |= WINDOW_AUTOWRAPPED;
-	float *rect = (float *)(item + ITEM_RECT);
-	float *client = (float *)(item + ITEM_RECT_CLIENT_Y - 4);
-	// Keep the bottom edge at the existing description slot; grow upward into the free area
-	// immediately above the mission name (20 px) and image, with the stock autowrap enabled.
-	rect[1] = state->rect[1] - 52.0f;
-	rect[3] = 72.0f;
-	client[1] = state->client_rect[1] - 52.0f;
-	client[3] = 72.0f;
+	// (its place: the campaign lobby's copy of the item stands beside the mission's picture, access.c side_panel; it grew up from its slot into the
+	// Friendly fire and NAT type rows before, 2026-11-26)
 	*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) |= WINDOW_VISIBLE;
 }
 
