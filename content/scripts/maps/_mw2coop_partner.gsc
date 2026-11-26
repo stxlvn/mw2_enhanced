@@ -27,6 +27,38 @@ init()
 	foreach ( player in level.players )
 	{
 		player thread ammo_offer();
+		player thread icon_near();
+	}
+}
+
+// The partner's marker goes while he is near (owner 2026-11-26: "closer than 5 metres, no distance and the marker disappears"): maps\_coop's friendlyIcon,
+// with the distance src/markers.c draws on it, is hidden (alpha 0) on this player's screen while the eyes are under 5 m apart, and comes back past 5.3 m (no
+// flicker at the border) if the game shows it (coop_show_constant_icon, as maps\_coop::player_setup_icon does). Set at the end of each frame: the icon's flash
+// when the partner fires or is hit (FriendlyHudIcon_FlashIcon) builds it anew with alpha 1 within the frame. self: the player whose screen shows it.
+icon_near()
+{
+	self endon( "death" );
+	level endon( "mw2coop_level_end" );
+	other = get_other_player( self );
+	near = false;
+	for ( ;; )
+	{
+		wait 0.05;
+		waittillframeend;
+		if ( !isdefined( self.friendlyIcon ) || !isdefined( other ) )
+			continue;
+		d = Distance( self GetEye(), other GetEye() );
+		if ( d < 196.85 || ( near && d < 208.7 ) )	// 5 m, back past 5.3 m (inches)
+		{
+			self.friendlyIcon.alpha = 0;
+			near = true;
+		}
+		else if ( near )
+		{
+			near = false;
+			if ( ( !flag_exist( "coop_show_constant_icon" ) || flag( "coop_show_constant_icon" ) ) && !isdefined( self.noFriendlyHudIcon ) )
+				self.friendlyIcon.alpha = 1;
+		}
 	}
 }
 

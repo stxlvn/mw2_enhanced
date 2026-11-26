@@ -16,6 +16,7 @@
 //   climb    - (cliffhanger, default start) both players climb the ice wall on their own lanes,
 //              make the big jump, Soap catches both, both climb to the top (bot input)
 //   spawn    - (any map/start) where player 2 is during the first 12 s
+//   partnernear - (any map with room behind player 1) player 2 behind player 1 at 8, 3, 5.1, 6 and 4.5 m: his marker on player 1's view at 8 and 6 m only (hidden under 5 m, back past 5.3)
 //   overlap  - (any map; Cliffhanger runs the climb bot) how close the players come (eyes, origins) and frames ov-N of both views when the eyes are under 30 units
 //   takedown - (favela, default start) both ride the opening car (player 2 on the back seat),
 //              both duck before Makarov's shots, both get out next to each other
@@ -602,6 +603,9 @@ main()
 			break;
 		case "invertq":
 			invertq();
+			break;
+		case "partnernear":
+			partnernear();
 			break;
 		case "partnerline":
 			partnerline();
@@ -7415,6 +7419,43 @@ invertq()
 // PASS|FAIL"): player 2 stands 500 units (13 m) in front of player 1, who looks at him (the game shows no marker of a partner in view, so no distance
 // either), away (the marker at the screen's edge with "13 m"), round (behind him), then player 2 is downed (in view: no marker, the game's "Partner down"
 // line is in the middle) and player 1 looks away again (the health icon at the edge with "13 m"). Run with MW2COOP_GOD=0 (a down needs damage).
+// partnernear (owner 2026-11-26: "closer than 5 metres, no distance and the marker disappears"): player 2 stands behind player 1 (his marker pinned to the
+// view's edge, with the distance) at 8, 3, 5.1 (back from near: still hidden up to 5.3), 6 and 4.5 m; player 1's view must draw it at 8 and 6 m only
+partnernear()
+{
+	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
+	level.mw2coop_no_follow = true;
+	wait_intro();
+	wait 2;
+	foreach ( player in level.players )
+		player EnableInvulnerability();
+	yaw = level.player GetPlayerAngles()[ 1 ];
+	fwd = AnglesToForward( ( 0, yaw, 0 ) );
+	spot = level.player.origin;
+	steps = [];
+	steps[ 0 ] = 8;
+	steps[ 1 ] = 3;
+	steps[ 2 ] = 5.1;
+	steps[ 3 ] = 6;
+	steps[ 4 ] = 4.5;
+	foreach ( n, metres in steps )
+	{
+		level.player SetOrigin( spot );
+		level.player SetPlayerAngles( ( 0, yaw, 0 ) );
+		level.player2 SetOrigin( spot - fwd * ( metres / 0.0254 ) );
+		level.player2 SetPlayerAngles( ( 0, yaw, 0 ) );
+		wait 1;
+		report( "partnernear: player 2 " + metres + " m behind (eyes " + int( Distance( level.player GetEye(), level.player2 GetEye() ) ) + " units)" );
+		if ( metres == 8 || metres == 6 )
+			markers_expect( "at-" + metres, "coop_player_location", int( metres ) - 1, int( metres ) + 1 );
+		else
+			markers_expect( "at-" + metres, "coop_player_location", -1, -1 );
+		SetDvar( "mw2coop_qa_shot", level.script + "-pn-" + n );
+		wait 1.5;
+	}
+	report( "done" );
+}
+
 partnerline()
 {
 	check( level.players.size == 2 && isdefined( level.player2 ), "two players (" + level.players.size + ")" );
