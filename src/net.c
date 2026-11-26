@@ -660,8 +660,23 @@ static void hold_push(const struct sockaddr *from, int fromlen, const char *data
 	LeaveCriticalSection(&hold_lock);
 }
 
+// The game's UDP socket, learnt from its own polling: the game reads its socket every frame (NET_GetPacket), with or without a packet waiting. Until then
+// game_socket was only learnt from a 0xffffffff packet sent or received, and a PC that had neither (the 32-bit game in its menus: no Steam traffic before a join)
+// sent nothing when its Join button searched the networks (net_broadcast_mod returned 0; issue 30's check, 2026-11-26).
+static void learn_polled_socket(SOCKET s)
+{
+	struct sockaddr_in own;
+	int own_len = sizeof(own), type = 0, type_len = sizeof(type);
+	if (getsockname(s, (struct sockaddr *)&own, &own_len) == 0 && own.sin_family == AF_INET &&
+	    getsockopt(s, SOL_SOCKET, SO_TYPE, (char *)&type, &type_len) == 0 && type == SOCK_DGRAM &&
+	    InterlockedCompareExchangePointer((PVOID volatile *)&game_socket, (PVOID)s, (PVOID)INVALID_SOCKET) == (PVOID)INVALID_SOCKET)
+		log_printf("net: the game's socket (port %u) learnt from its polling", (unsigned)ntohs(own.sin_port));
+}
+
 static int WINAPI my_recvfrom(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen)
 {
+	if (game_socket == INVALID_SOCKET)
+		learn_polled_socket(s);
 	if (hold_count && !(flags & MSG_PEEK)) {
 		EnterCriticalSection(&hold_lock);
 		if (hold_count) {

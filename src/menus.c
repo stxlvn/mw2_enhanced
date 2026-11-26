@@ -651,6 +651,7 @@ int ui_register_menu(uint8_t *menu)
 // ---------------------------------------------------------------- campaign main menu button
 
 static const char split_specops_action[] = "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_split_specops\" ; ";
+static const char join_specops_action[] = "\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_find_so\" ; ";
 
 static const char *item_material_name(const uint8_t *it)
 {
@@ -1684,8 +1685,10 @@ static void selection_logo_tick(void)
 	}
 }
 
-// Special Ops' menu (main_specops): a split screen button under its "two players online" one (the button is found by its text, so a game build that words it otherwise gets none: the log
-// says so). It opens the same lobby as that button does, with the second player on this PC (mw2coop_split_specops).
+// Special Ops' menu (main_specops): under its "two players online" button (found by its text, so a game build that words it otherwise gets none: the log says so) a Join button and
+// a split screen button, the campaign page's order. Join looks for Special Ops lobbies on every network the PC is on (mw2coop_find_so: LAN, Radmin VPN and the like; issue 30: two
+// players who cannot reach each other through Steam had no way into each other's Special Ops lobby); split screen opens the same lobby as the online button does, with the
+// second player on this PC (mw2coop_split_specops).
 static uint8_t **specops_items; // our items array for main_specops
 static void patch_specops_menu(void)
 {
@@ -1711,27 +1714,32 @@ static void patch_specops_menu(void)
 	}
 	uint8_t *src = items[at];
 	float y = *(float *)(src + ITEM_RECT_Y) + BUTTON_HEIGHT;
-	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + 1) * sizeof(*list));
+	static const char *const names[2] = {"mw2coop_specops_join", "mw2coop_specops_split"};
+	static const char *const texts[2] = {"@MW2COOP_JOIN", "@MW2COOP_SPLITSCREEN"};
+	const char *const actions[2] = {join_specops_action, split_specops_action};
+	uint8_t **list = HeapAlloc(GetProcessHeap(), 0, (count + 2) * sizeof(*list));
 	memcpy(list, items, (at + 1) * sizeof(*list));
-	uint8_t *item = ui_clone_item(src, menu);
-	*(const char **)item = "mw2coop_specops_split";
-	*(const char **)(item + ITEM_TEXT) = "@MW2COOP_SPLITSCREEN";
-	*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(split_specops_action);
-	*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
-	*(float *)(item + ITEM_RECT_Y) = y;
-	*(float *)(item + ITEM_RECT_CLIENT_Y) = y;
-	list[at + 1] = item;
-	memcpy(list + at + 2, items + at + 1, (count - at - 1) * sizeof(*list));
-	for (int i = at + 2; i < count + 1; i++) { // everything below moves down
+	for (int k = 0; k < 2; k++) {
+		uint8_t *item = ui_clone_item(src, menu);
+		*(const char **)item = names[k];
+		*(const char **)(item + ITEM_TEXT) = texts[k];
+		*(MenuEventHandlerSet **)(item + ITEM_ACTION) = ui_script_set(actions[k]);
+		*(uint32_t *)(item + ITEM_DYNAMIC_FLAGS) &= ~WINDOW_HASFOCUS;
+		*(float *)(item + ITEM_RECT_Y) = y + k * BUTTON_HEIGHT;
+		*(float *)(item + ITEM_RECT_CLIENT_Y) = y + k * BUTTON_HEIGHT;
+		list[at + 1 + k] = item;
+	}
+	memcpy(list + at + 3, items + at + 1, (count - at - 1) * sizeof(*list));
+	for (int i = at + 3; i < count + 2; i++) { // everything below moves down
 		if (*(float *)(list[i] + ITEM_RECT_Y) >= y - 0.5f) {
-			*(float *)(list[i] + ITEM_RECT_Y) += BUTTON_HEIGHT;
-			*(float *)(list[i] + ITEM_RECT_CLIENT_Y) += BUTTON_HEIGHT;
+			*(float *)(list[i] + ITEM_RECT_Y) += 2 * BUTTON_HEIGHT;
+			*(float *)(list[i] + ITEM_RECT_CLIENT_Y) += 2 * BUTTON_HEIGHT;
 		}
 	}
 	specops_items = list;
 	*(uint8_t ***)(menu + MENU_ITEMS) = list;
-	*(int *)(menu + MENU_ITEM_COUNT) = count + 1;
-	log_printf("menus: main_specops: split screen button added (%d items)", count + 1);
+	*(int *)(menu + MENU_ITEM_COUNT) = count + 2;
+	log_printf("menus: main_specops: join and split screen buttons added (%d items)", count + 2);
 }
 
 // No Russian in Mission Select (owner, 2026-11-04): the PC game's Act I list holds Trainer, Roadkill, Cliffhanger and Favela but not the airport mission. A button for it is cloned from
@@ -1786,7 +1794,8 @@ static void patch_act1_menu(void)
 
 // ---------------------------------------------------------------- joining a game on the network
 
-// mw2coop_find: the campaign menu's join button. Asks every network the PC is on (LAN, Radmin
+// mw2coop_find: the campaign menu's join button (mw2coop_find_so: Special Ops' one, the same for Special Ops lobbies: the query
+// "mw2coop_find_so", which a host answers from a Special Ops lobby held over the network, not from a split screen one). Asks every network the PC is on (LAN, Radmin
 // VPN and the like: each adapter's broadcast address, net.c) for campaign lobbies for 2 s, then
 // lists the hosts that answered in a popup ("mw2coop_lobbies", built from the difficulty popup);
 // the player picks one (mw2coop_join_found <n>; a locked lobby asks for its password, access.c)
@@ -1794,6 +1803,7 @@ static void patch_act1_menu(void)
 // is open to the network: "mw2coop_here <host xuid> <p|-> <map> <host name>" (p: password; a
 // host on several networks answers on each, the XUID keeps it to one row).
 #define FIND_TAG "mw2coop_find"
+#define FIND_SO_TAG "mw2coop_find_so"
 #define HERE_TAG "mw2coop_here "
 #define FIND_MS 2000
 #define LIST_ROWS 4
@@ -1815,10 +1825,11 @@ static int lobby_count;
 static volatile LONG finding;
 static volatile DWORD find_started, find_sent, join_text_until;
 static int find_target; // asking one address (typed in) instead of every network
+static int find_specops; // the search is for Special Ops lobbies (mw2coop_find_so), not campaign ones; an address typed in from its list asks the same
 static uint8_t target_ip[4];
 static uint16_t target_port;
 
-static void find_f(void)
+static void find_start(int specops)
 {
 	if (finding)
 		return;
@@ -1828,15 +1839,27 @@ static void find_f(void)
 	find_started = GetTickCount();
 	find_sent = 0;
 	find_target = 0;
+	find_specops = specops;
 	InterlockedExchange(&finding, 1);
 	localize_select("MW2COOP_JOIN", "MW2COOP_JOIN_SEARCHING");
-	log_printf("menus: looking for campaign lobbies on the network");
+	log_printf("menus: looking for %s lobbies on the network", specops ? "Special Ops" : "campaign");
 }
 
-// "Name - Mission" in the game's language (Windows-1251)
+static void find_f(void)
+{
+	find_start(0);
+}
+
+static void find_so_f(void)
+{
+	find_start(1);
+}
+
+// "Name - Mission" in the game's language (Windows-1251); a Special Ops op by its name in the Special Ops menus (SPECIAL_OPS_SO_<OP>)
 static void lobby_row(const Lobby *l, char *out, int size)
 {
-	char key[64] = "MENU_SP_SP_";
+	char key[64];
+	lstrcpynA(key, strncmp(l->map, "so_", 3) == 0 ? "SPECIAL_OPS_" : "MENU_SP_SP_", sizeof(key));
 	int n = (int)strlen(key);
 	for (const char *m = l->map; *m && n < (int)sizeof(key) - 1; m++)
 		key[n++] = (char)((*m >= 'a' && *m <= 'z') ? *m - 32 : *m);
@@ -1849,7 +1872,7 @@ static void lobby_row(const Lobby *l, char *out, int size)
 
 void menus_find_at(const uint8_t ip[4], uint16_t port)
 {
-	find_f();
+	find_start(find_specops);
 	memcpy(target_ip, ip, 4);
 	target_port = port;
 	find_target = 1;
@@ -1862,10 +1885,11 @@ static void find_tick(void)
 		if (now - find_started < FIND_MS) {
 			if (!find_sent || now - find_sent >= 700) {
 				find_sent = now;
+				const char *query = find_specops ? FIND_SO_TAG : FIND_TAG;
 				if (find_target)
-					net_send_mod_to(target_ip, target_port, FIND_TAG);
+					net_send_mod_to(target_ip, target_port, query);
 				else
-					net_broadcast_mod(FIND_TAG, settings_port());
+					net_broadcast_mod(query, settings_port());
 			}
 			return;
 		}
@@ -1889,7 +1913,7 @@ static void find_tick(void)
 			localize_set_text(alias, row);
 		}
 		LeaveCriticalSection(&lobby_lock);
-		log_printf("menus: %d campaign lobb%s answered", count, count == 1 ? "y" : "ies");
+		log_printf("menus: %d %s lobb%s answered", count, find_specops ? "Special Ops" : "campaign", count == 1 ? "y" : "ies");
 		// rows without a lobby are hidden, so the focus starts on the first lobby or the address row
 		uint8_t *list = ui_find_menu("mw2coop_lobbies");
 		for (int i = 0; i < MAX_LOBBIES; i++) {
@@ -2452,6 +2476,19 @@ static int spec_split_lobby(void)
 	return so_name(v);
 }
 
+// A Special Ops lobby held over the network (the party's op is a so_ one and no split screen session is being set up)
+static int specops_online_lobby(void)
+{
+	if (!base[RVA_PARTY_ACTIVE] || split_mode || split_lobby_returning)
+		return 0;
+	char v[64] = "";
+	game_dvar_raw("sv_running", v, sizeof(v));
+	if (v[0] == '1')
+		return 0;
+	game_dvar_raw("coop_mapName", v, sizeof(v));
+	return so_name(v);
+}
+
 // Leaving the campaign lobby: coop_lobby is the Special Ops lobby, and its "leave" popup
 // (leave_lobby_warning) sends the player on to main_specops. While it holds a campaign mission,
 // those script targets are changed to main_selection. The native scripts are put back for a
@@ -2601,6 +2638,7 @@ static LobbySwap lobby_swaps[] = {
 };
 
 static int lobby_campaign_set;
+static volatile LONG specops_online_set; // the lobby is a Special Ops one held over the network (not split screen): its host answers mw2coop_find_so
 static void patch_lobby_mission(uint8_t *menu, int campaign);
 
 // the item showing <text> natively (or our text, once swapped: the swap remembers its item)
@@ -3112,12 +3150,15 @@ int menus_on_lobby_packet(const char *buf, int len, const uint8_t *from_ip, uint
 			  int reply_size, int *reply_len)
 {
 	*reply_len = 0;
-	static const char find[] = "\xff\xff\xff\xff" FIND_TAG;
+	static const char find[] = "\xff\xff\xff\xff" FIND_TAG, find_so[] = "\xff\xff\xff\xff" FIND_SO_TAG;
 	static const char here[] = "\xff\xff\xff\xff" HERE_TAG;
-	if (len == (int)sizeof(find) - 1 && memcmp(buf, find, len) == 0) {
-		// answer only while hosting a campaign lobby that still has room
-		char lock = access_lobby_flag();
-		if (base[RVA_PARTY_IS_HOST] && lobby_campaign_set >= 2 && !party_full() && lock) {
+	int so_query = len == (int)sizeof(find_so) - 1 && memcmp(buf, find_so, len) == 0;
+	if (so_query || (len == (int)sizeof(find) - 1 && memcmp(buf, find, len) == 0)) {
+		// answer only while hosting a lobby of the kind asked for that still has room: a campaign lobby (its Access row may lock it), or a Special Ops lobby held over the
+		// network (no Access row there: open)
+		char lock = so_query ? '-' : access_lobby_flag();
+		int holding = so_query ? specops_online_set != 0 : lobby_campaign_set >= 2;
+		if (base[RVA_PARTY_IS_HOST] && holding && !party_full() && lock) {
 			char map[64] = "", name[33] = "";
 			game_dvar_raw("coop_mapName", map, sizeof(map));
 			// the host's name as its party has it (slot 0, rva 0x5dd960, set by the party join 0xd7220)
@@ -3989,6 +4030,7 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_pause_routes_tick", NULL, NULL, pause_routes_tick_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_logo_tick", NULL, NULL, logo_tick_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_find", NULL, NULL, find_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_find_so", NULL, NULL, find_so_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_join_found", NULL, NULL, join_found_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_rejoin_yes", NULL, NULL, rejoin_yes_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_rejoin_no", NULL, NULL, rejoin_no_f CMD_NODE_FLAG},
@@ -4904,6 +4946,7 @@ static void tick_f(void)
 	addr_scratch_check("in the menu tick's patches");
 	int campaign = campaign_lobby();
 	int spec_split = spec_split_lobby();
+	InterlockedExchange(&specops_online_set, !campaign && !spec_split && specops_online_lobby());
 	int split_lobby = campaign || spec_split; // the lobby of a split screen game of ours: the return to it is looked after for a Special Ops op too
 	int lobby_ui = *(volatile int *)(base + RVA_UI_STATE);
 	rejoin_lobby_tick(campaign, lobby_ui); // a network session that broke off: the host waits, the partner joins again
