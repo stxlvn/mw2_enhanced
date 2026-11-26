@@ -16,6 +16,7 @@
 //   climb    - (cliffhanger, default start) both players climb the ice wall on their own lanes,
 //              make the big jump, Soap catches both, both climb to the top (bot input)
 //   spawn    - (any map/start) where player 2 is during the first 12 s
+//   overlap  - (any map; Cliffhanger runs the climb bot) how close the players come (eyes, origins) and frames ov-N of both views when the eyes are under 30 units
 //   takedown - (favela, default start) both ride the opening car (player 2 on the back seat),
 //              both duck before Makarov's shots, both get out next to each other
 //   takedown2 - same, but player 2 does not duck: Makarov hits him, not player 1
@@ -693,6 +694,17 @@ main()
 				[[ level.mw2coop_qa_climblb ]]();
 			else
 				report( "climblb: not on Cliffhanger" );
+			break;
+		case "overlap":	// how close the players come (eyes, bodies) and frames of both views then; Cliffhanger: the climb bot, else 30 s from the start
+			level thread overlap_watch();
+			if ( isdefined( level.mw2coop_qa_climb ) )
+				[[ level.mw2coop_qa_climb ]]();
+			else
+			{
+				overlap_look();
+				wait 20;
+				report( "done" );
+			}
 			break;
 		case "climb":
 			// in maps\_mw2coop_climb_qa, loaded on Cliffhanger only (it names maps\_climb, which
@@ -7076,6 +7088,62 @@ qa_outside( label )
 }
 
 // both machines save their own frame (src/shot.c): <map>-<section>-<label>
+// overlap: while the players are close, both look down, left, right and back (frames ovl-<n> of both views)
+overlap_look()
+{
+	wait 2.5;
+	if ( !isdefined( level.player2 ) || Distance( level.player GetEye(), level.player2 GetEye() ) > 60 )
+		return;
+	yaw1 = level.player GetPlayerAngles()[ 1 ];
+	yaw2 = level.player2 GetPlayerAngles()[ 1 ];
+	turns = [];
+	turns[ 0 ] = ( 70, 0, 0 );
+	turns[ 1 ] = ( 20, 90, 0 );
+	turns[ 2 ] = ( 20, -90, 0 );
+	turns[ 3 ] = ( 10, 180, 0 );
+	foreach ( n, turn in turns )
+	{
+		level.player SetPlayerAngles( ( turn[ 0 ], yaw1 + turn[ 1 ], 0 ) );
+		level.player2 SetPlayerAngles( ( turn[ 0 ], yaw2 + turn[ 1 ], 0 ) );
+		wait 0.4;
+		report( "overlap: look " + n + ": p1 angles " + vec_int( level.player GetPlayerAngles() ) + ", p2 " + vec_int( level.player2 GetPlayerAngles() ) );
+		qa_shot( "ovl-" + n );
+	}
+}
+
+// overlap: every 0.1 s the distance between the players' eyes and between their origins; logged when it changes by 10 units or more while under 150,
+// a frame of both views (each PC writes its own) when the eyes are under 30 units, at most every 1.5 s, 12 frames
+overlap_watch()
+{
+	level endon( "mw2coop_level_end" );
+	last = -100;
+	shots = 0;
+	shot_at = -10000;
+	min_eye = 100000;
+	for ( ;; )
+	{
+		wait 0.1;
+		if ( !isdefined( level.player2 ) )
+			continue;
+		d = Distance( level.player GetEye(), level.player2 GetEye() );
+		d2 = Distance2D( level.player.origin, level.player2.origin );
+		if ( d < min_eye )
+			min_eye = d;
+		if ( d < 150 && abs( d - last ) >= 10 )
+		{
+			report( "overlap: eyes " + int( d ) + ", origins 2D " + int( d2 ) + " dz " + int( level.player2.origin[ 2 ] - level.player.origin[ 2 ] ) + ", stances " + level.player GetStance() + "/" + level.player2 GetStance()
+				+ ", linked " + level.player IsLinked() + "/" + level.player2 IsLinked() + ", t " + GetTime() + " (closest " + int( min_eye ) + ")" );
+			last = d;
+		}
+		if ( d < 30 && shots < 12 && GetTime() - shot_at > 1500 )
+		{
+			shot_at = GetTime();
+			shots++;
+			qa_shot( "ov-" + shots );
+		}
+	}
+}
+
 qa_shot( label )
 {
 	SetDvar( "mw2coop_qa_shot", level.script + "-" + level.start_point + "-" + label );

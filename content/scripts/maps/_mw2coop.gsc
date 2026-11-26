@@ -181,6 +181,7 @@ main()
 	}
 	set_bodies();
 	thread sync_weapons();
+	thread partner_overlap();
 	thread watch_false_falls();
 	thread track_checkpoints();
 	thread maps\_mw2coop_checkpoints::watch_flags();
@@ -839,6 +840,73 @@ sync_viewmodel()
 own_weapon_busy( weapon )
 {
 	return is_in_array( level.mw2coop_own_weapons, weapon ) && level.player2 IsLinked();
+}
+
+// Neither player sees the inside of the other one's body. Team Player's wake-up: player 2 shares player 1's view rig, both cameras on one spot; Cliffhanger: Soap
+// catches the players in turn and the second one hangs where the first did; and the players do not collide, so one can walk into the other (a player's report,
+// 2026-11-26: "at the start the players lie and see each other's textures"). One never sees his own body, so while the players are this close both bodies are
+// hidden on both PCs (the same Hide() in lockstep), as the ISS and the museum's credits do, and shown again once they have been apart for 0.3 s. A scene that
+// hides them itself sets level.mw2coop_bodies_hidden (maps\_mw2coop_dcemp, maps\_mw2coop_ending) and is left alone.
+partner_overlap()
+{
+	level endon( "mw2coop_level_end" );
+	if ( !isdefined( level.player2 ) )
+		return;
+	hidden = false;
+	names = false;
+	apart = 0;
+	for ( ;; )
+	{
+		wait 0.05;
+		if ( isdefined( level.mw2coop_bodies_hidden ) )
+		{
+			hidden = false;	// (the scene shows them itself)
+			names = false;
+			continue;
+		}
+		close = players_overlap();
+		if ( close && !hidden )
+		{
+			level.player Hide();
+			level.player2 Hide();
+			hidden = true;
+			apart = 0;
+			if ( GetDvar( "mw2coop_hide_names" ) != "1" )	// the name over the hidden partner's head too (a scene that hid it itself keeps it hidden)
+			{
+				SetDvar( "mw2coop_hide_names", "1" );
+				names = true;
+			}
+			state( "bodies hidden: the players overlap" );
+		}
+		else if ( !close && hidden )
+		{
+			apart++;
+			if ( apart >= 6 )
+			{
+				level.player Show();
+				level.player2 Show();
+				hidden = false;
+				if ( names )
+				{
+					SetDvar( "mw2coop_hide_names", "" );
+					names = false;
+				}
+				state( "bodies shown: the players are apart" );
+			}
+		}
+		else
+			apart = 0;
+	}
+}
+
+// one player's camera is in or right at the other one's body: the eyes together, or one above the other within a body's height (crouched, lying, hanging)
+players_overlap()
+{
+	p1 = level.player;
+	p2 = level.player2;
+	if ( Distance( p1 GetEye(), p2 GetEye() ) < 30 )
+		return true;
+	return Distance2D( p1.origin, p2.origin ) < 20 && abs( p1.origin[ 2 ] - p2.origin[ 2 ] ) < 72;
 }
 
 sync_weapons()

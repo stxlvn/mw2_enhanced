@@ -22,6 +22,7 @@ partner_iss_camera( camera )
 	if ( !coop() )
 		return;
 	p2 = level.player2;
+	level.mw2coop_bodies_hidden = true;	// (maps\_mw2coop::partner_overlap leaves them alone)
 	level.player Hide();
 	p2 Hide();
 	SetDvar( "mw2coop_hide_names", "1" );
@@ -81,6 +82,7 @@ players_empaftermath()
 	{
 		level.player Show();
 		level.player2 Show();
+		level.mw2coop_bodies_hidden = undefined;
 		SetDvar( "mw2coop_hide_names", "" );
 		if ( isdefined( level.mw2coop_iss_icon ) && level.mw2coop_iss_icon && flag_exist( "coop_show_constant_icon" ) )
 			flag_set( "coop_show_constant_icon" );

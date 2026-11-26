@@ -58,7 +58,10 @@ museum_link( camera )
 		// both ride the same camera point: each would look from inside the other's head and body
 		// (the dark masses over the whole screen in the QA frames)
 		if ( coop() )
+		{
+			level.mw2coop_bodies_hidden = true;	// (maps\_mw2coop::partner_overlap leaves them alone)
 			player Hide();
+		}
 	}
 }
 
