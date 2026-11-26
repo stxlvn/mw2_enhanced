@@ -397,6 +397,21 @@ static DWORD WINAPI worker(LPVOID unused)
 	return 0;
 }
 
+int upnp_steam_lobby(uint64_t *id)
+{
+#ifdef _WIN64
+	uint8_t *exe = (uint8_t *)GetModuleHandleA(NULL);
+	uint8_t *client = *(uint8_t *volatile *)(exe + STEAM_CLIENT_PTR);
+	if (!client || !*(volatile uint8_t *)(client + 0xe0) || !*(volatile uint64_t *)(client + 0xd0))
+		return 0;
+	*id = *(volatile uint64_t *)(client + 0xd0);
+	return 1;
+#else
+	(void)id;
+	return 0;
+#endif
+}
+
 void upnp_want(int hosting)
 {
 	if (!wake)

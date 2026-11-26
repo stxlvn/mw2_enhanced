@@ -2825,6 +2825,23 @@ static void patch_lobby(int campaign, int spec_split)
 	if (!menu)
 		return;
 	lobby_music_patch(campaign);
+	{ // "Invite a friend" (both lobbies): Steam's invite dialog for the lobby, not the game's 2009 overlay dialog, which today's Steam opens as its friends list
+	  // and a chat (access.c invite_f)
+		static void *invite_action;
+		static uint8_t *invite_logged;
+		const int at = ui_item_index(menu, "invitefriend");
+		if (at >= 0) {
+			uint8_t *it = (*(uint8_t ***)(menu + MENU_ITEMS))[at];
+			if (!invite_action)
+				invite_action = ui_script_set("\"play\" \"mouse_click\" ; \"exec\" \"mw2coop_invite\" ; ");
+			if (*(void **)(it + ITEM_ACTION) != invite_action) {
+				*(void **)(it + ITEM_ACTION) = invite_action;
+				if (invite_logged != it)
+					log_printf("menus: coop_lobby: Invite a friend opens Steam's invite dialog (mw2coop_invite)");
+				invite_logged = it;
+			}
+		}
+	}
 	int changed = 0;
 	for (size_t k = 0; k < sizeof(lobby_swaps) / sizeof(lobby_swaps[0]); k++) {
 		LobbySwap *w = &lobby_swaps[k];

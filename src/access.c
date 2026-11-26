@@ -37,6 +37,7 @@
 #include "menus_ui.h"
 #include "net.h"
 #include "nick.h"
+#include "upnp.h"
 
 enum { ACCESS_OPEN, ACCESS_PASSWORD, ACCESS_STEAM };
 enum { EDIT_NONE, EDIT_HOST_PASSWORD, EDIT_JOIN_PASSWORD, EDIT_ADDRESS, EDIT_NICK };
@@ -565,6 +566,26 @@ int access_on_packet(const char *buf, int len, const uint8_t ip[4], uint16_t por
 	return 1;
 }
 
+// mw2coop_invite: the lobby's "Invite a friend". The game asks Steam's overlay for its 2009 dialog "LobbyInvite" (xshowfriendslist: ActivateGameOverlay,
+// ISteamFriends013 slot 21 at rva 0x241240); today's Steam opens its friends list for it, where a click on a friend opens a chat with him and invites
+// nobody (owner, 2026-11-26). Steam's invite dialog for a lobby (ActivateGameOverlayInviteDialog, slot 26 of the same interface: the five after slot 21
+// are ...ToUser, ...ToWebPage, ...ToStore, SetPlayedWith and it) lists the friends with an Invite button each, and sends the game's own lobby invite.
+// Without a Steam lobby (a LAN or address session, Steam offline) or on the 32-bit builds the game's own command runs as before.
+static void invite_f(void)
+{
+	uint64_t lobby = 0;
+	HMODULE steam = GetModuleHandleA("steam_api64.dll");
+	void *(*friends_fn)(void) = steam ? (void *(*)(void))GetProcAddress(steam, "SteamFriends") : NULL;
+	void *friends = friends_fn ? friends_fn() : NULL;
+	if (friends && upnp_steam_lobby(&lobby)) {
+		((void (*)(void *, uint64_t))(*(void ***)friends)[26])(friends, lobby);
+		log_printf("access: Steam's invite dialog opened for the lobby");
+		return;
+	}
+	log_printf("access: no Steam lobby here (%s): the game's own friends list", friends ? "the party has none" : "no Steam");
+	game_cbuf_addtext("xshowfriendslist\n");
+}
+
 static cmd_function_t commands[] = {
 	{NULL, "mw2coop_edit_ok", NULL, NULL, edit_ok_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_password", NULL, NULL, password_f CMD_NODE_FLAG},
@@ -572,6 +593,7 @@ static cmd_function_t commands[] = {
 	{NULL, "mw2coop_access", NULL, NULL, access_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_ff", NULL, NULL, ff_f CMD_NODE_FLAG},
 	{NULL, "mw2coop_nick_edit", NULL, NULL, nick_edit_f CMD_NODE_FLAG},
+	{NULL, "mw2coop_invite", NULL, NULL, invite_f CMD_NODE_FLAG},
 };
 
 void access_install(void)
