@@ -172,6 +172,7 @@ BOOL WINAPI DllMain(HINSTANCE self, DWORD reason, LPVOID reserved)
 	if (!proxy_host_is_game()) // not the single-player game (the multiplayer iw4mp.exe, a tool): only the system's winmm calls passed through (proxy.c)
 		return proxy_init() ? TRUE : FALSE;
 	log_open();
+	console_com_maxfps_capture_config(); // snapshot before the engine can rewrite config.cfg
 	settings_load(); // before the game registers net_port
 
 	char exe[MAX_PATH];

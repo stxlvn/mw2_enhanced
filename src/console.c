@@ -1862,6 +1862,8 @@ static void dvar_verify_f(void)
 	}
 	expected[used] = 0;
 	print_dvar_verification(d, argc > 2 ? expected : NULL);
+	if (!_stricmp(name, "com_maxfps") && d->type == DVAR_TYPE_INT)
+		console_com_maxfps_note_user_value(d->current.integer);
 }
 
 static cmd_function_t dvar_verify_cmd = {NULL, "mw2coop_dvar_verify", NULL, NULL, dvar_verify_f CMD_NODE_FLAG};
@@ -1989,6 +1991,42 @@ static void console_dvar_compare(const char *name)
 	printf_line("%s DEFAULT^7  %s", dvar_values_differ(d, &d->current, &d->reset) ? "^3DIFF" : "^8SAME", def);
 	printf_line("%s LATCHED^7  %s", dvar_values_differ(d, &d->current, &d->latched) ? "^3DIFF" : "^8SAME", latched);
 	free(current); free(def); free(latched);
+}
+
+static int console_parse_maxfps_number(const char *text, int *value)
+{
+	while (isspace((unsigned char)*text))
+		text++;
+	if (*text == '"')
+		text++;
+	char *end = NULL;
+	long parsed = strtol(text, &end, 10);
+	if (end == text || parsed < 0 || parsed > 10000)
+		return 0;
+	if (*end == '"')
+		end++;
+	while (isspace((unsigned char)*end))
+		end++;
+	if (*end && *end != ';' && !(*end == '/' && end[1] == '/'))
+		return 0;
+	*value = (int)parsed;
+	return 1;
+}
+
+static int console_set_targets_com_maxfps(const char *command, const char *rest, int *value)
+{
+	if (!_stricmp(command, "com_maxfps"))
+		return console_parse_maxfps_number(rest, value);
+	if (_stricmp(command, "set") && _stricmp(command, "seta"))
+		return 0;
+	while (isspace((unsigned char)*rest))
+		rest++;
+	const char *name = rest;
+	while (*rest && !isspace((unsigned char)*rest))
+		rest++;
+	if ((size_t)(rest - name) != sizeof("com_maxfps") - 1 || _strnicmp(name, "com_maxfps", sizeof("com_maxfps") - 1))
+		return 0;
+	return console_parse_maxfps_number(rest, value);
 }
 
 static void run_line(char *cmd)
@@ -2130,6 +2168,11 @@ static void run_line(char *cmd)
 			print_dvar_line(game_find_dvar(name), 1);
 			return;
 		}
+		if (!_stricmp(name, "com_maxfps")) {
+			int wanted;
+			if (console_parse_maxfps_number(rest, &wanted))
+				console_com_maxfps_note_user_value(wanted);
+		}
 		char set[INPUT_LEN * 2 + 128];
 		snprintf(set, sizeof(set), "seta %s %s\nmw2coop_dvar_verify %s %s\n", name, rest, name, rest);
 		game_cbuf_addtext(set);
@@ -2137,8 +2180,14 @@ static void run_line(char *cmd)
 	}
 	if (!game_command_exists(name) && strcmp(name, "set") && strcmp(name, "seta") && strcmp(name, "exec") && strcmp(name, "wait"))
 		printf_line("^1unknown command or dvar \"%s\" (sent to the game anyway)", name);
-	char cb[INPUT_LEN + 2];
-	snprintf(cb, sizeof(cb), "%s\n", cmd);
+	char cb[INPUT_LEN + 64];
+	int maxfps_value;
+	if (console_set_targets_com_maxfps(name, rest, &maxfps_value)) {
+		console_com_maxfps_note_user_value(maxfps_value);
+		snprintf(cb, sizeof(cb), "%s\nmw2coop_dvar_verify com_maxfps\n", cmd);
+	} else {
+		snprintf(cb, sizeof(cb), "%s\n", cmd);
+	}
 	game_cbuf_addtext(cb);
 }
 
@@ -9192,11 +9241,10 @@ static void console_sv_cheats_unprotect(void)
 // Clear INIT/ROM and add both persistence flags in one atomic update, preserving every
 // unrelated flag. Retry with the console's dvar polling because the engine can register it
 // later or recreate it.
-static void console_com_maxfps_save(void)
+static void console_com_maxfps_save_dvar(dvar_t *d)
 {
 	const LONG clear_mask = (LONG)(CONSOLE_DVAR_INIT_FLAG | DVAR_ROM_FLAG);
 	const LONG save_mask = (LONG)(DVAR_ARCHIVE_FLAG | DVAR_SAVED_FLAG);
-	dvar_t *d = game_find_dvar("com_maxfps");
 	if (!d)
 		return;
 	if (d->type != DVAR_TYPE_INT) {
@@ -9216,6 +9264,293 @@ static void console_com_maxfps_save(void)
 		}
 	}
 }
+
+static void console_com_maxfps_save(void)
+{
+	console_com_maxfps_save_dvar(game_find_dvar("com_maxfps"));
+}
+
+// The engine may execute players\config.cfg while com_maxfps is still INIT/ROM, then rewrite
+// the file with its default. Capture the player's original value in DllMain before the game
+// entrypoint runs; once the dvar and front-end are ready, restore that snapshot on the game
+// thread. Later level transitions are handled separately by the low-rate control-thread watcher.
+static LONG com_maxfps_config_capture_state; // 0: not captured, 1: capturing, 2: valid snapshot, 3: no valid assignment
+static LONG com_maxfps_saved_config_value;
+static LONG com_maxfps_config_restore_state;
+static LONG com_maxfps_runtime_value;
+static LONG com_maxfps_runtime_value_valid;
+static LONG com_maxfps_restore_queued;
+static LONG com_maxfps_restore_command_ready;
+static LONG com_maxfps_restore_reason;
+// The Enhanced page edits the engine-owned dvar directly. Keep the reset watcher out of the
+// way while that page is open, then adopt the final slider value from its onClose script.
+static LONG com_maxfps_ui_editing;
+static LONG com_maxfps_ui_open_value;
+static LONG com_maxfps_ui_open_value_valid;
+
+void console_com_maxfps_note_user_value(int value)
+{
+	if (value < 0 || value > 10000)
+		return;
+	InterlockedExchange(&com_maxfps_runtime_value, value);
+	InterlockedExchange(&com_maxfps_runtime_value_valid, 1);
+}
+
+static void console_com_maxfps_ui_open_f(void)
+{
+	// Set the gate before reading the dvar: a concurrent control-thread poll must not queue a
+	// correction while the user is opening the page.
+	InterlockedExchange(&com_maxfps_ui_editing, 1);
+	dvar_t *d = game_find_dvar("com_maxfps");
+	if (d && d->type == DVAR_TYPE_INT) {
+		InterlockedExchange(&com_maxfps_ui_open_value, d->current.integer);
+		InterlockedExchange(&com_maxfps_ui_open_value_valid, 1);
+		log_printf("console: Enhanced Max FPS slider opened at %d; reset watcher suspended", d->current.integer);
+	} else {
+		InterlockedExchange(&com_maxfps_ui_open_value_valid, 0);
+	}
+}
+
+static void console_com_maxfps_ui_close_f(void)
+{
+	// The control-thread transition fallback may already have committed and closed this edit.
+	if (!InterlockedCompareExchange(&com_maxfps_ui_editing, 0, 0))
+		return;
+	dvar_t *d = game_find_dvar("com_maxfps");
+	LONG was_valid = InterlockedExchange(&com_maxfps_ui_open_value_valid, 0);
+	if (d && d->type == DVAR_TYPE_INT && was_valid) {
+		int value = d->current.integer;
+		int opened = (int)InterlockedCompareExchange(&com_maxfps_ui_open_value, 0, 0);
+		if (value != opened) {
+			console_com_maxfps_note_user_value(value);
+			log_printf("console: accepted Enhanced Max FPS slider value %d (page opened at %d)", value, opened);
+		} else {
+			log_printf("console: Enhanced Max FPS slider closed without a change (%d)", value);
+		}
+	} else {
+		log_printf("console: Enhanced Max FPS slider closed without a valid opening snapshot");
+	}
+	// The target is updated before lifting the gate, so the watcher cannot restore the old value.
+	InterlockedExchange(&com_maxfps_ui_editing, 0);
+}
+
+static int console_parse_com_maxfps_line(char *line, int *value)
+{
+	char *p = line;
+	while (isspace((unsigned char)*p))
+		p++;
+	if (!*p || *p == ';' || (*p == '/' && p[1] == '/'))
+		return 0;
+	char *command = p;
+	while (*p && !isspace((unsigned char)*p))
+		p++;
+	size_t command_len = (size_t)(p - command);
+	if (!((command_len == 3 && !_strnicmp(command, "set", 3)) ||
+	      (command_len == 4 && !_strnicmp(command, "seta", 4))))
+		return 0;
+	while (isspace((unsigned char)*p))
+		p++;
+	char *name = p;
+	while (*p && !isspace((unsigned char)*p) && *p != '"')
+		p++;
+	if ((size_t)(p - name) != sizeof("com_maxfps") - 1 || _strnicmp(name, "com_maxfps", sizeof("com_maxfps") - 1))
+		return 0;
+	if (!isspace((unsigned char)*p))
+		return 0;
+	while (isspace((unsigned char)*p))
+		p++;
+	if (*p == '"')
+		p++;
+	char *end = NULL;
+	long parsed = strtol(p, &end, 10);
+	if (end == p || parsed < 0 || parsed > 10000)
+		return 0;
+	if (*end == '"')
+		end++;
+	while (isspace((unsigned char)*end))
+		end++;
+	if (*end && *end != ';' && !(*end == '/' && end[1] == '/'))
+		return 0;
+	*value = (int)parsed;
+	return 1;
+}
+
+static int console_read_saved_com_maxfps(int *value)
+{
+	char path[MAX_PATH];
+	DWORD n = GetModuleFileNameA(NULL, path, sizeof(path));
+	if (!n || n >= sizeof(path))
+		return 0;
+	char *slash = strrchr(path, '\\');
+	if (!slash)
+		return 0;
+	slash[1] = 0;
+	if (strlen(path) + sizeof("players\\config.cfg") > sizeof(path))
+		return 0;
+	strcat(path, "players\\config.cfg");
+	FILE *file = fopen(path, "rt");
+	if (!file)
+		return 0;
+	char line[512];
+	int found = 0, parsed;
+	while (fgets(line, sizeof(line), file)) {
+		if (console_parse_com_maxfps_line(line, &parsed)) {
+			*value = parsed; // The last assignment in config.cfg wins, as it does in the engine.
+			found = 1;
+		}
+	}
+	fclose(file);
+	return found;
+}
+
+// The game may execute and then rewrite players\\config.cfg during startup, while com_maxfps
+// is still INIT/ROM. Capture the archived value before the game's entrypoint can replace it.
+void console_com_maxfps_capture_config(void)
+{
+	if (InterlockedCompareExchange(&com_maxfps_config_capture_state, 1, 0) != 0)
+		return;
+	int saved = 0;
+	if (!console_read_saved_com_maxfps(&saved)) {
+		InterlockedExchange(&com_maxfps_config_capture_state, 3);
+		log_printf("console: no valid com_maxfps assignment found in players\\config.cfg at process attach");
+		return;
+	}
+	InterlockedExchange(&com_maxfps_saved_config_value, saved);
+	InterlockedExchange(&com_maxfps_runtime_value, saved);
+	InterlockedExchange(&com_maxfps_runtime_value_valid, 1);
+	InterlockedExchange(&com_maxfps_config_capture_state, 2);
+	log_printf("console: captured com_maxfps=%d from players\\config.cfg before game startup", saved);
+}
+
+static void console_com_maxfps_restore_value(dvar_t *d, int value, const char *reason)
+{
+	if (!d || d->type != DVAR_TYPE_INT)
+		return;
+	int before = d->current.integer;
+	if (before != value || d->latched.integer != value) {
+		d->current.integer = value;
+		d->latched.integer = value;
+		log_printf("console: restored com_maxfps %s (%d -> %d)", reason, before, value);
+	}
+	// Mark the dvar changed so the engine refreshes any cached frame-limit state. The watcher
+	// no longer uses this bit to infer player input; explicit UI/console edits update the target.
+	d->modified = 1;
+}
+
+// Restore the early snapshot once the front-end and the game's dvar registry are available.
+void console_com_maxfps_restore_config(int ui_state)
+{
+	if (ui_state != 1 || InterlockedCompareExchange(&com_maxfps_config_restore_state, 0, 0))
+		return;
+	dvar_t *d = game_find_dvar("com_maxfps");
+	if (!d || d->type != DVAR_TYPE_INT)
+		return; // Try again on the next menu tick if the engine's dvar table is not ready yet.
+	if (InterlockedCompareExchange(&com_maxfps_config_restore_state, 1, 0) != 0)
+		return;
+	console_com_maxfps_save();
+	LONG capture_state = InterlockedCompareExchange(&com_maxfps_config_capture_state, 0, 0);
+	if (capture_state != 2) {
+		int current = d->current.integer;
+		InterlockedExchange(&com_maxfps_runtime_value, current);
+		InterlockedExchange(&com_maxfps_runtime_value_valid, 1);
+		log_printf("console: no early com_maxfps snapshot available (capture state %ld); keeping %d", capture_state, current);
+		return;
+	}
+	int saved = (int)InterlockedCompareExchange(&com_maxfps_saved_config_value, 0, 0);
+	InterlockedExchange(&com_maxfps_runtime_value, saved);
+	InterlockedExchange(&com_maxfps_runtime_value_valid, 1);
+	console_com_maxfps_restore_value(d, saved, "from players\\config.cfg");
+	if (d->current.integer == saved && d->latched.integer == saved)
+		log_printf("console: com_maxfps is ready at the saved startup value (%d)", saved);
+}
+
+// menus_poll runs every 250 ms, including while a level is active. The runtime value is authoritative:
+// engine registration/loading may reset the dvar, so restore mismatches after startup. While the
+// Enhanced page is open, its live slider owns the dvar; the page's onClose commits the target.
+void console_com_maxfps_level_poll(int sv_running, int ui_state, const char *mapname)
+{
+	static dvar_t *last_dvar;
+	static int last_sv_running = -1;
+	static char last_map[64];
+	dvar_t *d = game_find_dvar("com_maxfps");
+	if (!d || d->type != DVAR_TYPE_INT)
+		return;
+	console_com_maxfps_save_dvar(d);
+
+	if (!InterlockedCompareExchange(&com_maxfps_runtime_value_valid, 0, 0)) {
+		LONG capture_state = InterlockedCompareExchange(&com_maxfps_config_capture_state, 0, 0);
+		int initial = capture_state == 2 ? (int)InterlockedCompareExchange(&com_maxfps_saved_config_value, 0, 0) : d->current.integer;
+		InterlockedExchange(&com_maxfps_runtime_value, initial);
+		InterlockedExchange(&com_maxfps_runtime_value_valid, 1);
+	}
+
+	int loading_ui = ui_state == 3 || ui_state == 6;
+	// Normally the Enhanced page's onClose script commits the selection. If the UI zone is
+	// torn down by a level transition before that script runs, finish the edit here instead.
+	if (InterlockedCompareExchange(&com_maxfps_ui_editing, 0, 0) && (sv_running || loading_ui || ui_state != 1)) {
+		LONG was_valid = InterlockedExchange(&com_maxfps_ui_open_value_valid, 0);
+		if (was_valid && d->current.integer != InterlockedCompareExchange(&com_maxfps_ui_open_value, 0, 0))
+			console_com_maxfps_note_user_value(d->current.integer);
+		InterlockedExchange(&com_maxfps_ui_editing, 0);
+	}
+
+	int map_changed = mapname && mapname[0] && last_map[0] && strcmp(mapname, last_map) != 0;
+	int first_map = mapname && mapname[0] && !last_map[0] && sv_running;
+	int sv_changed = last_sv_running >= 0 && sv_running != last_sv_running;
+	int dvar_recreated = last_dvar && d != last_dvar;
+	int level_transition = loading_ui || map_changed || first_map || sv_changed || dvar_recreated;
+
+	if (InterlockedCompareExchange(&com_maxfps_ui_editing, 0, 0)) {
+		// The Enhanced slider writes this dvar directly. Its onClose script commits the final
+		// value; restoring during a drag would fight every mouse / keyboard / pad update.
+		last_dvar = d;
+		last_sv_running = sv_running;
+		if (mapname && mapname[0]) {
+			strncpy(last_map, mapname, sizeof(last_map) - 1);
+			last_map[sizeof(last_map) - 1] = 0;
+		}
+		return;
+	}
+
+	LONG startup_ready = InterlockedCompareExchange(&com_maxfps_config_restore_state, 0, 0);
+	int target = (int)InterlockedCompareExchange(&com_maxfps_runtime_value, 0, 0);
+	if (startup_ready == 1 && (d->current.integer != target || d->latched.integer != target) &&
+	    InterlockedCompareExchange(&com_maxfps_restore_command_ready, 0, 0)) {
+		// This watcher runs on the control thread. Queue the correction instead of writing the
+		// engine's dvar from a worker thread; the command applies it on the game's main thread.
+		if (InterlockedCompareExchange(&com_maxfps_restore_queued, 1, 0) == 0) {
+			InterlockedExchange(&com_maxfps_restore_reason, level_transition ? 1 : 0);
+			game_cbuf_addtext("mw2coop_com_maxfps_restore\n");
+		}
+	}
+
+	last_dvar = d;
+	last_sv_running = sv_running;
+	if (mapname && mapname[0]) {
+		strncpy(last_map, mapname, sizeof(last_map) - 1);
+		last_map[sizeof(last_map) - 1] = 0;
+	}
+}
+
+// Called from the game's command buffer: dvar writes and modified flags are changed only on
+// the game thread, never by the 250 ms control-thread watcher.
+static void console_com_maxfps_restore_f(void)
+{
+	dvar_t *d = game_find_dvar("com_maxfps");
+	if (d && d->type == DVAR_TYPE_INT &&
+	    !InterlockedCompareExchange(&com_maxfps_ui_editing, 0, 0) &&
+	    InterlockedCompareExchange(&com_maxfps_runtime_value_valid, 0, 0)) {
+		int target = (int)InterlockedCompareExchange(&com_maxfps_runtime_value, 0, 0);
+		console_com_maxfps_save_dvar(d);
+		LONG reason = InterlockedCompareExchange(&com_maxfps_restore_reason, 0, 0);
+		console_com_maxfps_restore_value(d, target, reason ? "after level load" : "after engine reset");
+	}
+	InterlockedExchange(&com_maxfps_restore_queued, 0);
+}
+
+static cmd_function_t com_maxfps_restore_cmd = {NULL, "mw2coop_com_maxfps_restore", NULL, NULL, console_com_maxfps_restore_f CMD_NODE_FLAG};
+static cmd_function_t com_maxfps_ui_open_cmd = {NULL, "mw2coop_com_maxfps_ui_open", NULL, NULL, console_com_maxfps_ui_open_f CMD_NODE_FLAG};
+static cmd_function_t com_maxfps_ui_close_cmd = {NULL, "mw2coop_com_maxfps_ui_close", NULL, NULL, console_com_maxfps_ui_close_f CMD_NODE_FLAG};
 
 static void queue_default_sv_cheats(void)
 {
@@ -9638,6 +9973,10 @@ void console_install(void)
 	InitializeCriticalSection(&lock);
 	game_add_command(&condump_cmd);
 	game_add_command(&dvar_verify_cmd);
+	game_add_command(&com_maxfps_restore_cmd);
+	game_add_command(&com_maxfps_ui_open_cmd);
+	game_add_command(&com_maxfps_ui_close_cmd);
+	InterlockedExchange(&com_maxfps_restore_command_ready, 1);
 	game_add_command(&sv_cheats_default_cmd);
 	{
 		int had_stock_command = game_command_exists("sv_cheats");

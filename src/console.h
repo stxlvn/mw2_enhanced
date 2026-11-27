@@ -11,6 +11,13 @@
 // Bare dvar writes use `seta`; successful changes stay silent, and failed or deferred changes show a warning.
 // sv_cheats is a changeable dvar that is never saved to the config (the game's INIT/ROM and the seta ARCHIVE flags are taken off it), whether or not [console] sv_cheats_default switches it on at the start; the direct BOOL sv_cheats command is retained.
 void console_install(void);
+// Capture the saved com_maxfps value in DllMain, before the engine can rewrite config.cfg.
+void console_com_maxfps_capture_config(void);
+// Record an explicit player-selected FPS limit (including 0 = uncapped).
+void console_com_maxfps_note_user_value(int value);
+// Restore the startup value after the front-end is ready; the 250 ms level watcher queues later corrections to the game thread.
+void console_com_maxfps_restore_config(int ui_state);
+void console_com_maxfps_level_poll(int sv_running, int ui_state, const char *mapname);
 // A line of output for the panel (any thread). Engine output is added the same way once the print function is hooked.
 void console_print(const char *text);
 // native.c's Present hooks call this after the final back-buffer composition (render thread).

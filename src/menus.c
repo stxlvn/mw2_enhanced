@@ -65,6 +65,7 @@
 #include "voice.h"
 #include "chat.h"
 #include "steamnet.h"
+#include "console.h"
 
 #define WINDOW_FLAG_DECORATION 0x00100000u
 // rectClient has its own alignment bytes after its four floats. The UI's layout pass
@@ -4428,10 +4429,13 @@ void menus_poll(void)
 {
 	if (!base)
 		return;
-	char v[8] = "", coop[8] = "";
+	char v[8] = "", coop[8] = "", mapname[64] = "";
 	game_dvar_raw("sv_running", v, sizeof(v));
 	game_dvar_raw("coop", coop, sizeof(coop));
-	rejoin_poll(*(volatile int *)(base + RVA_UI_STATE), *(volatile int *)(base + RVA_CLIENT_STATE), v[0] == '1'); // (a network session's break: rejoin.c)
+	game_dvar_raw("mapname", mapname, sizeof(mapname));
+	int ui_state = *(volatile int *)(base + RVA_UI_STATE);
+	console_com_maxfps_level_poll(v[0] == '1', ui_state, mapname);
+	rejoin_poll(ui_state, *(volatile int *)(base + RVA_CLIENT_STATE), v[0] == '1'); // (a network session's break: rejoin.c)
 	// menus_poll runs on the control thread during a level; tick_f deliberately does not.
 	// Record the local mission here so tick_f can detect its end as soon as the menus return.
 	if (v[0] == '1' && InterlockedCompareExchange(&native_started, 0, 0) &&
@@ -4440,7 +4444,7 @@ void menus_poll(void)
 	// hosting: the host's party is up (lobby), or a co-op level runs on the host
 	{ // QA: the UI state of local client 0 (1 main menu, 2 paused, 3 pregame, 6 briefing = the loading screen, 7 victory) and the client state: when does the briefing end?
 		static int last_ui = -99, last_cls = -99;
-		int ui = *(volatile int *)(base + RVA_UI_STATE), cls = *(volatile int *)(base + RVA_CLIENT_STATE);
+		int ui = ui_state, cls = *(volatile int *)(base + RVA_CLIENT_STATE);
 		if (ui == 3) { // QA: the film state in the pregame (the single player wait reads it)
 			static int la = -1, lb = -1, lon = -1;
 			int a = *(volatile int *)(base + RVA_FILM_A), b = *(volatile int *)(base + RVA_FILM_B), on = base[RVA_FILM_ON];
@@ -4944,6 +4948,7 @@ static void tick_f(void)
 	InterlockedExchange(&tick_queued, 0);
 	if (!base)
 		return;
+	int lobby_ui = *(volatile int *)(base + RVA_UI_STATE);
 	if (InterlockedExchange(&split_texts_wanted, 0))
 		update_texts();
 	addr_scratch_check("between two menu ticks"); // (a build whose addresses moved: the block for code that was not found must stay `ret`)
@@ -4963,7 +4968,7 @@ static void tick_f(void)
 	padopts_tick();
 	fonts_retry_tick(); // (the fonts' late retry: here, at the top of the main thread, not inside an asset lookup)
 	gfxopts_tick();
-	enhopts_tick();
+	enhopts_tick(lobby_ui);
 	ping_menu_tick(); // (binds [input] ping_key to the co-op markers once)
 	picking_tick();
 	unlock_missions_tick();
@@ -4973,7 +4978,7 @@ static void tick_f(void)
 	int spec_split = spec_split_lobby();
 	InterlockedExchange(&specops_online_set, !campaign && !spec_split && specops_online_lobby());
 	int split_lobby = campaign || spec_split; // the lobby of a split screen game of ours: the return to it is looked after for a Special Ops op too
-	int lobby_ui = *(volatile int *)(base + RVA_UI_STATE);
+	console_com_maxfps_restore_config(lobby_ui); // startup config snapshot is applied when the front-end is ready
 	rejoin_lobby_tick(campaign, lobby_ui); // a network session that broke off: the host waits, the partner joins again
 	report_menu_tick();		       // the pause menu's "Report a bug" (report.c)
 	weaponfov_tick();		       // cg_weaponFov once the game's dvars are there (weaponfov.c)

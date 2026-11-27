@@ -22,6 +22,7 @@
 #include "log.h"
 #include "menus_ui.h"
 #include "settings.h"
+#include "console.h"
 
 #ifdef _WIN64
 #define REF_DVAR_REGISTER_BOOL 0x26c930  // dvar_t *(const char *name, bool value, unsigned flags, const char *description)
@@ -111,6 +112,10 @@ static float last[sizeof(opts) / sizeof(opts[0])]; // the value written to setti
 static int registered;
 static int restart_wanted; // a row that waits for the next start was changed since the page's pop-up was last shown
 static float started[sizeof(opts) / sizeof(opts[0])]; // each row's value when the game started: what the running game uses
+// Menu item pointers are used by dim_rows() and belong to the current UI zone.
+static uint8_t *grey_items[OPTS][3];
+static float grey_alpha[OPTS][3];
+static int grey_saved[OPTS][3];
 
 static float value_of(int o)
 {
@@ -249,8 +254,18 @@ static void follow_changes(void)
 				dvars[o]->modified = 1;
 			}
 		}
-		if (!t->own)
-			continue; // cg_fov is changed by the game's slider itself; only our own dvars need persistence work here
+		if (!t->own) {
+			if (o == OPT_MAXFPS) {
+				dvar_t *current = game_find_dvar(t->dvar);
+				if (current && current->type == DVAR_TYPE_INT) {
+					dvars[o] = current;
+					float v = value_of(o);
+					if (v != last[o])
+						last[o] = v;
+				}
+			}
+			continue; // engine-owned rows are updated by the game; the Enhanced Max FPS page commits its value on close
+		}
 		float v = value_of(o);
 		if (t->kind != K_YESNO)
 			v = (float)(int)(v + 0.5f); // whole numbers in the file
@@ -413,30 +428,48 @@ typedef struct {
 } ev_set_t;
 #endif
 
-// One more script at the end of a menu's onClose; what the menu ran there before stays.
-static void append_on_close(uint8_t *menu, const char *script)
+// Append a script to a menu event while preserving any handlers supplied by the game.
+static void append_menu_event(uint8_t *menu, size_t event_offset, const char *script)
 {
-	const ev_set_t *old = *(ev_set_t **)(menu + MENU_ON_CLOSE);
+	const ev_set_t *old = *(ev_set_t **)(menu + event_offset);
 	const int n = old && old->count > 0 && old->count < 64 ? old->count : 0;
 	ev_set_t *set = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*set));
 	ev_handler_t **list = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (n + 1) * sizeof(*list));
+	if (!set || !list) {
+		if (set) HeapFree(GetProcessHeap(), 0, set);
+		if (list) HeapFree(GetProcessHeap(), 0, list);
+		return;
+	}
 	for (int i = 0; i < n; i++)
 		list[i] = old->handlers[i];
 	ev_handler_t *h = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*h));
+	if (!h) {
+		HeapFree(GetProcessHeap(), 0, list);
+		HeapFree(GetProcessHeap(), 0, set);
+		return;
+	}
 	h->data = (void *)script;
 	h->type = 0;
 	list[n] = h;
 	set->count = n + 1;
 	set->handlers = list;
-	*(ev_set_t **)(menu + MENU_ON_CLOSE) = set;
+	*(ev_set_t **)(menu + event_offset) = set;
+}
+
+// One more script at the end of a menu's onClose; what the menu ran there before stays.
+static void append_on_close(uint8_t *menu, const char *script)
+{
+	append_menu_event(menu, MENU_ON_CLOSE, script);
+}
+
+// Run when the Enhanced page is opened; the close handler commits the final slider value.
+static void append_on_open(uint8_t *menu, const char *script)
+{
+	append_menu_event(menu, MENU_ON_OPEN, script);
 }
 
 // The sharpening row (control, label, number) is drawn dimmed while the upscaler is Off: it only does something for FSR 3 and DLSS (Vlad, 2026-11-13)
 // The same for the rows that only the native DirectX 11 / 12 renderers read (MSAA, anisotropy, HDR, low frame delay): dimmed while the DirectX version is 9 or 9Ex, where they do nothing.
-static uint8_t *grey_items[OPTS][3];
-static float grey_alpha[OPTS][3];
-static int grey_saved[OPTS][3];
-
 // The page: the Look page's backgrounds, title and Back items, then the rows 20 units apart from y 28, in groups by what a row applies to (GROUP_*), each group under its name.
 static void add_page(void)
 {
@@ -447,6 +480,8 @@ static void add_page(void)
 		return;
 	uint8_t *menu = ui_clone_menu(src, "mw2coop_enhanced");
 	append_on_close(menu, "\"exec\" \"set mw2coop_enh_left 1\" ; "); // leaving the page (Back, Esc): tick_f asks the restart pop-up if a row that waits for the next start changed
+	append_on_open(menu, "\"exec\" \"mw2coop_com_maxfps_ui_open\" ; ");
+	append_on_close(menu, "\"exec\" \"mw2coop_com_maxfps_ui_close\" ; ");
 	int count = *(int *)(menu + MENU_ITEM_COUNT);
 	uint8_t **items = *(uint8_t ***)(menu + MENU_ITEMS);
 	uint8_t *title = item_by_text(menu, "@MENU_LOOK"), *slider = item_by_type(menu, ITEM_TYPE_SLIDER), *yesno = item_by_type(menu, ITEM_TYPE_YESNO);
@@ -704,7 +739,7 @@ static void dim_rows(void)
 	}
 }
 
-// What follows the player's changes, in the menus and in a level alike (a level's frame does not run the menus' tick; the page itself is reached from the main menu: the pause menu's Settings is a copy of the options menu that this page's button is not in, see docs/enhanced-page.md): settings.ini keys, live effects and the pop-up after the page was left. cg_fov is changed directly by the game's slider. Two threads may call this (the menus' tick, the level's poll): one at a time.
+// What follows the player's changes, in the menus and in a level alike: settings.ini keys, live effects and the pop-up after the page was left. The Enhanced Max FPS slider commits its final dvar value through the page onClose event.
 static void follow_all(void)
 {
 	static volatile LONG busy;
@@ -763,8 +798,9 @@ int enhopts_sharpness(void)
 	return registered && is >= 0 && dvars[is] ? (int)(value_of(is) + 0.5f) : -1;
 }
 
-void enhopts_tick(void)
+void enhopts_tick(int ui_state)
 {
+	(void)ui_state; // com_maxfps intent is committed by the Enhanced page's onClose event.
 	patch_advanced_video_aa();
 	register_dvars();
 	if (!registered)
