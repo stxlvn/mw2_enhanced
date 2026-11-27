@@ -4470,6 +4470,14 @@ void menus_poll(void)
 		if (last_ui == 3 && ui != 3 && campaign_session && base[RVA_COOP_BYTE_E]) { // the pregame is over on this PC: the film ended, or the player skipped it
 			brief_notify_until = GetTickCount() + 2500;
 			log_printf("menus: the briefing is over on this PC (the partner is told)");
+			// A movement key let go while the loading screen or the briefing had the keys stays held for the game (the key's release went to the menu): the
+			// player walked off on his own as the level began (owner, 2026-11-27: on a friend's PC "the keyboard sticks at the mission's start and he falls" off
+			// Cliffhanger's ledge). The movement buttons are let go here, as typing them in the console does (no key named: every key of the button). Network
+			// co-op only: in split screen the pads drive player 2's buttons.
+			if (!native_split_active()) {
+				game_cbuf_addtext("-forward\n-back\n-moveleft\n-moveright\n-sprint\n-leanleft\n-leanright\n");
+				log_printf("menus: the movement keys are let go for the level's start");
+			}
 		}
 		if (brief_notify_until && GetTickCount() < brief_notify_until)
 			net_send_mod("mw2coop_briefdone");

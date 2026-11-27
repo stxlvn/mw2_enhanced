@@ -110,6 +110,215 @@ static int is_name(const char *a, const char *b) // (a script name, either slash
 			return 0;
 	return !*a && !*b;
 }
+// A QA session's own scenario only. Each scenario's text adds script strings (its names and its literals) to every level of the session, and the full file grew
+// past what Cliffhanger leaves of the table with the climb's own QA module: "exceeded maximum number of script strings" at the level's load (2026-11-27,
+// QA climbview). The functions the current scenario cannot reach (from its case in main(), main()'s code outside the switch, and the entry points other
+// scripts call) keep their signature with an empty body, so every name still links; their strings stay out. A scenario main() has no case for: the whole file.
+typedef struct {
+	const char *name;
+	int len, open, close, keep;
+} qa_fn_t;
+
+static int qa_id_start(char c) { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_'; }
+static int qa_id_char(char c) { return qa_id_start(c) || (c >= '0' && c <= '9'); }
+
+// the index after a comment or a string that starts at i (i itself when none does)
+static int qa_skip(const char *s, int n, int i)
+{
+	if (s[i] == '/' && i + 1 < n && s[i + 1] == '/') {
+		while (i < n && s[i] != '\n')
+			i++;
+		return i;
+	}
+	if (s[i] == '/' && i + 1 < n && s[i + 1] == '*') {
+		for (i += 2; i + 1 < n && !(s[i] == '*' && s[i + 1] == '/'); i++)
+			;
+		return i + 2 <= n ? i + 2 : n;
+	}
+	if (s[i] == '"') {
+		for (i++; i < n && s[i] != '"'; i++)
+			if (s[i] == '\\' && i + 1 < n)
+				i++;
+		return i < n ? i + 1 : n;
+	}
+	return i;
+}
+
+// the index of the bracket that closes the one at i ('(' or '{'), or -1
+static int qa_match(const char *s, int n, int i)
+{
+	const char open = s[i], close = open == '(' ? ')' : '}';
+	int depth = 0;
+	while (i < n) {
+		const int j = qa_skip(s, n, i);
+		if (j != i) {
+			i = j;
+			continue;
+		}
+		if (s[i] == open)
+			depth++;
+		else if (s[i] == close && --depth == 0)
+			return i;
+		i++;
+	}
+	return -1;
+}
+
+// marks (keep = 1) every function named by an identifier in s[from, to), except inside [skip_from, skip_to)
+static void qa_mark(const char *s, int from, int to, int skip_from, int skip_to, qa_fn_t *fn, int nfn)
+{
+	int i = from;
+	while (i < to) {
+		if (i >= skip_from && i < skip_to) {
+			i = skip_to;
+			continue;
+		}
+		const int j = qa_skip(s, to, i);
+		if (j != i) {
+			i = j;
+			continue;
+		}
+		if (qa_id_start(s[i]) && (i == 0 || !qa_id_char(s[i - 1]))) {
+			int e = i;
+			while (e < to && qa_id_char(s[e]))
+				e++;
+			if (i == 0 || s[i - 1] != '.') // (a field: level.x)
+				for (int k = 0; k < nfn; k++)
+					if (!fn[k].keep && fn[k].len == e - i && !_strnicmp(fn[k].name, s + i, (size_t)(e - i)))
+						fn[k].keep = 1;
+			i = e;
+			continue;
+		}
+		i++;
+	}
+}
+
+// the QA file with only what scenario reaches; NULL when it cannot be worked out (the caller loads the file as it is)
+static char *qa_trim(const char *s, int n, const char *scenario, int *out_size)
+{
+	enum { MAX_FN = 1024 };
+	qa_fn_t *fn = calloc(MAX_FN, sizeof(qa_fn_t));
+	if (!fn)
+		return NULL;
+	int nfn = 0, i = 0, depth = 0;
+	while (i < n && nfn < MAX_FN) { // the functions: an identifier at the top level, its parameters, its body
+		const int j = qa_skip(s, n, i);
+		if (j != i) {
+			i = j;
+			continue;
+		}
+		if (s[i] == '{')
+			depth++;
+		else if (s[i] == '}')
+			depth--;
+		if (depth == 0 && qa_id_start(s[i]) && (i == 0 || !qa_id_char(s[i - 1]))) {
+			int e = i;
+			while (e < n && qa_id_char(s[e]))
+				e++;
+			int p = e;
+			while (p < n && (s[p] == ' ' || s[p] == '\t'))
+				p++;
+			if (p < n && s[p] == '(' && (i == 0 || s[i - 1] == '\n')) {
+				const int pc = qa_match(s, n, p);
+				int b = pc < 0 ? n : pc + 1;
+				while (b < n && (s[b] == ' ' || s[b] == '\t' || s[b] == '\r' || s[b] == '\n'))
+					b++;
+				if (pc > 0 && b < n && s[b] == '{') {
+					const int bc = qa_match(s, n, b);
+					if (bc < 0)
+						break;
+					fn[nfn].name = s + i;
+					fn[nfn].len = e - i;
+					fn[nfn].open = b;
+					fn[nfn].close = bc;
+					nfn++;
+					i = bc + 1;
+					continue;
+				}
+			}
+			i = e;
+			continue;
+		}
+		i++;
+	}
+	int main_k = -1;
+	for (int k = 0; k < nfn; k++)
+		if (fn[k].len == 4 && !strncmp(fn[k].name, "main", 4))
+			main_k = k;
+	char label[80];
+	snprintf(label, sizeof(label), "case \"%s\":", scenario);
+	const char *body = main_k >= 0 ? s + fn[main_k].open : NULL;
+	const char *found = NULL;
+	if (body) { // the scenario's case in main()
+		for (const char *p = body; p < s + fn[main_k].close; p++)
+			if (*p == 'c' && !strncmp(p, label, strlen(label))) {
+				found = p;
+				break;
+			}
+	}
+	const char *sw = NULL;
+	if (body)
+		for (const char *p = body; p < s + fn[main_k].close; p++)
+			if (*p == 's' && !strncmp(p, "switch", 6) && !qa_id_char(p[6])) {
+				sw = p;
+				break;
+			}
+	int sw_open = -1, sw_close = -1;
+	if (sw) {
+		for (sw_open = (int)(sw - s); sw_open < fn[main_k].close && s[sw_open] != '{'; sw_open++)
+			;
+		sw_close = qa_match(s, n, sw_open);
+	}
+	if (main_k < 0 || !found || sw_close < 0) {
+		free(fn);
+		return NULL;
+	}
+	int case_end = (int)(found - s);
+	while (case_end < sw_close && strncmp(s + case_end, "break;", 6) != 0) // (the cases it falls through to come with it)
+		case_end++;
+	fn[main_k].keep = 1;
+	qa_mark(s, (int)(found - s), case_end, 0, 0, fn, nfn);			     // the scenario's case (with the cases it falls through to)
+	qa_mark(s, fn[main_k].open, fn[main_k].close, sw_open, sw_close + 1, fn, nfn); // main()'s own code
+	static const char *const entries[] = {"report", "check", "wait_intro", "qa_shot", "press", "player_name", "racestart", "museum_anim_probe",
+					      "link_probe", "hintkeys_precache", "climbsolo", "bbcheck"};
+	for (int k = 0; k < nfn; k++)
+		for (size_t m = 0; m < sizeof(entries) / sizeof(entries[0]); m++)
+			if (!fn[k].keep && fn[k].len == (int)strlen(entries[m]) && !strncmp(fn[k].name, entries[m], (size_t)fn[k].len))
+				fn[k].keep = 1;
+	for (int changed = 1; changed;) { // what the kept functions call, until nothing more comes in
+		changed = 0;
+		for (int k = 0; k < nfn; k++)
+			if (fn[k].keep == 1) {
+				fn[k].keep = 2;
+				changed = 1;
+				if (k != main_k)
+					qa_mark(s, fn[k].open, fn[k].close, 0, 0, fn, nfn);
+			}
+	}
+	char *out = malloc((size_t)n + 1);
+	if (!out) {
+		free(fn);
+		return NULL;
+	}
+	int o = 0, at = 0, kept = 0;
+	for (int k = 0; k < nfn; k++) { // (the functions are in the file's order)
+		if (fn[k].keep) {
+			kept++;
+			continue;
+		}
+		memcpy(out + o, s + at, (size_t)(fn[k].open + 1 - at));
+		o += fn[k].open + 1 - at;
+		at = fn[k].close;
+	}
+	memcpy(out + o, s + at, (size_t)(n - at));
+	o += n - at;
+	out[o] = 0;
+	*out_size = o;
+	log_printf("scripts: QA scenario %s: %d of the %d functions of maps/_mw2coop_qa.gsc kept, the others empty (%d of %d bytes)", scenario, kept, nfn, o, n);
+	free(fn);
+	return out;
+}
+
 static char *read_mod_script(const char *ext, int *size)
 {
 	char qa[64] = "";
@@ -129,6 +338,30 @@ static char *read_mod_script(const char *ext, int *size)
 		static int told;
 		if (!told++)
 			log_printf("scripts: no QA scenario in this session: maps/_mw2coop_qa.gsc is a stub of its entry points (the scenarios' strings stay out of the game's string table)");
+		return buf;
+	}
+	if (is_name(ext, "maps/_mw2coop_qa.gsc")) {
+		char *full = read_mod_file("scripts", ext, "", size);
+		if (!full || GetEnvironmentVariableA("MW2COOP_QA_FULL", NULL, 0)) // (QA: MW2COOP_QA_FULL loads every scenario)
+			return full;
+		int trimmed_size = 0;
+		char *trimmed = qa_trim(full, *size, qa, &trimmed_size);
+		if (!trimmed)
+			return full;
+		free(full);
+		*size = trimmed_size;
+		return trimmed;
+	}
+	// The ice climb's QA scenarios (maps/_mw2coop_climb_qa.gsc, 24 KB, which maps/_mw2coop_climb.gsc names on Cliffhanger) were loaded in every Cliffhanger session,
+	// players' too, and a QA scenario of another kind there ran the string table out with the full QA file (2026-11-27: "exceeded maximum number of script strings"
+	// at Cliffhanger's load in QA edgeprobe). A stub of its three entry points unless the scenario is a climb one (climb, climbreal, climbfinal, climbview, ...).
+	if (is_name(ext, "maps/_mw2coop_climb_qa.gsc") && strncmp(qa, "climb", 5) != 0) {
+		static const char stub[] = "// the climb's QA scenarios are left out of a session without one (src/scripts.c)\nclimb()\n{\n}\nclimbview()\n{\n}\nclimblb()\n{\n}\n";
+		char *buf = malloc(sizeof(stub));
+		if (!buf)
+			return NULL;
+		memcpy(buf, stub, sizeof(stub));
+		*size = (int)sizeof(stub) - 1;
 		return buf;
 	}
 	return read_mod_file("scripts", ext, "", size);

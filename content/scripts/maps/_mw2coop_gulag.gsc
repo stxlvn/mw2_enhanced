@@ -360,3 +360,46 @@ rope_partner_view( who, rig )
 	if ( isdefined( who ) && IsAlive( who ) )
 		who maps\_mw2coop_bodies::give_body( maps\_mw2coop::body_model );
 }
+
+// Price's cell (gulag_ending_code.gsc.patch hunk 3, from player_gets_knocked_out_by_price): Price knocks player 1 down and holds him under his gun; player 1's
+// view is on the scene's rig at the floor (his eye 9 units over it), and his origin is 50 units under the floor. His co-op body stood there, sunk to the
+// chest, his rifle in its hands and his name over it (owner's screenshots of player 2's view, 2026-11-27). While he is held, player 2 sees a stand-in
+// instead: his body on the SEAL soldier's skeleton (the rope's stand-in model), lying on its back propped on an elbow (the wounded's dying_back_idle),
+// its head where his eye is, on the floor; his own body and the name are hidden. QA pricecell.
+knocked_down_view( rig )
+{
+	who = level.player;
+	if ( !maps\_mw2coop::is_campaign_coop() || !isdefined( level.player2 ) || !isdefined( who.mw2coop_body ) || !isdefined( who.mw2coop_head ) )
+		return;
+	for ( t = 0; t < 1 && !who IsLinked(); t += 0.05 )
+		wait 0.05;
+	body = Spawn( "script_model", who.origin );
+	body SetModel( maps\_mw2coop_bodies::rider_model( who.mw2coop_body, maps\_mw2coop_bodies::rope_skeleton() ) );
+	body Attach( who.mw2coop_head, "", true );
+	body hideOnClient( who );
+	body UseAnimTree( #animtree );
+	body SetAnim( %dying_back_idle, 1, 0, 1 );
+	level.mw2coop_knocked_body = body;	// QA
+	who maps\_utility::SetModelFunc( undefined );
+	names = GetDvar( "mw2coop_hide_names" ) != "1";
+	if ( names )
+		SetDvar( "mw2coop_hide_names", "1" );
+	maps\_mw2coop::state( "gulag: player 1 knocked down by Price, seen by player 2 as a stand-in lying on the floor" );
+	while ( isdefined( rig ) && IsAlive( who ) && who IsLinked() )
+	{
+		eye = who GetEye();
+		body.angles = ( 0, rig GetTagAngles( "tag_player" )[ 1 ], 0 );	// (the scene's way, not his look: the body does not turn with his mouse)
+		floor = BulletTrace( eye + ( 0, 0, 8 ), eye - ( 0, 0, 96 ), false, who )[ "position" ];
+		head = body GetTagOrigin( "j_head" );
+		if ( isdefined( head ) )
+			body.origin = ( body.origin[ 0 ] + eye[ 0 ] - head[ 0 ], body.origin[ 1 ] + eye[ 1 ] - head[ 1 ], floor[ 2 ] );
+		wait 0.05;
+	}
+	body Delete();
+	level.mw2coop_knocked_body = undefined;
+	if ( names )
+		SetDvar( "mw2coop_hide_names", "" );
+	if ( isdefined( who ) && IsAlive( who ) )
+		who maps\_mw2coop_bodies::give_body( maps\_mw2coop::body_model );
+	maps\_mw2coop::state( "gulag: player 1 up again after Price's scene, his body back" );
+}

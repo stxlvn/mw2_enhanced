@@ -676,6 +676,15 @@ main()
 		case "dogdrone":
 			dogdrone();
 			break;
+		case "edgeprobe":
+			edgeprobe();
+			break;
+		case "pricecell":
+			pricecell();
+			break;
+		case "heliview":
+			heliview();
+			break;
 		case "cpflagfail":
 			cpflagfail();
 			break;
@@ -4466,6 +4475,15 @@ takedown3()
 	report( "done" );
 }
 
+// player 2's place in the cabin (maps\_mw2coop_dcburning partner_seat), with wide view limits
+heli_seat_link( player )
+{
+	if ( isdefined( level.mw2coop_heli_seat ) )
+		player PlayerLinkToDelta( level.mw2coop_heli_seat, "tag_origin", 1, 170, 170, 80, 80 );
+	else
+		player PlayerLinkToDelta( level.blackhawk, "tag_playerride", 1, 170, 170, 80, 80 );
+}
+
 heliend_look( target )
 {
 	level endon( "mw2coop_qa_done" );
@@ -4473,7 +4491,7 @@ heliend_look( target )
 	{
 		// the missile hit narrows his view again (partner_holds_on): widen it
 		if ( n % 10 == 0 && isdefined( level.blackhawk ) )
-			self PlayerLinkToDelta( level.blackhawk, "tag_playerride", 1, 170, 170, 80, 80 );
+			heli_seat_link( self );
 		dir = target.origin + ( 0, 0, 40 ) - self GetEye();
 		self SetPlayerAngles( VectorToAngles( dir ) );
 		wait 0.05;
@@ -4489,7 +4507,7 @@ heliend()
 	wait 5;
 	// player 2 looks at player 1 all the time (wide view limits, as gulagturn)
 	level.player2 Unlink();
-	level.player2 PlayerLinkToDelta( level.blackhawk, "tag_playerride", 1, 170, 170, 80, 80 );
+	heli_seat_link( level.player2 );
 	level.player2 thread heliend_look( level.player );
 	wait 0.5;
 	SetDvar( "mw2coop_qa_shot", "he-pre" );
@@ -9090,6 +9108,158 @@ cpfavela()
 	check( !isdefined( level.runner ) || !isalive( level.runner ), "no runner" );
 	qa_shot( "favela" );
 	report( "done" );
+}
+
+// heliview (dcburning, start point "heliride2"): the Black Hawk ride, player 1 on the door's minigun, player 2 in the cabin (maps\_mw2coop_dcburning
+// partner_boards). Owner's screenshot 2026-11-27: player 2 looked at the minigun and nobody stood behind it. Where both eyes are, whether the bodies are
+// hidden as overlapping, and frames of player 2 looking at player 1 and out of the door.
+heliview()
+{
+	for ( t = 0; t < 30 && !isdefined( level.mw2coop_heli_rider ); t += 0.25 )
+		wait 0.25;
+	check( isdefined( level.mw2coop_heli_rider ), "player 2 rides in the Black Hawk (" + t + " s)" );
+	wait 3;
+	p1 = level.player;
+	p2 = level.player2;
+	heli = level.blackhawk;
+	fwd = AnglesToForward( heli.angles );
+	right = AnglesToRight( heli.angles );
+	up = AnglesToUp( heli.angles );
+	foreach ( tag in StrTok( "tag_player tag_playerride tag_turret tag_detach tag_fastrope_le tag_fastrope_ri tag_guy0 tag_guy1 tag_guy2 tag_guy3 tag_guy4 tag_guy5 tag_guy6 tag_guy7", " " ) )
+	{
+		at = heli GetTagOrigin( tag );
+		if ( !isdefined( at ) )
+			continue;
+		d = at - heli.origin;
+		report( "heliview: " + tag + " at forward " + int( VectorDot( d, fwd ) ) + " right " + int( VectorDot( d, right ) ) + " up " + int( VectorDot( d, up ) ) );
+	}
+	foreach ( n, player in level.players )
+	{
+		d = player GetEye() - heli.origin;
+		report( "heliview: player " + ( n + 1 ) + "'s eye at forward " + int( VectorDot( d, fwd ) ) + " right " + int( VectorDot( d, right ) ) + " up " + int( VectorDot( d, up ) ) + ", looking at yaw " + int( AngleClamp180( player GetPlayerAngles()[ 1 ] - heli.angles[ 1 ] ) ) + " from the nose" );
+	}
+	for ( i = 0; i < 4; i++ )
+	{
+		e1 = p1 GetEye();
+		e2 = p2 GetEye();
+		report( "heliview: eyes " + int( Distance( e1, e2 ) ) + " apart (2D " + int( Distance2D( e1, e2 ) ) + ", dz " + int( e2[ 2 ] - e1[ 2 ] ) + "), origins 2D " + int( Distance2D( p1.origin, p2.origin ) )
+			+ " dz " + int( p2.origin[ 2 ] - p1.origin[ 2 ] ) + ", overlap " + maps\_mw2coop::players_overlap() + ", player 1's model '" + p1.model + "', player 1 linked " + p1 IsLinked() );
+		if ( i == 1 )
+		{
+			p2 SetPlayerAngles( VectorToAngles( e1 - ( 0, 0, 20 ) - e2 ) );
+			wait 0.1;
+			qa_shot( "hv-p1" );
+		}
+		if ( i == 2 )
+		{
+			check( !maps\_mw2coop::players_overlap(), "the players do not overlap in the cabin (eyes " + int( Distance( e1, e2 ) ) + " apart)" );
+			check( Distance( e1, e2 ) > 36, "player 2 stands clear of the gunner (" + int( Distance( e1, e2 ) ) + " units)" );
+		}
+		wait 1;
+	}
+	report( "done" );
+}
+
+// pricecell (gulag, start point "rescue"): Price's cell. Player 1 breaches it (his Use at the breach), Price knocks him down and he lies under Price's gun,
+// linked to the scene's rig (maps\gulag_ending_code::player_gets_knocked_out_by_price). Owner's screenshots 2026-11-27: player 2 saw player 1's body sunk
+// into the floor to the chest, holding his rifle, with his name over it. Every 0.5 s: player 1's origin, eye and stance and the floor under him; frames of
+// player 2 looking at him.
+pricecell()
+{
+	wait 3;
+	if ( flag_exist( "player_approaches_rescue_breach" ) && !flag( "player_approaches_rescue_breach" ) )
+		flag_set( "player_approaches_rescue_breach" );
+	p1 = level.player;
+	p2 = level.player2;
+	g = level.breach_groups[ 3 ];
+	door = g.lookat_triggers[ 0 ].breach_origin;
+	use_at = g.trigger.origin;
+	p1 SetOrigin( PhysicsTrace( use_at + ( 0, 0, 40 ), use_at - ( 0, 0, 120 ) ) );
+	p2 SetOrigin( PhysicsTrace( use_at + ( 40, 40, 40 ), use_at + ( 40, 40, -120 ) ) );
+	wait 0.5;
+	p1 SetPlayerAngles( VectorToAngles( door - p1 GetEye() ) );
+	press( p1, "activate", 1500 );
+	for ( t = 0; t < 4 && !( isdefined( level.breaching ) && level.breaching ); t += 0.1 )
+		wait 0.1;
+	if ( !( isdefined( level.breaching ) && level.breaching ) )
+	{
+		report( "pricecell: player 1's Use did not start the breach: its trigger is notified for him" );
+		g.trigger notify( "trigger", p1 );
+	}
+	for ( t = 0; t < 40 && !isdefined( level.price_breach_ent ); t += 0.1 )
+		wait 0.1;
+	check( isdefined( level.price_breach_ent ), "Price's scene began (" + t + " s)" );
+	for ( t = 0; t < 18; t += 0.5 )
+	{
+		floor = BulletTrace( p1.origin + ( 0, 0, 100 ), p1.origin - ( 0, 0, 200 ), false, p1 )[ "position" ];
+		report( "pricecell t+" + t + ": player 1 at " + maps\_mw2coop::vec_text( p1.origin ) + " eye " + int( p1 GetEye()[ 2 ] ) + " floor " + int( floor[ 2 ] ) + " linked " + p1 IsLinked()
+			+ " stance " + p1 GetStance() + "; player 2 at " + maps\_mw2coop::vec_text( p2.origin ) + " linked " + p2 IsLinked() );
+		if ( t == 4 || t == 7 || t == 10 )
+		{
+			body = level.mw2coop_knocked_body;
+			check( isdefined( body ), "t+" + t + ": player 2 sees a stand-in of player 1" );
+			if ( isdefined( body ) )
+			{
+				report( "pricecell t+" + t + ": the stand-in at " + maps\_mw2coop::vec_text( body.origin ) + ", its head at " + maps\_mw2coop::vec_text( body GetTagOrigin( "j_head" ) ) + ", player 1's eye at " + maps\_mw2coop::vec_text( p1 GetEye() ) );
+				check( abs( body.origin[ 2 ] - floor[ 2 ] ) < 4, "t+" + t + ": the stand-in lies on the floor (" + int( body.origin[ 2 ] ) + ", floor " + int( floor[ 2 ] ) + ")" );
+			}
+			check( p1.model == "", "t+" + t + ": player 1's own body is hidden ('" + p1.model + "')" );
+			at = p1 GetEye();
+			if ( isdefined( body ) )
+				at = body.origin + ( 0, 0, 16 );
+			p2 SetPlayerAngles( VectorToAngles( at - p2 GetEye() ) );
+			wait 0.1;
+			qa_shot( "pc" + t );
+		}
+		wait 0.5;
+	}
+	report( "done" );
+}
+
+// edgeprobe (any level, e.g. cliffhanger at its start): how far each player stands from a drop. For 16 directions the ground is looked for under points 16..160
+// units away (a trace from 40 above the player's feet to 120 below them); the first point with no ground that near is the edge in that direction. With
+// MW2COOP_QA_LATE_CLIENT "+forward" (a key held from the start, as a player's stuck key did) player 2's fall shows too.
+edgeprobe()
+{
+	flag_wait_or_timeout( "mw2coop_regrouped", 40 );	// (the players as the start leaves them: after the flying intro and the regroup)
+	wait 0.5;
+	foreach ( n, player in level.players )
+		report( "edgeprobe: player " + ( n + 1 ) + " at " + maps\_mw2coop::vec_text( player.origin ) + " yaw " + int( player GetPlayerAngles()[ 1 ] ) + ": " + edge_text( player.origin ) );
+	qa_shot( "start" );
+	for ( t = 0; t < 12; t++ )
+	{
+		wait 1;
+		foreach ( n, player in level.players )
+			if ( t == 2 || t == 6 || t == 11 )
+				report( "edgeprobe t+" + ( t + 1 ) + ": player " + ( n + 1 ) + " at " + maps\_mw2coop::vec_text( player.origin ) + " alive " + IsAlive( player ) + " failing " + level.mw2coop.failing );
+	}
+	qa_shot( "later" );
+	report( "done" );
+}
+
+edge_text( org )
+{
+	text = "";
+	nearest = 999;
+	for ( i = 0; i < 16; i++ )
+	{
+		dir = AnglesToForward( ( 0, i * 22.5, 0 ) );
+		edge = 0;
+		for ( d = 16; d <= 160 && !edge; d += 16 )
+		{
+			p = org + dir * d;
+			tr = BulletTrace( p + ( 0, 0, 40 ), p - ( 0, 0, 120 ), false, undefined );
+			if ( tr[ "fraction" ] >= 1 )
+				edge = d;
+		}
+		if ( edge )
+		{
+			text += int( i * 22.5 ) + ":" + edge + " ";
+			if ( edge < nearest )
+				nearest = edge;
+		}
+	}
+	return "nearest edge " + nearest + " (yaw:units " + text + ")";
 }
 
 // dogdrone (any level with co-op bodies, e.g. contingency): a dog's attack makes a stand-in of the player it knocks down as animscripts/dog/dog_combat playerDrone_create

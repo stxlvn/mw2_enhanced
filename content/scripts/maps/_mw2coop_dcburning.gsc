@@ -28,9 +28,26 @@ partner_boards()
 	p2 AllowProne( false );
 	p2 AllowSprint( false );
 	p2 AllowJump( false );
-	p2 PlayerLinkTo( level.blackhawk, "tag_playerride", 1, 180, 180, 40, 40 );
+	p2 PlayerLinkTo( partner_seat(), "tag_origin", 1, 180, 180, 40, 40 );
 	p2 EnableWeapons();
 	maps\_mw2coop::state( "dcburning: player 2 rides in the Black Hawk's cabin" );
+}
+
+// Player 2's place in the cabin. tag_playerride is 26 units from the gunner's tag_player, at the same door: the two eyes were 23 units apart, the bodies were
+// hidden as overlapping (maps\_mw2coop players_overlap), and player 2 saw the minigun with nobody behind it, from inside player 1's head (owner's screenshot
+// 2026-11-27, QA heliview). His place is 26 units further in, toward the cabin's middle, on the same floor: 48 units from the gunner, who is seen at his gun,
+// with the door and the city over the gunner's shoulder. A tag_origin linked to the helicopter where it stands keeps him there.
+partner_seat()
+{
+	if ( isdefined( level.mw2coop_heli_seat ) )
+		return level.mw2coop_heli_seat;
+	heli = level.blackhawk;
+	seat = spawn_tag_origin();
+	seat.origin = heli GetTagOrigin( "tag_playerride" ) - AnglesToRight( heli.angles ) * 26;
+	seat.angles = heli GetTagAngles( "tag_playerride" );
+	seat LinkTo( heli, "tag_playerride" );
+	level.mw2coop_heli_seat = seat;
+	return seat;
 }
 
 // The missile hits: like player 1 he puts his weapon away and holds on, his view narrowed.
@@ -39,7 +56,7 @@ partner_holds_on()
 	if ( !coop() || !isdefined( level.mw2coop_heli_rider ) )
 		return;
 	level.player2 DisableWeapons();
-	level.player2 PlayerLinkTo( level.blackhawk, "tag_playerride", 1, 20, 20, 10, 10 );
+	level.player2 PlayerLinkTo( partner_seat(), "tag_origin", 1, 20, 20, 10, 10 );
 }
 
 // The screen is black and the wreck goes away: off the helicopter, for the crash site.
@@ -53,6 +70,9 @@ partner_lets_go()
 	level.player2 AllowSprint( true );
 	level.player2 AllowJump( true );
 	level.mw2coop_heli_rider = undefined;
+	if ( isdefined( level.mw2coop_heli_seat ) )
+		level.mw2coop_heli_seat Delete();
+	level.mw2coop_heli_seat = undefined;
 }
 
 // --------------------------------------------------------------------------------------------

@@ -115,3 +115,13 @@ level.player
 @@@ to
 self
 @@@ end
+
+3. Price's cell (player_gets_knocked_out_by_price): player 1 lies under Price's gun, his view on the scene's rig at the floor; his co-op body stood at his
+   origin, 50 units under the floor, and player 2 saw it sunk to the chest with the name over it (owner's screenshots 2026-11-27). Player 2 sees a
+   stand-in lying there instead (maps\_mw2coop_gulag::knocked_down_view).
+@@@ subst player_gets_knocked_out_by_price
+level.player PlayerLinkToBlend( player_rig, "tag_player", time, time * 0.4, time * 0.4 );
+@@@ to
+level.player PlayerLinkToBlend( player_rig, "tag_player", time, time * 0.4, time * 0.4 );
+	level thread maps\_mw2coop_gulag::knocked_down_view( player_rig );
+@@@ end

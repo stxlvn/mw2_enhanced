@@ -169,6 +169,7 @@ main()
 	friendly_fire_setting();
 	flag_init( "mw2coop_regrouped" );
 	thread regroup_after_start();
+	thread edge_guard();
 	thread follow_leader_teleports();
 	// These are QA diagnostics, not gameplay systems. The recorder polls both players' buttons
 	// and movement state every 50 ms and writes a detailed session trace; the camera probe feeds
@@ -393,6 +394,117 @@ no_saves()
 // Start points move player 1 at the end of the first frame. If player 1 is not standing on
 // ground yet (a scene, a climb, a vehicle), wait until he is, or until a level script seats
 // player 2 somewhere itself.
+// Level starts that put player 2 at a drop. Cliffhanger begins on a ledge: player 2 stood 32 units from the drop, facing it (QA edgeprobe), and a player's
+// key held from the loading (owner, 2026-11-27: "on a friend's PC the keyboard sticks at the mission's start and he falls") walked him off it 5 s in (the
+// mission failed). He is moved to the nearest spot at least 96 units from any drop (the ground looked for in 16 directions, as edgeprobe does), not on
+// player 1, with the way of the most ground ahead of him.
+edge_guard_level()
+{
+	return level.script == "cliffhanger" && ( !isdefined( level.start_point ) || level.start_point == "default" );
+}
+
+edge_guard()
+{
+	level endon( "mw2coop_level_end" );
+	if ( !isdefined( level.player2 ) || !is_campaign_coop() || !edge_guard_level() )
+		return;
+	flag_wait( "mw2coop_regrouped" );	// (after the regroup at the start, which moves him once the mission's flying intro lets the players go)
+	p = level.player2;
+	if ( p IsLinked() )
+		return;
+	from = p.origin;
+	near = drop_distance( from );
+	if ( near >= 96 )
+		return;
+	best = undefined;
+	best_d = near;
+	for ( r = 16; r <= 192 && ( !isdefined( best ) || best_d < 96 ); r += 16 )
+	{
+		for ( i = 0; i < 16; i++ )
+		{
+			spot = ground_spot( from + AnglesToForward( ( 0, i * 22.5, 0 ) ) * r );
+			if ( !isdefined( spot ) || Distance2D( spot, level.player.origin ) < 40 )
+				continue;
+			d = drop_distance( spot );
+			if ( d > best_d )
+			{
+				best = spot;
+				best_d = d;
+			}
+		}
+	}
+	if ( !isdefined( best ) )
+	{
+		state( "edge guard: player 2 at " + vec_text( from ) + " is " + near + " units from a drop and no safer spot was found" );
+		return;
+	}
+	yaw = way_of_most_ground( best );
+	p SetOrigin( best );
+	p SetPlayerAngles( ( 0, yaw, 0 ) );
+	state( "edge guard: player 2 moved from " + vec_text( from ) + " (" + near + " units from a drop) to " + vec_text( best ) + " (" + best_d + "), facing " + yaw );
+}
+
+// how far from org the nearest drop is (no ground within 120 units under the feet), looked for every 16 units up to max (160) in dirs (16) directions; 999: none
+drop_distance( org, max, dirs )
+{
+	if ( !isdefined( max ) )
+		max = 160;
+	if ( !isdefined( dirs ) )
+		dirs = 16;
+	nearest = 999;
+	for ( i = 0; i < dirs; i++ )
+	{
+		dir = AnglesToForward( ( 0, i * 360 / dirs, 0 ) );
+		for ( d = 16; d <= max && d < nearest; d += 16 )
+		{
+			p = org + dir * d;
+			if ( BulletTrace( p + ( 0, 0, 40 ), p - ( 0, 0, 120 ), false, undefined )[ "fraction" ] >= 1 )
+			{
+				nearest = d;
+				break;
+			}
+		}
+	}
+	return nearest;
+}
+
+// the ground a player can stand on near p (within 48 above to 72 below), with room for him, or undefined
+ground_spot( p )
+{
+	tr = BulletTrace( p + ( 0, 0, 48 ), p - ( 0, 0, 72 ), false, undefined );
+	if ( tr[ "fraction" ] >= 1 || tr[ "normal" ][ 2 ] < 0.7 )
+		return undefined;
+	spot = tr[ "position" ] + ( 0, 0, 1 );
+	if ( PlayerPhysicsTrace( spot, spot + ( 0, 0, 64 ) )[ 2 ] < spot[ 2 ] + 63 )	// (the head hits something)
+		return undefined;
+	if ( !SightTracePassed( spot + ( 0, 0, 32 ), level.player2.origin + ( 0, 0, 32 ), false, undefined ) )	// (not behind a rock or a wall)
+		return undefined;
+	return spot;
+}
+
+way_of_most_ground( org )
+{
+	best_yaw = 0;
+	best = -1;
+	for ( i = 0; i < 16; i++ )
+	{
+		dir = AnglesToForward( ( 0, i * 22.5, 0 ) );
+		d = 16;
+		for ( ; d <= 320; d += 16 )
+		{
+			p = org + dir * d;
+			if ( BulletTrace( p + ( 0, 0, 40 ), p - ( 0, 0, 120 ), false, undefined )[ "fraction" ] >= 1 )
+				break;
+		}
+		if ( d > best )
+		{
+			best = d;
+			best_yaw = i * 22.5;
+		}
+	}
+	return best_yaw;
+}
+
 regroup_after_start()
 {
 	level endon( "mw2coop_level_end" );
@@ -562,6 +674,8 @@ teleport_to_partner( partner )
 	chest = partner.origin + ( 0, 0, 48 );
 	best = undefined;
 	best_open = -1;
+	edge_spot = undefined;
+	edge_open = -1;
 	drop = false;
 	foreach ( offset in offsets )
 	{
@@ -575,6 +689,18 @@ teleport_to_partner( partner )
 			drop = true;	// open air beside him: an edge
 		if ( abs( ground[ 2 ] - partner.origin[ 2 ] ) > 40 )
 			continue;
+		// ... not at a drop: Cliffhanger's start put player 2 48 units right of player 1, 32 units from the ledge's edge and facing it (QA edgeprobe), and a
+		// key held from the loading walked him off it (owner, 2026-11-27); the level's own spawn for him was 40 units behind, on firm ground ...
+		// (a spot at a drop is taken only when every free one is: on a narrow ledge or a roof's edge he still comes along)
+		if ( drop_distance( ground, 64, 8 ) < 64 )
+		{
+			if ( !spot_stuck( ground ) && ( !isdefined( edge_spot ) || open_sides( ground ) > edge_open ) )
+			{
+				edge_spot = ground;
+				edge_open = open_sides( ground );
+			}
+			continue;
+		}
 		// ... where he fits: a step is free at his feet (Wolverines! start burgertown put him in
 		// a spot open at knee height but stuck, QA tour 2026-10-22) ...
 		if ( spot_stuck( ground ) )
@@ -595,6 +721,8 @@ teleport_to_partner( partner )
 		}
 	}
 	self.mw2coop_moved_from = self.origin;
+	if ( !isdefined( best ) && isdefined( edge_spot ) )
+		best = edge_spot;
 	if ( isdefined( best ) )
 	{
 		self SetOrigin( best );
