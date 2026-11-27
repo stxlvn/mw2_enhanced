@@ -685,6 +685,12 @@ main()
 		case "heliview":
 			heliview();
 			break;
+		case "downlook":
+			downlook( false );
+			break;
+		case "downlooknp":
+			downlook( true );
+			break;
 		case "cpflagfail":
 			cpflagfail();
 			break;
@@ -9108,6 +9114,55 @@ cpfavela()
 	check( !isdefined( level.runner ) || !isalive( level.runner ), "no runner" );
 	qa_shot( "favela" );
 	report( "done" );
+}
+
+// downlook (any level, MW2COOP_GOD=0; cliffhanger start "camp" as the friend had it): player 1 goes down. A friend's report 2026-11-26: "the weapon goes
+// when player 1 is wounded" (the friend's log: maps\_coop player_coop_force_switch_to_pistol failed on Cliffhanger, its "Beretta" not in the level);
+// owner: "just make the player lie there". Every second: player 1's weapon, stance, eye height over his feet; frames of both views; then the revive.
+downlook( no_pistol )
+{
+	level.mw2coop_no_follow = true;
+	wait 4;
+	p1 = level.player;
+	p2 = level.player2;
+	if ( no_pistol )	// (downlooknp) (no pistol of his own: maps\_coop gives its incap pistol, which the level may not have)
+		foreach ( w in p1 GetWeaponsListPrimaries() )
+			if ( WeaponClass( w ) == "pistol" )
+				p1 TakeWeapon( w );
+	report( "downlook: player 1 holds " + p1 GetCurrentWeapon() + " (" + weapons_list_text( p1 ) + ")" );
+	p2_from = p2 GetCurrentWeapon();
+	p1 DoDamage( p1.health + 500, p1.origin );
+	for ( i = 0; i < 8; i++ )
+	{
+		if ( p2 GetCurrentWeapon() != p2_from )
+			level.mw2coop_qa_p2_disabled = true;	// (whether his weapons were put away: the log's "mirror:" lines)
+		wait 1;
+		report( "downlook " + i + ": player 1 down " + maps\_mw2coop::is_downed( p1 ) + " weapon " + p1 GetCurrentWeapon() + " stance " + p1 GetStance() + " eye +" + int( p1 GetEye()[ 2 ] - p1.origin[ 2 ] )
+			+ " laststand " + p1.laststand + " model '" + p1.model + "' (" + weapons_list_text( p1 ) + ")" );
+		if ( i == 3 )
+		{
+			p2 SetPlayerAngles( VectorToAngles( p1.origin + ( 0, 0, 16 ) - p2 GetEye() ) );
+			wait 0.1;
+			qa_shot( "down" );
+		}
+	}
+	check( maps\_mw2coop::is_downed( p1 ), "player 1 is down" );
+	check( p1 GetCurrentWeapon() != "none", "player 1 holds a weapon while down (" + p1 GetCurrentWeapon() + ")" );
+	check( p1 GetStance() == "prone", "player 1 lies while down (" + p1 GetStance() + ")" );
+	check( !isdefined( level.mw2coop_qa_p2_disabled ), "player 2 kept his weapon through player 1's down (" + p2 GetCurrentWeapon() + ")" );
+	p1 maps\_coop::player_coop_revive_self();
+	wait 3;
+	report( "downlook: after the revive player 1 down " + maps\_mw2coop::is_downed( p1 ) + " holds " + p1 GetCurrentWeapon() + " stance " + p1 GetStance() + " (" + weapons_list_text( p1 ) + ")" );
+	check( !maps\_mw2coop::is_downed( p1 ) && p1 GetCurrentWeapon() != "none", "player 1 up with a weapon after the revive (" + p1 GetCurrentWeapon() + ")" );
+	report( "done" );
+}
+
+weapons_list_text( player )
+{
+	text = "";
+	foreach ( w in player GetWeaponsListAll() )
+		text += w + " ";
+	return text;
 }
 
 // heliview (dcburning, start point "heliride2"): the Black Hawk ride, player 1 on the door's minigun, player 2 in the cabin (maps\_mw2coop_dcburning

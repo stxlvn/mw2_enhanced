@@ -877,6 +877,27 @@ teleport_to_partner_when_safe( partner, timeout )
 // --------------------------------------------------------------------------------------------
 // Weapons: level scripts give and take weapons on level.player only.
 
+// maps\_coop player_coop_force_switch_to_pistol (_coop.gsc.patch hunk 6), self: a downed player who has no pistol. He lies with the weapon he held, or his first
+// other one; weapons on again (the down put them away).
+downed_keeps_weapon()
+{
+	w = self.preincap_weapon;
+	if ( !isdefined( w ) || w == "none" || !self HasWeapon( w ) )
+	{
+		w = undefined;
+		foreach ( p in self GetWeaponsListPrimaries() )
+			if ( !isdefined( w ) )
+				w = p;
+	}
+	if ( isdefined( w ) )
+		self SwitchToWeapon( w );
+	else
+		w = "no weapon";
+	if ( !isdefined( self.placingSentry ) )
+		self EnableWeapons();
+	state( "down with no pistol: " + player_label( self ) + " lies with " + w );
+}
+
 is_downed( player )
 {
 	return player ent_flag_exist( "coop_downed" ) && player ent_flag( "coop_downed" );

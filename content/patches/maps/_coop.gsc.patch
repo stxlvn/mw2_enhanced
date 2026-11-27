@@ -92,3 +92,21 @@ thread maps\_mw2coop::reset_skill_keep_scene();
 
 		death_array = [];
 @@@ end
+
+6. A downed player with no pistol of his own (Cliffhanger's snowmobiles and other loadouts without one) was given the Spec Ops incap pistol, "Beretta", which a
+   campaign level does not have: giveWeapon and SwitchToWeapon were script errors (a player's log 2026-11-26, Cliffhanger) and the function ended before
+   EnableWeapons. In a co-op campaign he lies with the weapon he held (owner, 2026-11-27: "just make the player lie there"; maps\_mw2coop::downed_keeps_weapon).
+@@@ subst player_coop_force_switch_to_pistol
+	if ( !isdefined( weapon_pistol ) )
+	{
+		weapon_pistol = "Beretta";
+@@@ to
+	if ( !isdefined( weapon_pistol ) && maps\_mw2coop::is_campaign_coop() )
+	{
+		self maps\_mw2coop::downed_keeps_weapon();
+		return;
+	}
+	if ( !isdefined( weapon_pistol ) )
+	{
+		weapon_pistol = "Beretta";
+@@@ end

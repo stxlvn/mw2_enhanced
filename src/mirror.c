@@ -25,6 +25,7 @@
 #include "game.h"
 #include "log.h"
 #include "mirror.h"
+#include "scrdebug_stack.h"
 
 #ifdef _WIN64
 #define RVA_G_ENTITIES XR(0xd9e070)
@@ -79,9 +80,28 @@ static int campaign_coop(void)
 	return game_dvar_raw("mapname", map, sizeof(map)) && _strnicmp(map, "so_", 3) != 0;
 }
 
+// A call made for player 1 himself, not for "the player" of a level: the co-op system's down and revive (maps\_coop: a downed player's weapons are put away,
+// then his pistol comes out; a downed player hit again puts them away) and a dog's attack on him (animscripts/dog). Mirrored, a down of player 1 took the
+// partner's weapons too, while he was trying to save him (a player's report and log, 2026-11-26: "the weapon goes when player 1 is wounded", each down of
+// player 1 a "disableweapons also on player 2").
+static const char *own_call(char *name, int size)
+{
+	uint32_t at[1];
+	name[0] = 0;
+	if (scrdebug_stack_offsets(at, 1) < 1)
+		return NULL;
+	scrdebug_stack_name(at[0], name, size);
+	return !_strnicmp(name, "maps/_coop::", 12) || !_strnicmp(name, "animscripts/dog/", 16) || !_strnicmp(name, "maps/_mw2coop::downed_", 22) ? name : NULL;
+}
+
 static void call(int i, uint32_t entref)
 {
 	originals[i](entref);
+	char caller[96];
+	if (entref == 0 && is_client(1) && campaign_coop() && own_call(caller, sizeof(caller))) {
+		log_printf("mirror: %s on player 1 only (%s: his own)", mirrored[i].name, caller);
+		return;
+	}
 	if (entref == 0 && is_client(1) && campaign_coop()) {
 		originals[i](1);
 		log_printf("mirror: %s also on player 2", mirrored[i].name);
